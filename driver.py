@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-from source import SHINE_Source
+from source import SHINE_Source, get_atom_density
 
 def main():
 
@@ -16,7 +16,8 @@ def main():
     angle_int   = 0.01       # Angle interval [deg]
     EN_int      = 0.01       # Neutron energy interval
 
-    args = (T_frac, voltage, current, pressure, temperature, length, num_x_ints, angle_int, EN_int)
+    adens       = get_atom_density(pressure, temperature)
+    args        = (T_frac, voltage, current, adens, length, num_x_ints, angle_int, EN_int)
 
     n_DD = SHINE_Source('DD', *args)
     n_DT = SHINE_Source('DT', *args)

@@ -32,24 +32,31 @@ M_A = 3727.3794118     # Mass-energy of alpha    (He-4)
 Q_DD = (M_D + M_D) - (M_N + M_H)  #  3.26885694 MeV
 Q_DT = (M_D + M_T) - (M_N + M_A)  # 17.58924794 MeV
 
+def get_atom_density(pressure, temperature):
+
+    P_Pa   = pressure * 101325 / 760  # Target pressure [Pa]
+    T_K    = temperature + 273.15     # Target temperature [K]
+    mdens  = P_Pa / (kB * T_K) / 1e6  # Molecule density [1/cm^3]
+    adens  = mdens * 2                # Atom density [1/cm^3]
+    return adens
+
 @profile
 class SHINE_Source():
 
-    def __init__(self, _rxn, _T_frac, _voltage, _current, _pressure, _temperature, _length, _num_x_ints, _angle_int, _EN_int):
+    def __init__(self, _rxn, _T_frac, _voltage, _current, _adens, _length, _num_x_ints, _angle_int, _EN_int):
 
         t0 = time.time()
 
         # Input parameters
-        self.rxn           = str(_rxn        )  # Fusion reaction (DD or DT)
-        self.T_frac      = float(_T_frac     )  # Tritium fraction
-        self.voltage     = float(_voltage    )  # Beam voltage [kV]
-        self.current     = float(_current    )  # Beam current [mA]
-        self.pressure    = float(_pressure   )  # Target pressure [torr]
-        self.temperature = float(_temperature)  # Target temperature [C]
-        self.length      = float(_length     )  # Target length [cm]
-        self.num_x_ints  =   int(_num_x_ints )  # Number of position intervals
-        self.angle_int   = float(_angle_int  )  # Angle interval [deg]
-        self.EN_int      = float(_EN_int     )  # Neutron energy interval
+        self.rxn         =   str(_rxn       )  # Fusion reaction (DD or DT)
+        self.T_frac      = float(_T_frac    )  # Tritium fraction
+        self.voltage     = float(_voltage   )  # Beam voltage [kV]
+        self.current     = float(_current   )  # Beam current [mA]
+        self.adens       = float(_adens     )  # Target atom density [1/cm^3]
+        self.length      = float(_length    )  # Target length [cm]
+        self.num_x_ints  =   int(_num_x_ints)  # Number of position intervals
+        self.angle_int   = float(_angle_int )  # Angle interval [deg]
+        self.EN_int      = float(_EN_int    )  # Neutron energy interval
 
         # Fusion reaction kinematics
         if   self.rxn == 'DD': self.M1 = M_D; self.M2 = M_D; self.M3 = M_N; self.M4 = M_H; self.Q = Q_DD
@@ -58,11 +65,7 @@ class SHINE_Source():
         # Calculated values
         self.D_frac = 1 - self.T_frac                      # Deuterium fraction
         self.dps    = self.current / 1000 / ee             # Deuteron source [1/s]
-        self.P_Pa   = self.pressure * 101325 / 760         # Target pressure [Pa]
-        self.T_K    = self.temperature + 273.15            # Target temperature [K]
         self.amass  = mT * self.T_frac + mD * self.D_frac  # Average atomic mass [g/mol]
-        self.mdens  = self.P_Pa / (kB * self.T_K) / 1e6    # Molecule density [1/cm^3]
-        self.adens  = self.mdens * 2                       # Atom density [1/cm^3]
         self.rho    = self.adens * self.amass / NA         # Mass density [g/cm^3]
 
         # Setup position mesh [cm]
