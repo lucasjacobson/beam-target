@@ -43,30 +43,17 @@ def get_atom_density(pressure, temperature):
 @profile
 class SHINE_Source():
 
-    def __init__(self, _rxn, _T_frac, _voltage, _current, _adens, _length, _num_x_ints, _angle_int, _EN_int):
+    def __init__(self, _voltage, _adens, _length, _num_x_ints, _angle_int, _EN_int):
 
         t0 = time.time()
 
         # Input parameters
-        self.rxn         =   str(_rxn       )  # Fusion reaction (DD or DT)
-        self.T_frac      = float(_T_frac    )  # Tritium fraction
         self.voltage     = float(_voltage   )  # Beam voltage [kV]
-        self.current     = float(_current   )  # Beam current [mA]
         self.adens       = float(_adens     )  # Target atom density [1/cm^3]
         self.length      = float(_length    )  # Target length [cm]
         self.num_x_ints  =   int(_num_x_ints)  # Number of position intervals
         self.angle_int   = float(_angle_int )  # Angle interval [deg]
         self.EN_int      = float(_EN_int    )  # Neutron energy interval
-
-        # Fusion reaction kinematics
-        if   self.rxn == 'DD': self.M1 = M_D; self.M2 = M_D; self.M3 = M_N; self.M4 = M_H; self.Q = Q_DD
-        elif self.rxn == 'DT': self.M1 = M_D; self.M2 = M_T; self.M3 = M_N; self.M4 = M_A; self.Q = Q_DT
-
-        # Calculated values
-        self.D_frac = 1 - self.T_frac                      # Deuterium fraction
-        self.dps    = self.current / 1000 / ee             # Deuteron source [1/s]
-        self.amass  = mT * self.T_frac + mD * self.D_frac  # Average atomic mass [g/mol]
-        self.rho    = self.adens * self.amass / NA         # Mass density [g/cm^3]
 
         # Setup position mesh [cm]
         self.dx     = self.length / self.num_x_ints  # Interval length [cm]
@@ -111,24 +98,18 @@ class SHINE_Source():
         # Do work
         self.calculate_energy_grid()
         self.calculate_ddxs()
-        self.calculate_neutron_energies()
-        self.setup_neutron_mesh()
         self.bin_neutrons()
 
         t1 = time.time()
         print('Ran in %.2f seconds' % (t1 - t0))
 
-        # Make plots
-        self.plot_extent()
-        self.plot_angle()
-        self.plot_energy()
-
     def read_stopping_power(self):
 
-        # Read stopping power data from file
+        # Read DT stopping power data from file
+        # Note: DD stopping power is calculated as SP_DT * (mass_T / mass_D)
         self.sp_data = {}
         unit_conv = {'eV': 1e-3, 'keV': 1.0, 'MeV': 1e3}
-        for rxn in ['DD', 'DT']:
+        for rxn in ['DT']:
             fname = os.path.join('data', 'SP_%s.txt' % (rxn))
             with open(fname, 'r') as r: lines = r.readlines()
             self.sp_data[rxn] = {'E': [], 'dEdx': []}
@@ -168,6 +149,8 @@ class SHINE_Source():
 
     def calculate_energy_grid(self):
 
+        rho_DT = self.adens * mT / NA  # Mass density of pure T target [g/cm^3]
+
         # Calculate beam energy at each grid point [keV]
         self.EB_grid    = np.zeros(self.x_grid.shape)
         self.EB_grid[0] = self.voltage
@@ -175,157 +158,197 @@ class SHINE_Source():
             E_start = self.EB_grid[i]  # Energy at start of interval
             E_avg   = self.EB_grid[i]  # Initialize value for average energy in interval
             for _ in range(5):         # Do 5 iterations
-                dEdx_DD = np.interp(E_avg, self.sp_data['DD']['E'], self.sp_data['DD']['dEdx'], left=np.nan, right=np.nan)  # DD stopping power [keV-cm^2/g]
-                dEdx_DT = np.interp(E_avg, self.sp_data['DT']['E'], self.sp_data['DT']['dEdx'], left=np.nan, right=np.nan)  # DT stopping power [keV-cm^2/g]
-                dEdx    = (mT * self.T_frac * dEdx_DT + mD * self.D_frac * dEdx_DD) / self.amass  # Combined stopping power [keV-cm^2/g]
-                dE      = dEdx * self.rho * self.dx  # Energy loss in interval
-                E_end   = E_start - dE               # Energy at end of interval
-                E_avg   = (E_start + E_end) / 2      # Average energy in interval
+                dEdx  = np.interp(E_avg, self.sp_data['DT']['E'], self.sp_data['DT']['dEdx'],
+                                  left=np.nan, right=np.nan)  # Stopping power [keV-cm^2/g]
+                dE    = dEdx * rho_DT * self.dx  # Energy loss in interval
+                E_end = E_start - dE             # Energy at end of interval
+                E_avg = (E_start + E_end) / 2    # Average energy in interval
             if np.isnan(E_end): break
             self.EB_grid[i + 1] = E_end
         self.EB_int = (self.EB_grid[:-1] + self.EB_grid[1:]) / 2
 
-        print('End beam energy = %.6f keV' % (self.EB_grid[-1]))
+        print('End beam energy  = %.6f keV' % (self.EB_grid[-1]))
 
     def calculate_ddxs(self):
 
-        # Convert angles from lab frame to CMS
-        term1 = self.M1 * self.M3 * self.EB_int / 1000
-        term2 = self.M4 * (self.M1 + self.M2) * (self.Q + self.EB_int / 1000 * self.M2 / (self.M1 + self.M2))
-        gamma = np.sqrt(term1 / term2)
-        lab_mids = np.radians(self.angle_mids[None, :])
-        cosine_cms_mids = np.cos(lab_mids + np.asin(gamma[:, None] * np.sin(lab_mids)))
+        self.xs = {}
+        self.EN = {}
 
-        # Pre-calculate Legendre polynomials
-        self.num_leg = 7
-        legendre_ = [legendre(x) for x in range(self.num_leg)]
+        for rxn in ['DD', 'DT']:
 
-        # Calculate double-differential cross sections [b/sr]
-        self.xs = np.zeros((self.num_x_ints, self.num_a_ints))
-        for i, E in enumerate(self.EB_int):
-            total  = np.interp(E, self.xs_data[self.rxn]['E'], self.xs_data[self.rxn]['total'])
-            coeffs = np.zeros(self.num_leg)
-            L_vals = np.zeros((self.num_a_ints, self.num_leg))
-            for j in range(self.num_leg):
-                coeffs[   j] = np.interp(E, self.xs_data[self.rxn]['E'], self.xs_data[self.rxn]['coeffs'][:, j])
-                L_vals[:, j] = legendre_[j](cosine_cms_mids[i, :])
-            factors = (1 + 2 * gamma[i] * self.cosine_mids + gamma[i]**2)**1.5 / (1 + gamma[i] * self.cosine_mids)
-            self.xs[i, :] = total * np.sum(coeffs[None, :] * L_vals, 1) * factors
+            # Fusion reaction kinematics
+            if   rxn == 'DD': M1 = M_D; M2 = M_D; M3 = M_N; M4 = M_H; Q = Q_DD
+            elif rxn == 'DT': M1 = M_D; M2 = M_T; M3 = M_N; M4 = M_A; Q = Q_DT
 
-    def calculate_neutron_energies(self):
+            # Convert angles from lab frame to CMS
+            term1 = M1 * M3 * self.EB_int / 1000
+            term2 = M4 * (M1 + M2) * (Q + self.EB_int / 1000 * M2 / (M1 + M2))
+            gamma = np.sqrt(term1 / term2)
+            lab_mids = np.radians(self.angle_mids[None, :])
+            cosine_cms_mids = np.cos(lab_mids + np.asin(gamma[:, None] * np.sin(lab_mids)))
 
-        # Calculate neutron energies
-        self.EN = np.zeros((self.num_x_ints, self.num_a_ints))
-        for i, E_D in enumerate(self.EB_int / 1000):
-            term1 = self.M1 * self.M3 * E_D
-            term2 = (self.M3 + self.M4) * (self.M4 * self.Q + (self.M4 - self.M1) * E_D)
-            term3 = np.sqrt(term1) * self.cosine_mids
-            term4 = np.sqrt(term1 * self.cosine_mids**2 + term2)
-            self.EN[i, :] = ((term3 + term4) / (self.M3 + self.M4))**2
+            # Pre-calculate Legendre polynomials
+            self.num_leg = 7
+            legendre_ = [legendre(x) for x in range(self.num_leg)]
 
-    def setup_neutron_mesh(self):
+            # Calculate double-differential cross sections [b/sr]
+            self.xs[rxn] = np.zeros((self.num_x_ints, self.num_a_ints))
+            for i, E in enumerate(self.EB_int):
+                total  = np.interp(E, self.xs_data[rxn]['E'], self.xs_data[rxn]['total'])
+                coeffs = np.zeros(self.num_leg)
+                L_vals = np.zeros((self.num_a_ints, self.num_leg))
+                for j in range(self.num_leg):
+                    coeffs[   j] = np.interp(E, self.xs_data[rxn]['E'], self.xs_data[rxn]['coeffs'][:, j])
+                    L_vals[:, j] = legendre_[j](cosine_cms_mids[i, :])
+                factors = (1 + 2 * gamma[i] * self.cosine_mids + gamma[i]**2)**1.5 / (1 + gamma[i] * self.cosine_mids)
+                self.xs[rxn][i, :] = total * np.sum(coeffs[None, :] * L_vals, 1) * factors
 
-        # Setup neutron energy mesh
-        EN_min           = np.floor(np.min(self.EN) / self.EN_int) * self.EN_int
-        EN_max           = np.ceil (np.max(self.EN) / self.EN_int) * self.EN_int
-        self.num_EN_ints = int(round((EN_max - EN_min) / self.EN_int))
-        self.EN_grid     = np.linspace(EN_min, EN_max, self.num_EN_ints + 1)
-        self.EN_mids     = (self.EN_grid[:-1] + self.EN_grid[1:]) / 2
+            # Calculate neutron energies [MeV]
+            self.EN[rxn] = np.zeros((self.num_x_ints, self.num_a_ints))
+            for i, E_D in enumerate(self.EB_int / 1000):
+                term1 = M1 * M3 * E_D
+                term2 = (M3 + M4) * (M4 * Q + (M4 - M1) * E_D)
+                term3 = np.sqrt(term1) * self.cosine_mids
+                term4 = np.sqrt(term1 * self.cosine_mids**2 + term2)
+                self.EN[rxn][i, :] = ((term3 + term4) / (M3 + M4))**2
 
     def bin_neutrons(self):
 
-        # Bin neutrons
-        self.neutrons = np.zeros((self.num_x_ints_C, self.num_a_ints_C, self.num_EN_ints))
-        iC_all  = np.floor_divide(np.arange(self.num_x_ints)[:, None], self.x_C_ratio    )
-        jC_all  = np.floor_divide(np.arange(self.num_a_ints)[None, :], self.angle_C_ratio)
-        iC_all  = np.repeat(iC_all, self.num_a_ints, axis=1).astype(int)
-        jC_all  = np.repeat(jC_all, self.num_x_ints, axis=0).astype(int)
-        kC_all  = np.searchsorted(self.EN_grid, self.EN.ravel()) - 1
-        areas   = np.tile(self.angle_areas, self.num_x_ints)
-        vals    = self.xs.ravel() * areas
-        np.add.at(self.neutrons, (iC_all.ravel(), jC_all.ravel(), kC_all), vals)
+        self.num_EN_ints = {}
+        self.EN_grid     = {}
+        self.EN_mids     = {}
+        self.neutrons    = {}
+        self.nyield      = {}
 
-        # Convert to units of n/s
-        if   self.rxn == 'DD': frac = self.D_frac
-        elif self.rxn == 'DT': frac = self.T_frac
-        self.neutrons *= self.adens * 1e-24 * self.dx * frac * self.dps
+        for rxn in ['DD', 'DT']:
 
-        # Calculate total neutron yield
-        self.nyield = np.sum(self.neutrons)
-        print('%s neutron yield = %.5e n/s' % (self.rxn, self.nyield))
+            # Setup neutron energy mesh
+            EN_min                = np.floor(np.min(self.EN[rxn]) / self.EN_int) * self.EN_int
+            EN_max                = np.ceil (np.max(self.EN[rxn]) / self.EN_int) * self.EN_int
+            self.num_EN_ints[rxn] = int(round((EN_max - EN_min) / self.EN_int))
+            self.EN_grid    [rxn] = np.linspace(EN_min, EN_max, self.num_EN_ints[rxn] + 1)
+            self.EN_mids    [rxn] = (self.EN_grid[rxn][:-1] + self.EN_grid[rxn][1:]) / 2
 
-    def plot_extent(self):
+            # Bin neutrons
+            self.neutrons[rxn] = np.zeros((self.num_x_ints_C, self.num_a_ints_C, self.num_EN_ints[rxn]))
+            iC_all = np.floor_divide(np.arange(self.num_x_ints)[:, None], self.x_C_ratio    )
+            jC_all = np.floor_divide(np.arange(self.num_a_ints)[None, :], self.angle_C_ratio)
+            iC_all = np.repeat(iC_all, self.num_a_ints, axis=1).astype(int)
+            jC_all = np.repeat(jC_all, self.num_x_ints, axis=0).astype(int)
+            kC_all = np.searchsorted(self.EN_grid[rxn], self.EN[rxn].ravel()) - 1
+            areas  = np.tile(self.angle_areas, self.num_x_ints)
+            vals   = self.xs[rxn].ravel() * areas
+            np.add.at(self.neutrons[rxn], (iC_all.ravel(), jC_all.ravel(), kC_all), vals)
 
-        xvals = np.array(self.x_grid_C)
-        xvals = np.append(np.array(xvals), xvals[-1])
-        yvals = np.sum(self.neutrons, (1, 2))
-        yvals = np.append(np.append(0, yvals), 0)
+            # Convert to units of n/C
+            self.neutrons[rxn] *= self.adens * 1e-24 * self.dx / ee
+
+            # Calculate total neutron yield per coulomb
+            self.nyield[rxn] = np.sum(self.neutrons[rxn])
+            print('%s neutron yield = %.5e n/C' % (rxn, self.nyield[rxn]))
+
+    def make_plots(self, name, T_frac, current):
+
+        if not os.path.exists('images'): os.makedirs('images')
+        self.plot_position(name, T_frac, current)
+        self.plot_angle   (name, T_frac, current)
+        self.plot_energy  (name, T_frac, current)
+
+    def plot_position(self, name, T_frac, current):
+
+        xvals    = np.array(self.x_grid_C)
+        xvals    = np.append(np.array(xvals), xvals[-1])
+        yvals_DD = np.sum(self.neutrons['DD'], (1, 2)) * (1 - T_frac) * current / 1000
+        yvals_DT = np.sum(self.neutrons['DT'], (1, 2)) *      T_frac  * current / 1000
+        yvals    = yvals_DD + yvals_DT
+        yvals    = np.append(np.append(0, yvals), 0)
 
         # Plot vertical (extent) profile
         fig, ax = plt.subplots(1, 1)
         fig.set_size_inches(8, 6)
         ax.step(xvals, yvals)
-        ax.set_xlabel('Distance from top of target chamber [cm]')
+        ax.set_xlabel('Distance into target chamber [cm]')
         ax.set_ylabel('Linear neutron source [n/cm-s]')
-        ax.set_title('SHINE NDAS vertical neutron source distribution (%s)' % (self.rxn))
+        ax.set_title('SHINE neutron source position distribution (%s)' % (name))
         ax.grid()
         plt.tight_layout()
-        if not os.path.exists('images'): os.makedirs('images')
-        fname = os.path.join('images', 'profile_vertical_%s.png' % (self.rxn))
+        fname = os.path.join('images', '%s_position.png' % (name))
         print('Writing %s' % (fname))
         plt.savefig(fname)
         plt.close()
 
-    def plot_angle(self):
+    def plot_angle(self, name, T_frac, current):
 
-        xvals = self.angle_grid_C * np.pi / 180
-        xvals = np.append(xvals, 2 * np.pi - np.flip(xvals[:-1]))
-        yvals = np.sum(self.neutrons, (0, 2)) / self.angle_areas_C
-        yvals = np.append(yvals, np.flip(yvals))
-        yvals = yvals / np.mean(yvals)
-        yvals = np.append(yvals, yvals[-1])
+        xvals    = self.angle_grid_C * np.pi / 180
+        xvals    = np.append(xvals, 2 * np.pi - np.flip(xvals[:-1]))
+        yvals_DD = np.sum(self.neutrons['DD'], (0, 2)) / self.angle_areas_C * (1 - T_frac) * current / 1000
+        yvals_DT = np.sum(self.neutrons['DT'], (0, 2)) / self.angle_areas_C *      T_frac  * current / 1000
+        yvals    = yvals_DD + yvals_DT
+        yvals    = np.append(yvals, np.flip(yvals))
+        yvals    = yvals / np.mean(yvals)
+        yvals    = np.append(yvals, yvals[-1])
 
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='polar')
         fig.set_size_inches(6, 6)
         ax.plot(xvals, yvals)
         ax.set_rlabel_position(270)
-        ax.set_title('SHINE NDAS neutron angular distribution (%s)' % (self.rxn))
+        ax.set_title('SHINE neutron source angular distribution (%s)' % (name))
         plt.tight_layout()
-        if not os.path.exists('images'): os.makedirs('images')
-        fname = os.path.join('images', 'profile_angular_%s.png' % (self.rxn))
+        fname = os.path.join('images', '%s_angle.png' % (name))
         print('Writing %s' % (fname))
         plt.savefig(fname)
         plt.close()
 
-    def plot_energy(self):
+    def plot_energy(self, name, T_frac, current):
 
-        spectrum = np.sum(self.neutrons, 0) / self.EN_int
-        if   self.rxn == 'DD': xmin, xmax =  1.8,  3.4
-        elif self.rxn == 'DT': xmin, xmax = 12.9, 15.5
+        EN_min_tot      =  0.0
+        EN_max_tot      = 16.0
+        num_EN_ints_tot = int(round((EN_max_tot - EN_min_tot) / self.EN_int))
+        EN_grid_tot     = np.linspace(EN_min_tot, EN_max_tot, num_EN_ints_tot + 1)
+        EN_mids_tot     = (EN_grid_tot[:-1] + EN_grid_tot[1:]) / 2
+
+        spectrum_DD     = np.sum(self.neutrons['DD'], 0) / self.EN_int * (1 - T_frac) * current / 1000
+        spectrum_DT     = np.sum(self.neutrons['DT'], 0) / self.EN_int *      T_frac  * current / 1000
+        i_DD            = int(round(self.EN_grid['DD'][0] / self.EN_int))
+        i_DT            = int(round(self.EN_grid['DT'][0] / self.EN_int))
+        spectrum_tot    = np.zeros((self.num_a_ints_C, num_EN_ints_tot))
+        spectrum_tot[:, i_DD:i_DD + spectrum_DD.shape[1]] += spectrum_DD
+        spectrum_tot[:, i_DT:i_DT + spectrum_DT.shape[1]] += spectrum_DT
+
         cvals  = np.linspace(0, 0.95, self.num_a_ints_C)
         colors = [plt.cm.nipy_spectral(x) for x in cvals]
 
-        # Plot angular-dependent energy distribution
-        fig, ax = plt.subplots(1, 1)
-        fig.set_size_inches(8, 6)
-        ax.set_prop_cycle('color', colors)
-        total = np.zeros(spectrum.shape[1])
-        for i in range(self.num_a_ints_C):
-            if i in np.round(np.linspace(0, self.num_a_ints_C - 1, 13)):
-                label = r'%u-%u$\degree$' % (self.angle_grid_C[i], self.angle_grid_C[i + 1])
-            else: label = ''
-            ax.fill_between(self.EN_mids, total, total + spectrum[i, :], label=label)
-            total += spectrum[i, :]
-        ax.set_xlim(xmin, xmax)
-        ax.xaxis.set_major_locator(mticker.MultipleLocator(base=0.2))
-        ax.set_xlabel('Neutron energy [MeV]')
-        ax.set_ylabel('Neutron source [n/MeV-s]')
-        ax.set_title('SHINE NDAS angular-dependent neutron energy distribution (%s)' % (self.rxn))
-        ax.grid()
-        ax.legend(loc='upper right')
-        plt.tight_layout()
-        if not os.path.exists('images'): os.makedirs('images')
-        fname = os.path.join('images', 'profile_energy_angle_%s.png' % (self.rxn))
-        print('Writing %s' % (fname))
-        plt.savefig(fname)
+        for case in ['DD', 'DT', 'total']:
+
+            if   case == 'DD'   : EN_mids = self.EN_mids['DD']; spectrum = spectrum_DD ; xmin =  1.8; xmax =  3.4; xint = 0.2; lloc = 'upper right'
+            elif case == 'DT'   : EN_mids = self.EN_mids['DT']; spectrum = spectrum_DT ; xmin = 12.9; xmax = 15.5; xint = 0.2; lloc = 'upper right'
+            elif case == 'total': EN_mids =      EN_mids_tot  ; spectrum = spectrum_tot; xmin =  0.0; xmax = 16.0; xint = 1.0; lloc = 'upper center'
+
+            # Plot angular-dependent energy distribution
+            fig, ax = plt.subplots(1, 1)
+            fig.set_size_inches(8, 6)
+            ax.set_prop_cycle('color', colors)
+            total = np.zeros(spectrum.shape[1])
+            for i in range(self.num_a_ints_C):
+                if i in np.round(np.linspace(0, self.num_a_ints_C - 1, 13)):
+                    label = r'%u-%u$\degree$' % (self.angle_grid_C[i], self.angle_grid_C[i + 1])
+                else: label = ''
+                ax.fill_between(EN_mids, total, total + spectrum[i, :], label=label)
+                total += spectrum[i, :]
+            ax.set_xlim(xmin, xmax)
+            ax.xaxis.set_major_locator(mticker.MultipleLocator(base=xint))
+            if case == 'total':
+                ax.set_yscale('log')
+                ymax = np.log10(np.max(total))
+                ymin = ymax - 5
+                ax.set_ylim(10**(ymin - 0.25), 10**(ymax + 0.25))
+            ax.set_xlabel('Neutron energy [MeV]')
+            ax.set_ylabel('Neutron source [n/MeV-s]')
+            ax.set_title('SHINE %s neutron source energy distribution (%s)' % (case, name))
+            ax.grid()
+            ax.legend(loc=lloc)
+            plt.tight_layout()
+            fname = os.path.join('images', '%s_energy_%s.png' % (name, case))
+            print('Writing %s' % (fname))
+            plt.savefig(fname)
