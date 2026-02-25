@@ -21,18 +21,20 @@ def main():
 
         i = cases['name'].index(name)
 
-        T_frac      = cases['T_frac'     ][i]  # Tritium fraction
-        voltage     = cases['voltage'    ][i]  # Beam voltage [kV]
-        current     = cases['current'    ][i]  # Beam current [mA]
-        pressure    = cases['pressure'   ][i]  # Target pressure [torr]
-        temperature = cases['temperature'][i]  # Target temperature [C]
-        length      = 137.3025                 # Target length [cm]
-        num_x_ints  = 1370                     # Number of position intervals
-        angle_int   = 0.01                     # Angle interval [deg]
-        EN_int      = 0.01                     # Neutron energy interval [MeV]
+        T_frac       = cases['T_frac'     ][i]  # Tritium fraction
+        voltage      = cases['voltage'    ][i]  # Beam voltage [kV]
+        current      = cases['current'    ][i]  # Beam current [mA]
+        pressure     = cases['pressure'   ][i]  # Target pressure [torr]
+        temperature  = cases['temperature'][i]  # Target temperature [C]
+        length       = 137.3025                 # Target length [cm]
+        num_x_ints   = 1370                     # Number of position intervals (internal calculation)
+        num_x_ints_C = 137                      # Number of position intervals (output)
+        angle_int    = 0.1                      # Angle interval [deg] (internal calculation)
+        angle_int_C  = 3.0                      # Angle interval [deg] (output)
+        EN_int       = 0.01                     # Neutron energy interval [MeV]
 
         adens  = get_atom_density(pressure, temperature)
-        SS     = SHINE_Source(voltage, adens, length, num_x_ints, angle_int, EN_int)
+        SS     = SHINE_Source(name, voltage, adens, length, num_x_ints, num_x_ints_C, angle_int, angle_int_C, EN_int)
         nyield = (SS.nyield['DT'] * T_frac + SS.nyield['DD'] * (1 - T_frac)) * current / 1000
         print('Total neutron yield = %.5e n/s' % (nyield))
         SS.make_plots(name, T_frac, current)

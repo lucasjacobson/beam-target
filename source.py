@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import os
+import h5py
 import time
 import numpy as np
 from itertools import product
@@ -34,26 +35,33 @@ Q_DT = (M_D + M_T) - (M_N + M_A)  # 17.58924794 MeV
 
 def get_atom_density(pressure, temperature):
 
-    P_Pa   = pressure * 101325 / 760  # Target pressure [Pa]
-    T_K    = temperature + 273.15     # Target temperature [K]
-    mdens  = P_Pa / (kB * T_K) / 1e6  # Molecule density [1/cm^3]
-    adens  = mdens * 2                # Atom density [1/cm^3]
+    P_Pa  = pressure * 101325 / 760  # Target pressure [Pa]
+    T_K   = temperature + 273.15     # Target temperature [K]
+    mdens = P_Pa / (kB * T_K) / 1e6  # Molecule density [1/cm^3]
+    adens = mdens * 2                # Atom density [1/cm^3]
     return adens
 
 @profile
 class SHINE_Source():
 
-    def __init__(self, _voltage, _adens, _length, _num_x_ints, _angle_int, _EN_int):
+    def __init__(self, _name, _voltage, _adens, _length, _num_x_ints, _num_x_ints_C, _angle_int, _angle_int_C, _EN_int):
 
         t0 = time.time()
 
         # Input parameters
-        self.voltage     = float(_voltage   )  # Beam voltage [kV]
-        self.adens       = float(_adens     )  # Target atom density [1/cm^3]
-        self.length      = float(_length    )  # Target length [cm]
-        self.num_x_ints  =   int(_num_x_ints)  # Number of position intervals
-        self.angle_int   = float(_angle_int )  # Angle interval [deg]
-        self.EN_int      = float(_EN_int    )  # Neutron energy interval
+        self.name         =   str(_name        )
+        self.voltage      = float(_voltage     )  # Beam voltage [kV]
+        self.adens        = float(_adens       )  # Target atom density [1/cm^3]
+        self.length       = float(_length      )  # Target length [cm]
+        self.num_x_ints   =   int(_num_x_ints  )  # Number of position intervals (internal calculation)
+        self.num_x_ints_C =   int(_num_x_ints_C)  # Number of position intervals (output)
+        self.angle_int    = float(_angle_int   )  # Angle interval [deg] (internal calculation)
+        self.angle_int_C  = float(_angle_int_C )  # Angle interval [deg] (output)
+        self.EN_int       = float(_EN_int      )  # Neutron energy interval
+
+        assert(self.num_x_ints  / self.num_x_ints_C == int(self.num_x_ints  / self.num_x_ints_C))
+        assert(180              / self.angle_int_C  == int(180              / self.angle_int_C ))
+        assert(self.angle_int_C / self.angle_int    == int(self.angle_int_C / self.angle_int   ))
 
         # Setup position mesh [cm]
         self.dx     = self.length / self.num_x_ints  # Interval length [cm]
@@ -69,13 +77,11 @@ class SHINE_Source():
         self.angle_areas = (self.cosine_grid[:-1] - self.cosine_grid[1:]) * 2 * np.pi
 
         # Setup position mesh (condensed)
-        self.num_x_ints_C = 137
         self.dx_C         = self.length / self.num_x_ints_C
         self.x_grid_C     = np.linspace(0, self.length, self.num_x_ints_C + 1)
         self.x_mids_C     = (self.x_grid_C[:-1] + self.x_grid_C[1:]) / 2
 
         # Setup angle mesh (condensed)
-        self.angle_int_C   = 3.0
         self.num_a_ints_C  = int(round(180 / self.angle_int_C))
         self.angle_grid_C  = np.linspace(0, 180, self.num_a_ints_C + 1)
         self.angle_mids_C  = (self.angle_grid_C[:-1] + self.angle_grid_C[1:]) / 2
@@ -99,6 +105,9 @@ class SHINE_Source():
         self.calculate_energy_grid()
         self.calculate_ddxs()
         self.bin_neutrons()
+
+        # Write to HDF5
+        self.write_hdf5()
 
         t1 = time.time()
         print('Ran in %.2f seconds' % (t1 - t0))
@@ -166,6 +175,10 @@ class SHINE_Source():
             if np.isnan(E_end): break
             self.EB_grid[i + 1] = E_end
         self.EB_int = (self.EB_grid[:-1] + self.EB_grid[1:]) / 2
+
+        # Get beam energy on condensed grid
+        ratio = int(round(self.num_x_ints / self.num_x_ints_C))
+        self.EB_grid_C = np.array(self.EB_grid[::ratio])
 
         print('End beam energy  = %.6f keV' % (self.EB_grid[-1]))
 
@@ -247,12 +260,48 @@ class SHINE_Source():
             self.nyield[rxn] = np.sum(self.neutrons[rxn])
             print('%s neutron yield = %.5e n/C' % (rxn, self.nyield[rxn]))
 
+    def write_hdf5(self):
+
+        if not os.path.exists('hdf5'): os.makedirs('hdf5')
+        fname = os.path.join('hdf5', '%s.h5' % (self.name))
+        print('Writing %s' % (fname))
+
+        hf = h5py.File(fname, 'w')
+        hf.create_dataset('x_grid'     , data=self.x_grid_C      , compression='gzip')  # (138         )
+        hf.create_dataset('EB_grid'    , data=self.EB_grid_C     , compression='gzip')  # (138         )
+        hf.create_dataset('angle_grid' , data=self.angle_grid_C  , compression='gzip')  # (     61     )
+        hf.create_dataset('EN_grid_DD' , data=self.EN_grid ['DD'], compression='gzip')  # (         130)
+        hf.create_dataset('EN_grid_DT' , data=self.EN_grid ['DT'], compression='gzip')  # (         242)
+        hf.create_dataset('neutrons_DD', data=self.neutrons['DD'], compression='gzip')  # (137, 60, 129)
+        hf.create_dataset('neutrons_DT', data=self.neutrons['DT'], compression='gzip')  # (137, 60, 241)
+        hf.close()
+
     def make_plots(self, name, T_frac, current):
 
         if not os.path.exists('images'): os.makedirs('images')
+        self.plot_beam    (name, T_frac, current)
         self.plot_position(name, T_frac, current)
         self.plot_angle   (name, T_frac, current)
         self.plot_energy  (name, T_frac, current)
+
+    def plot_beam(self, name, T_frac, current):
+
+        xvals = np.array(self.x_grid_C)
+        yvals = np.array(self.EB_grid_C)
+
+        fig, ax = plt.subplots(1, 1)
+        fig.set_size_inches(8, 6)
+        ax.plot(xvals, yvals)
+        ax.plot(0, 0, '')
+        ax.set_xlabel('Distance into target chamber [cm]')
+        ax.set_ylabel('Beam energy [keV]')
+        ax.set_title('SHINE beam energy profile (%s)' % (name))
+        ax.grid()
+        plt.tight_layout()
+        fname = os.path.join('images', '%s_beam.png' % (name))
+        print('Writing %s' % (fname))
+        plt.savefig(fname)
+        plt.close()
 
     def plot_position(self, name, T_frac, current):
 
@@ -263,7 +312,6 @@ class SHINE_Source():
         yvals    = yvals_DD + yvals_DT
         yvals    = np.append(np.append(0, yvals), 0)
 
-        # Plot vertical (extent) profile
         fig, ax = plt.subplots(1, 1)
         fig.set_size_inches(8, 6)
         ax.step(xvals, yvals)
