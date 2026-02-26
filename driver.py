@@ -5,12 +5,16 @@
 from source import SHINE_Source, get_atom_density
 
 cases = {
-    'name'       : ['DD'       , 'DT'       , 'DT1pct'   ],
-    'T_frac'     : [0.0        , 1.0        , 0.01       ],  # Tritium fraction
-    'voltage'    : [280.0      , 280.0      , 280.0      ],  # Beam voltage [kV]
-    'current'    : [38.2915    , 38.2915    , 38.2915    ],  # Beam current [mA]
-    'pressure'   : [38.397285  , 38.397285  , 38.397285  ],  # Target pressure [torr]
-    'temperature': [1800.0     , 1800.0     , 1800.0     ],  # Target temperature [C]
+    'name'        : ['DD'       , 'DT'       , 'DT1pct'   ],
+    'T_frac'      : [0.0        , 1.0        , 0.01       ],  # Tritium fraction
+    'voltage'     : [280.0      , 280.0      , 280.0      ],  # Beam voltage [kV]
+    'current'     : [38.2915    , 38.2915    , 38.2915    ],  # Beam current [mA]
+    'pressure'    : [38.397285  , 38.397285  , 38.397285  ],  # Target pressure [torr]
+    'temperature' : [1800.0     , 1800.0     , 1800.0     ],  # Target temperature [C]
+    'length'      : [137.3025   , 137.3025   , 137.3025   ],  # Target length [cm]
+    'start_radius': [0.2        , 0.2        , 0.2        ],  # Beam max radius [cm]
+    'max_radius'  : [4.1783     , 4.1783     , 4.1783     ],  # Beam max radius [cm]
+    'divergence'  : [36.0       , 36.0       , 36.0       ],  # Beam max radius [cm]
 }
 
 def main():
@@ -21,22 +25,24 @@ def main():
 
         i = cases['name'].index(name)
 
-        T_frac       = cases['T_frac'     ][i]  # Tritium fraction
-        voltage      = cases['voltage'    ][i]  # Beam voltage [kV]
-        current      = cases['current'    ][i]  # Beam current [mA]
-        pressure     = cases['pressure'   ][i]  # Target pressure [torr]
-        temperature  = cases['temperature'][i]  # Target temperature [C]
-        length       = 137.3025                 # Target length [cm]
-        num_x_ints   = 1370                     # Number of position intervals (internal calculation)
-        num_x_ints_C = 137                      # Number of position intervals (output)
-        angle_int    = 0.1                      # Angle interval [deg] (internal calculation)
-        angle_int_C  = 3.0                      # Angle interval [deg] (output)
-        EN_int       = 0.01                     # Neutron energy interval [MeV]
+        T_frac       = cases['T_frac'      ][i]  # Tritium fraction
+        voltage      = cases['voltage'     ][i]  # Beam voltage [kV]
+        current      = cases['current'     ][i]  # Beam current [mA]
+        pressure     = cases['pressure'    ][i]  # Target pressure [torr]
+        temperature  = cases['temperature' ][i]  # Target temperature [C]
+        length       = cases['length'      ][i]  # Target length [cm]
+        start_radius = cases['start_radius'][i]  # Beam start radius [cm]
+        max_radius   = cases['max_radius'  ][i]  # Beam max radius [cm]
+        divergence   = cases['divergence'  ][i]  # Beam divergence [mrad]
+        num_x_ints   = 1370                      # Number of position intervals (internal calculation)
+        num_x_ints_C = 137                       # Number of position intervals (output)
+        angle_int    = 0.01                      # Angle interval [deg] (internal calculation)
+        angle_int_C  = 3.0                       # Angle interval [deg] (output)
+        EN_int       = 0.01                      # Neutron energy interval [MeV]
 
-        adens  = get_atom_density(pressure, temperature)
-        SS     = SHINE_Source(name, voltage, adens, length, num_x_ints, num_x_ints_C, angle_int, angle_int_C, EN_int)
-        nyield = (SS.nyield['DT'] * T_frac + SS.nyield['DD'] * (1 - T_frac)) * current / 1000
-        print('Total neutron yield = %.5e n/s' % (nyield))
-        SS.make_plots(name, T_frac, current)
+        adens = get_atom_density(pressure, temperature)
+        SS    = SHINE_Source(name, T_frac, voltage, current, adens, length, start_radius, max_radius, divergence,
+                             num_x_ints, num_x_ints_C, angle_int, angle_int_C, EN_int)
+        SS.make_plots()
 
 if __name__ == '__main__': main()
