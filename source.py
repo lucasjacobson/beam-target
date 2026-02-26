@@ -87,7 +87,6 @@ class SHINE_Source():
         self.adens = get_atom_density(self.pressure, self.temperature)
 
         # Calculated values
-        self.D_frac = 1 - self.T_frac           # Deuterium fraction
         self.dps    = self.current / 1000 / ee  # Deuteron source [1/s]
         self.rho_DT = self.adens * mT / NA      # Mass density of pure T target [g/cm^3]
 
@@ -286,7 +285,7 @@ class SHINE_Source():
         self.nyield      = {}
         self.nscrape     = {}
 
-        for rxn, frac in [('DD', self.D_frac), ('DT', self.T_frac)]:
+        for rxn, frac in [('DD', 1 - self.T_frac), ('DT', self.T_frac)]:
 
             # Setup neutron energy mesh
             EN_min                = np.floor(np.min(self.EN[rxn]) / self.EN_int) * self.EN_int
@@ -335,6 +334,8 @@ class SHINE_Source():
             for param in params: hf.create_dataset(param, data=getattr(self, param))
             hf.create_dataset('x_grid'      , data=self.x_grid_C      , compression='gzip')  # (138         )
             hf.create_dataset('EB_grid'     , data=self.EB_grid_C     , compression='gzip')  # (138         )
+            hf.create_dataset('radius_grid' , data=self.radius_grid_C , compression='gzip')  # (138         )
+            hf.create_dataset('scrape_grid' , data=self.scrape_grid_C , compression='gzip')  # (138         )
             hf.create_dataset('current_grid', data=self.current_grid_C, compression='gzip')  # (138         )
             hf.create_dataset('angle_grid'  , data=self.angle_grid_C  , compression='gzip')  # (     61     )
             hf.create_dataset('EN_grid_DD'  , data=self.EN_grid ['DD'], compression='gzip')  # (         130)
@@ -348,6 +349,10 @@ class SHINE_Source():
         else:                       divergent = True
         if self.angle_int_C == 180: isotropic = True
         else:                       isotropic = False
+
+        has_DD = False; has_DT = False
+        if self.T_frac < 1: has_DD = True
+        if self.T_frac > 0: has_DT = True
 
         # Header
         dashed_line = 'c %s\n' % ('-' * 78)
@@ -434,11 +439,11 @@ class SHINE_Source():
             s += dashed_line
 
         # Radial distribution
+        s += 'c\n'
+        s += '  sc3   Radial distribution\n'
         if divergent:
             rmids = self.radius_mids_C[::-1] if reverse_x else self.radius_mids_C
             smids = self.scrape_mids_C[::-1] if reverse_x else self.scrape_mids_C
-            s += 'c\n'
-            s += '  sc3   Radial distribution\n'
             s += '  ds3 S'
             for i in range(self.num_x_ints_C):
                 if i > 0 and i % 18 == 0: s += '\n       '
@@ -449,36 +454,38 @@ class SHINE_Source():
                 s += '  si%-3u 0 %10.8f' % (101 + i, x)
                 if smids[i] > 0: s += '  $ (%8.5f%% scraped)' % (smids[i] * 100)
                 s += '\n'
-            s += 'c\n'
-            s += dashed_line
-        else:
-            s += 'c\n'
-            s += '  sc3   Radial distribution\n'
-            s += '  si3   0 %s\n' % (self.start_radius)
-            s += 'c\n'
-            s += dashed_line
+        else: s += '  si3   0 %s\n' % (self.start_radius)
+        s += 'c\n'
+        s += dashed_line
 
         # Energy distribution
+        s += 'c\n'
+        s += '  sc4   Energy distribution\n'
         if isotropic:
-            DD_min = self.EN_grid['DD'][ 0]
-            DD_max = self.EN_grid['DD'][-1]
-            DT_min = self.EN_grid['DT'][ 0]
-            DT_max = self.EN_grid['DT'][-1]
-            erg_DD = np.sum(self.neutrons['DD'], (0, 1))
-            erg_DT = np.sum(self.neutrons['DT'], (0, 1))
-            s += 'c\n'
-            s += '  sc4   Energy distribution\n'
-            s += '  si4   %s %s %s %s\n' % (DD_min, DD_max, DT_min, DT_max)
+            if has_DD:
+                DD_min = round(self.EN_grid['DD'][ 0], 12)
+                DD_max = round(self.EN_grid['DD'][-1], 12)
+                num_DD = self.EN_grid['DD'].shape[0] - 2
+                erg_DD = np.sum(self.neutrons['DD'], (0, 1))
+            if has_DT:
+                DT_min = round(self.EN_grid['DT'][ 0], 12)
+                DT_max = round(self.EN_grid['DT'][-1], 12)
+                num_DT = self.EN_grid['DT'].shape[0] - 2
+                erg_DT = np.sum(self.neutrons['DT'], (0, 1))
+            s += '  si4  '
+            if has_DD: s += ' %s %ui %s' % (DD_min, num_DD, DD_max)
+            if has_DT: s += ' %s %ui %s' % (DT_min, num_DT, DT_max)
+            s += '\n'
             s += '  sp4  '
-            for i, x in enumerate(np.append(np.append(0, erg_DD), np.append(0, erg_DT))):
+            vals = []
+            if has_DD: vals = np.append(vals, np.append(0, erg_DD))
+            if has_DT: vals = np.append(vals, np.append(0, erg_DT))
+            for i, x in enumerate(vals):
                 if i > 0 and i % 6 == 0: s += '\n       '
                 s += ' %.5e' % (x)
             s += '\n'
             s += 'c\n'
-            s += dashed_line
         else:
-            s += 'c\n'
-            s += '  sc4   Energy distribution\n'
             s += '  ds4 S'
             for i in range(self.num_a_ints_C):
                 if i > 0 and i % 18 == 0: s += '\n       '
@@ -486,28 +493,36 @@ class SHINE_Source():
             s += '\n'
             s += 'c\n'
             for i in range(self.num_a_ints_C):
-                sid     = 501 + i
-                erg_DD  = np.sum(self.neutrons['DD'][:, -i - 1, :], 0)
-                erg_DT  = np.sum(self.neutrons['DT'][:, -i - 1, :], 0)
-                inds_DD = np.nonzero(erg_DD)[0]
-                inds_DT = np.nonzero(erg_DT)[0]
-                erg_DD  = erg_DD[inds_DD]
-                erg_DT  = erg_DT[inds_DT]
-                DD_min  = round(self.EN_grid['DD'][inds_DD[ 0]    ], 12)
-                DD_max  = round(self.EN_grid['DD'][inds_DD[-1] + 1], 12)
-                DT_min  = round(self.EN_grid['DT'][inds_DT[ 0]    ], 12)
-                DT_max  = round(self.EN_grid['DT'][inds_DT[-1] + 1], 12)
-                num_DD  = inds_DD[-1] - inds_DD[0]
-                num_DT  = inds_DT[-1] - inds_DT[0]
+                sid = 501 + i
+                if has_DD:
+                    erg_DD  = np.sum(self.neutrons['DD'][:, -i - 1, :], 0)
+                    inds_DD = np.nonzero(erg_DD)[0]
+                    erg_DD  = erg_DD[inds_DD]
+                    DD_min  = round(self.EN_grid['DD'][inds_DD[ 0]    ], 12)
+                    DD_max  = round(self.EN_grid['DD'][inds_DD[-1] + 1], 12)
+                    num_DD  = inds_DD[-1] - inds_DD[0]
+                if has_DT:
+                    erg_DT  = np.sum(self.neutrons['DT'][:, -i - 1, :], 0)
+                    inds_DT = np.nonzero(erg_DT)[0]
+                    erg_DT  = erg_DT[inds_DT]
+                    DT_min  = round(self.EN_grid['DT'][inds_DT[ 0]    ], 12)
+                    DT_max  = round(self.EN_grid['DT'][inds_DT[-1] + 1], 12)
+                    num_DT  = inds_DT[-1] - inds_DT[0]
                 s += '  sc%-3u Energy distribution (%.12g - %.12g degrees)\n' % (sid, self.angle_grid_C[i], self.angle_grid_C[i + 1])
-                s += '  si%-3u %s %ui %s %s %ui %s\n' % (sid, DD_min, num_DD, DD_max, DT_min, num_DT, DT_max)
+                s += '  si%-3u' % (sid)
+                if has_DD: s += ' %s %ui %s' % (DD_min, num_DD, DD_max)
+                if has_DT: s += ' %s %ui %s' % (DT_min, num_DT, DT_max)
+                s += '\n'
                 s += '  sp%-3u' % (sid)
-                for j, x in enumerate(np.append(np.append(0, erg_DD), np.append(0, erg_DT))):
+                vals = []
+                if has_DD: vals = np.append(vals, np.append(0, erg_DD))
+                if has_DT: vals = np.append(vals, np.append(0, erg_DT))
+                for j, x in enumerate(vals):
                     if j > 0 and j % 6 == 0: s += '\n       '
                     s += ' %.5e' % (x)
                 s += '\n'
                 s += 'c\n'
-            s += dashed_line
+        s += dashed_line
 
         # Write file
         if not os.path.exists('mcnp_sdef'): os.makedirs('mcnp_sdef')
@@ -649,7 +664,7 @@ class SHINE_Source():
 
         for case in ['DD', 'DT', 'total']:
 
-            if case == 'DD' and self.D_frac == 0: continue
+            if case == 'DD' and self.T_frac == 1: continue
             if case == 'DT' and self.T_frac == 0: continue
 
             if   case == 'DD'   : EN_mids = self.EN_mids['DD']; spectrum = spectrum_DD ; xmin =  1.8; xmax =  3.4; xint = 0.2; lloc = 'upper right'
