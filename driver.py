@@ -8,7 +8,7 @@ cases = {
     'name'        : ['DD'       , 'DT'       , 'DT1pct'   ],
     'T_frac'      : [0.0        , 1.0        , 0.01       ],  # Tritium fraction
     'voltage'     : [280.0      , 280.0      , 280.0      ],  # Beam voltage [kV]
-    'current'     : [38.2915    , 38.2915    , 38.2915    ],  # Beam current [mA]
+    'current'     : [38.3959    , 38.3959    , 38.3959    ],  # Beam current [mA]
     'pressure'    : [38.397285  , 38.397285  , 38.397285  ],  # Target pressure [torr]
     'temperature' : [1800.0     , 1800.0     , 1800.0     ],  # Target temperature [C]
     'length'      : [137.3025   , 137.3025   , 137.3025   ],  # Target length [cm]
@@ -42,6 +42,7 @@ def main():
 
         SS = SHINE_Source(name, T_frac, voltage, current, pressure, temperature, length, start_radius, max_radius,
                           divergence, num_x_ints, num_x_ints_C, angle_int, angle_int_C, EN_int)
+        SS.write_hdf5()
         SS.write_mcnp_sdef()
         SS.make_plots()
 

@@ -81,7 +81,9 @@ class SHINE_Source():
         assert(self.angle_int    >  0)
         assert(self.angle_int_C  >  0)
         assert(self.EN_int       >  0)
-        assert(180 / self.angle_int_C == int(180 / self.angle_int_C))
+        assert(180              / self.angle_int_C  == int(180              / self.angle_int_C ))
+        assert(self.angle_int_C / self.angle_int    == int(self.angle_int_C / self.angle_int   ))
+        assert(self.num_x_ints  / self.num_x_ints_C == int(self.num_x_ints  / self.num_x_ints_C))
 
         # Calculate target atom density [1/cm^3]
         self.adens = get_atom_density(self.pressure, self.temperature)
@@ -104,9 +106,9 @@ class SHINE_Source():
         self.angle_areas = (self.cosine_grid[:-1] - self.cosine_grid[1:]) * 2 * np.pi
 
         # Setup position mesh (condensed)
-        self.dx_C         = self.length / self.num_x_ints_C
-        self.x_grid_C     = np.linspace(0, self.length, self.num_x_ints_C + 1)
-        self.x_mids_C     = (self.x_grid_C[:-1] + self.x_grid_C[1:]) / 2
+        self.dx_C     = self.length / self.num_x_ints_C
+        self.x_grid_C = np.linspace(0, self.length, self.num_x_ints_C + 1)
+        self.x_mids_C = (self.x_grid_C[:-1] + self.x_grid_C[1:]) / 2
 
         # Setup angle mesh (condensed)
         self.num_a_ints_C  = int(round(180 / self.angle_int_C))
@@ -117,12 +119,8 @@ class SHINE_Source():
         self.angle_areas_C = (self.cosine_grid_C[:-1] - self.cosine_grid_C[1:]) * 2 * np.pi
 
         # Ratios between condensed intervals and calculation intervals
-        self.x_C_ratio     = self.num_x_ints / self.num_x_ints_C
-        self.angle_C_ratio = self.num_a_ints / self.num_a_ints_C
-        assert(self.x_C_ratio     == int(round(self.x_C_ratio    )))
-        assert(self.angle_C_ratio == int(round(self.angle_C_ratio)))
-        self.x_C_ratio     = int(round(self.x_C_ratio    ))
-        self.angle_C_ratio = int(round(self.angle_C_ratio))
+        self.x_C_ratio     = int(round(self.num_x_ints / self.num_x_ints_C))
+        self.angle_C_ratio = int(round(self.num_a_ints / self.num_a_ints_C))
 
         # Read tabular data
         self.read_stopping_power()
@@ -133,9 +131,6 @@ class SHINE_Source():
         self.calculate_scraping()
         self.calculate_ddxs()
         self.bin_neutrons()
-
-        # Write to HDF5
-        self.write_hdf5()
 
         t1 = time.time()
         print('Ran in %.2f seconds' % (t1 - t0))
@@ -370,6 +365,14 @@ class SHINE_Source():
         s += 'c     Beam start_radius  : %.12g cm\n'   % (self.start_radius)
         s += 'c     Beam max_radius    : %.12g cm\n'   % (self.max_radius  )
         s += 'c     Beam divergence    : %.12g mrad\n' % (self.divergence  )
+        s += 'c\n'
+        s += dashed_line
+        s += 'c\n'
+        s += 'c     # of distance intervals                 : %.12g\n'     % (self.num_x_ints_C)
+        s += 'c     # of distance intervals (internal calc) : %.12g\n'     % (self.num_x_ints  )
+        s += 'c     Angle interval                          : %.12g deg\n' % (self.angle_int_C )
+        s += 'c     Angle interval (internal calc)          : %.12g deg\n' % (self.angle_int   )
+        s += 'c     Neutron energy interval                 : %.12g MeV\n' % (self.EN_int      )
         s += 'c\n'
         s += dashed_line
         s += 'c\n'
