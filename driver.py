@@ -2,7 +2,7 @@
 
 # Note: code runs out of memory at 0.025 degree interval
 
-from source import SHINE_Source
+from shine_source_gen import SHINE_Source
 
 cases = {
     'name'        : ['DD'       , 'DT'       , 'DT1pct'   ],
