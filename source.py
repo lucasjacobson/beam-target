@@ -318,10 +318,10 @@ class SHINE_Source():
     def make_plots(self):
 
         if not os.path.exists('images'): os.makedirs('images')
-        self.plot_beam    ()
-        self.plot_position()
-        self.plot_angle   ()
-        self.plot_energy  ()
+        self.plot_beam            ()
+        self.plot_neutron_position()
+        self.plot_neutron_angle   ()
+        self.plot_neutron_energy  ()
 
     def plot_beam(self):
 
@@ -378,29 +378,34 @@ class SHINE_Source():
         plt.savefig(fname)
         plt.close()
 
-    def plot_position(self):
+    def plot_neutron_position(self):
 
-        xvals    = np.array(self.x_grid_C)
-        xvals    = np.append(np.array(xvals), xvals[-1])
-        yvals_DD = np.sum(self.neutrons['DD'], (1, 2))
-        yvals_DT = np.sum(self.neutrons['DT'], (1, 2))
-        yvals    = yvals_DD + yvals_DT
-        yvals    = np.append(np.append(0, yvals), 0)
+        xvals     = np.array(self.x_grid_C)
+        xvals     = np.append(np.array(xvals), xvals[-1])
+        yvals_DD  = np.sum(self.neutrons['DD'], (1, 2))
+        yvals_DT  = np.sum(self.neutrons['DT'], (1, 2))
+        yvals_tot = yvals_DD + yvals_DT
+        yvals_DD  = np.append(np.append(0, yvals_DD ), 0)
+        yvals_DT  = np.append(np.append(0, yvals_DT ), 0)
+        yvals_tot = np.append(np.append(0, yvals_tot), 0)
 
         fig, ax = plt.subplots(1, 1)
         fig.set_size_inches(8, 6)
-        ax.step(xvals, yvals)
+        ax.step(xvals, yvals_DD , label='DD'   )
+        ax.step(xvals, yvals_DT , label='DT'   )
+        ax.step(xvals, yvals_tot, label='Total')
         ax.set_xlabel('Distance into target chamber [cm]')
         ax.set_ylabel('Linear neutron source [n/cm-s]')
         ax.set_title('SHINE neutron source position distribution (%s)' % (self.name))
         ax.grid()
-        fname = os.path.join('images', '%s_position.png' % (self.name))
+        ax.legend(loc='upper right')
+        fname = os.path.join('images', '%s_neutron_position.png' % (self.name))
         print('Writing %s' % (fname))
         plt.tight_layout()
         plt.savefig(fname)
         plt.close()
 
-    def plot_angle(self):
+    def plot_neutron_angle(self):
 
         xvals    = self.angle_grid_C * np.pi / 180
         xvals    = np.append(xvals, 2 * np.pi - np.flip(xvals[:-1]))
@@ -417,13 +422,13 @@ class SHINE_Source():
         ax.plot(xvals, yvals)
         ax.set_rlabel_position(270)
         ax.set_title('SHINE neutron source angular distribution (%s)' % (self.name))
-        fname = os.path.join('images', '%s_angle.png' % (self.name))
+        fname = os.path.join('images', '%s_neutron_angle.png' % (self.name))
         print('Writing %s' % (fname))
         plt.tight_layout()
         plt.savefig(fname)
         plt.close()
 
-    def plot_energy(self):
+    def plot_neutron_energy(self):
 
         EN_min_tot      =  0.0
         EN_max_tot      = 16.0
@@ -474,7 +479,7 @@ class SHINE_Source():
             ax.set_title('SHINE %s neutron source energy distribution (%s)' % (case, self.name))
             ax.grid()
             ax.legend(loc=lloc)
-            fname = os.path.join('images', '%s_energy_%s.png' % (self.name, case))
+            fname = os.path.join('images', '%s_neutron_energy_%s.png' % (self.name, case))
             print('Writing %s' % (fname))
             plt.tight_layout()
             plt.savefig(fname)
