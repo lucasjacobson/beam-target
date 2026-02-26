@@ -2,7 +2,7 @@
 
 # Note: code runs out of memory at 0.025 degree interval
 
-from source import SHINE_Source, get_atom_density
+from source import SHINE_Source
 
 cases = {
     'name'        : ['DD'       , 'DT'       , 'DT1pct'   ],
@@ -40,9 +40,9 @@ def main():
         angle_int_C  = 3.0                       # Angle interval [deg] (output)
         EN_int       = 0.01                      # Neutron energy interval [MeV]
 
-        adens = get_atom_density(pressure, temperature)
-        SS    = SHINE_Source(name, T_frac, voltage, current, adens, length, start_radius, max_radius, divergence,
-                             num_x_ints, num_x_ints_C, angle_int, angle_int_C, EN_int)
+        SS = SHINE_Source(name, T_frac, voltage, current, pressure, temperature, length, start_radius, max_radius,
+                          divergence, num_x_ints, num_x_ints_C, angle_int, angle_int_C, EN_int)
+        SS.write_mcnp_sdef()
         SS.make_plots()
 
 if __name__ == '__main__': main()

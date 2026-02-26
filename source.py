@@ -38,14 +38,14 @@ def get_atom_density(pressure, temperature):
     P_Pa  = pressure * 101325 / 760  # Target pressure [Pa]
     T_K   = temperature + 273.15     # Target temperature [K]
     mdens = P_Pa / (kB * T_K) / 1e6  # Molecule density [1/cm^3]
-    adens = mdens * 2                # Atom density [1/cm^3]
+    adens = mdens * 2                # Atom density [1/cm^3] (the factor of 2 is because the molecules are diatomic)
     return adens
 
 @profile
 class SHINE_Source():
 
-    def __init__(self, _name, _T_frac, _voltage, _current, _adens, _length, _start_radius, _max_radius, _divergence,
-                 _num_x_ints, _num_x_ints_C, _angle_int, _angle_int_C, _EN_int):
+    def __init__(self, _name, _T_frac, _voltage, _current, _pressure, _temperature, _length, _start_radius, _max_radius,
+                 _divergence, _num_x_ints, _num_x_ints_C, _angle_int, _angle_int_C, _EN_int):
 
         t0 = time.time()
 
@@ -54,7 +54,8 @@ class SHINE_Source():
         self.T_frac       = float(_T_frac      )  # Tritium fraction
         self.voltage      = float(_voltage     )  # Beam voltage [kV]
         self.current      = float(_current     )  # Beam current [mA]
-        self.adens        = float(_adens       )  # Target atom density [1/cm^3]
+        self.pressure     = float(_pressure    )  # Target pressure [Torr]
+        self.temperature  = float(_temperature )  # Target temperature [C]
         self.length       = float(_length      )  # Target length [cm]
         self.start_radius = float(_start_radius)  # Beam start radius [cm]
         self.max_radius   = float(_max_radius  )  # Beam max radius [cm]
@@ -65,8 +66,25 @@ class SHINE_Source():
         self.angle_int_C  = float(_angle_int_C )  # Angle interval [deg] (output)
         self.EN_int       = float(_EN_int      )  # Neutron energy interval
 
-        # Make sure angle interval fits into 180 degrees evenly
+        # Check input parameters for errors
+        assert(self.T_frac >= 0 and self.T_frac <= 1)
+        assert(self.voltage > 0 and self.voltage <= 100000)
+        assert(self.current      >  0)
+        assert(self.pressure     >  0)
+        assert(self.temperature  > -273.15)
+        assert(self.length       >  0)
+        assert(self.start_radius >  0)
+        assert(self.max_radius   >  0)
+        assert(self.divergence   >= 0)
+        assert(self.num_x_ints   >  0)
+        assert(self.num_x_ints_C >  0)
+        assert(self.angle_int    >  0)
+        assert(self.angle_int_C  >  0)
+        assert(self.EN_int       >  0)
         assert(180 / self.angle_int_C == int(180 / self.angle_int_C))
+
+        # Calculate target atom density [1/cm^3]
+        self.adens = get_atom_density(self.pressure, self.temperature)
 
         # Calculated values
         self.D_frac = 1 - self.T_frac           # Deuterium fraction
@@ -193,19 +211,28 @@ class SHINE_Source():
     def calculate_scraping(self):
 
         # Calculate beam radius at each grid point [cm]
-        self.radius_grid = self.start_radius + self.x_grid * self.divergence / 1000
-        self.radius_mids = (self.radius_grid[:-1] + self.radius_grid[1:]) / 2
+        self.radius_grid = self.start_radius + self.x_grid * np.atan(self.divergence / 1000)
 
         # Calculate beam scrape fraction at each grid point (assume flat beam profile, this is conservative)
         self.scrape_grid = 1 - (self.max_radius / self.radius_grid)**2
         self.scrape_grid[self.scrape_grid < 0] = 0
         self.scrape_mids = (self.scrape_grid[:-1] + self.scrape_grid[1:]) / 2
 
+        # Replace radii that are larger than the max radius
+        self.radius_grid[self.radius_grid > self.max_radius] = self.max_radius
+        self.radius_mids = np.sqrt((self.radius_grid[:-1]**2 + self.radius_grid[1:]**2) / 2)
+
         # Calculate beam current at each grid point [mA]
         self.current_grid = self.current * (1 - self.scrape_grid)
+        self.current_mids = (self.current_grid[:-1] + self.current_grid[1:]) / 2
 
-        # Get beam current on condensed grid
+        # Get quantities on condensed grid
+        self.radius_grid_C  = np.array(self.radius_grid [::self.x_C_ratio])
+        self.scrape_grid_C  = np.array(self.scrape_grid [::self.x_C_ratio])
         self.current_grid_C = np.array(self.current_grid[::self.x_C_ratio])
+        self.radius_mids_C  = np.sqrt(np.mean(np.reshape(self.radius_mids**2, (self.num_x_ints_C, self.x_C_ratio)), 1))
+        self.scrape_mids_C  =         np.mean(np.reshape(self.scrape_mids   , (self.num_x_ints_C, self.x_C_ratio)), 1)
+        self.current_mids_C =         np.mean(np.reshape(self.current_mids  , (self.num_x_ints_C, self.x_C_ratio)), 1)
 
     def calculate_ddxs(self):
 
@@ -314,6 +341,179 @@ class SHINE_Source():
             hf.create_dataset('EN_grid_DT'  , data=self.EN_grid ['DT'], compression='gzip')  # (         242)
             hf.create_dataset('neutrons_DD' , data=self.neutrons['DD'], compression='gzip')  # (137, 60, 129)
             hf.create_dataset('neutrons_DT' , data=self.neutrons['DT'], compression='gzip')  # (137, 60, 241)
+
+    def write_mcnp_sdef(self, direction='-z'):
+
+        if self.divergence == 0:    divergent = False
+        else:                       divergent = True
+        if self.angle_int_C == 180: isotropic = True
+        else:                       isotropic = False
+
+        # Header
+        dashed_line = 'c %s\n' % ('-' * 78)
+        s = ''
+        s += dashed_line
+        s += 'c     Source definition\n'
+        s += dashed_line
+        s += 'c\n'
+        s += 'c     Tritium fraction   : %.12g%%\n'    % (self.T_frac * 100)
+        s += 'c     Beam voltage       : %.12g kV\n'   % (self.voltage     )
+        s += 'c     Beam current       : %.12g mA\n'   % (self.current     )
+        s += 'c     Target pressure    : %.12g Torr\n' % (self.pressure    )
+        s += 'c     Target temperature : %.12g C\n'    % (self.temperature )
+        s += 'c     Target length      : %.12g cm\n'   % (self.length      )
+        s += 'c     Beam start_radius  : %.12g cm\n'   % (self.start_radius)
+        s += 'c     Beam max_radius    : %.12g cm\n'   % (self.max_radius  )
+        s += 'c     Beam divergence    : %.12g mrad\n' % (self.divergence  )
+        s += 'c\n'
+        s += dashed_line
+        s += 'c\n'
+        s += 'c     DD    neutron yield : %.5e n/s (%9.5f%%)\n' % (self.nyield['DD'], self.nyield['DD'] / self.nyield_tot * 100)
+        s += 'c     DT    neutron yield : %.5e n/s (%9.5f%%)\n' % (self.nyield['DT'], self.nyield['DT'] / self.nyield_tot * 100)
+        s += 'c     Total neutron yield : %.5e n/s\n'           % (self.nyield_tot  )
+        s += 'c\n'
+        s += 'c     Fraction of neutrons lost to scraping : %8.5f%%\n' % (self.nscrape_tot * 100)
+        s += 'c\n'
+        s += dashed_line
+
+        # SDEF card
+        if   direction == '-x': axs = '-1  0  0'; vec = '-1  0  0'; reverse_x = False
+        elif direction == '+x': axs = ' 1  0  0'; vec = ' 1  0  0'; reverse_x = False
+        elif direction == '-y': axs = ' 0 -1  0'; vec = ' 0 -1  0'; reverse_x = False
+        elif direction == '+y': axs = ' 0  1  0'; vec = ' 0  1  0'; reverse_x = False
+        elif direction == '-z': axs = ' 0  0  1'; vec = ' 0  0 -1'; reverse_x = True  # ADVANTG bug means -z case has to be reversed
+        elif direction == '+z': axs = ' 0  0  1'; vec = ' 0  0  1'; reverse_x = False
+        axs = ' '.join(axs.strip().split())
+        vec = ' '.join(vec.strip().split())
+        s += 'c\n'
+        s += '  sdef  par = n\n'
+        s += '        pos = 0 0 0\n'
+        s += '        axs = %s\n' % (axs)
+        s += '        vec = %s\n' % (vec)
+        s += '        ext = d1\n'
+        if isotropic: pass
+        else:         s += '        dir = d2\n'
+        if divergent: s += '        rad = fext = d3\n'
+        else:         s += '        rad = d3\n'
+        if isotropic: s += '        erg = d4\n'
+        else:         s += '        erg = fdir = d4\n'
+
+        s += 'c\n'
+        s += dashed_line
+
+        # Extent distribution
+        ext = np.sum(self.neutrons['DD'], (1, 2)) + np.sum(self.neutrons['DT'], (1, 2))
+        if reverse_x: ext = ext[::-1]
+        s += 'c\n'
+        s += '  sc1   Extent distribution\n'
+        s += '  si1   0 %ui %s\n' % (self.num_x_ints_C - 1, self.length)
+        s += '  sp1  '
+        for i, x in enumerate(np.append(0, ext)):
+            if i > 0 and i % 6 == 0: s += '\n       '
+            s += ' %.5e' % (x)
+        s += '\n'
+        s += 'c\n'
+        s += dashed_line
+
+        # Angular distribution
+        if not isotropic:
+            dir = (np.sum(self.neutrons['DD'], (0, 2)) + np.sum(self.neutrons['DT'], (0, 2)))[::-1]
+            s += 'c\n'
+            s += '  sc2   Angular distribution\n'
+            s += '  si2  '
+            for i, x in enumerate(self.cosine_grid_C[::-1]):
+                if i > 0 and i % 6 == 0: s += '\n       '
+                s += ' %11.8f' % (x)
+            s += '\n'
+            s += '  sp2  '
+            for i, x in enumerate(np.append(0, dir)):
+                if i > 0 and i % 6 == 0: s += '\n       '
+                s += ' %11.5e' % (x)
+            s += '\n'
+            s += 'c\n'
+            s += dashed_line
+
+        # Radial distribution
+        if divergent:
+            rmids = self.radius_mids_C[::-1] if reverse_x else self.radius_mids_C
+            smids = self.scrape_mids_C[::-1] if reverse_x else self.scrape_mids_C
+            s += 'c\n'
+            s += '  sc3   Radial distribution\n'
+            s += '  ds3 S'
+            for i in range(self.num_x_ints_C):
+                if i > 0 and i % 18 == 0: s += '\n       '
+                s += ' %3u' % (101 + i)
+            s += '\n'
+            s += 'c\n'
+            for i, x in enumerate(rmids):
+                s += '  si%-3u 0 %10.8f' % (101 + i, x)
+                if smids[i] > 0: s += '  $ (%8.5f%% scraped)' % (smids[i] * 100)
+                s += '\n'
+            s += 'c\n'
+            s += dashed_line
+        else:
+            s += 'c\n'
+            s += '  sc3   Radial distribution\n'
+            s += '  si3   0 %s\n' % (self.start_radius)
+            s += 'c\n'
+            s += dashed_line
+
+        # Energy distribution
+        if isotropic:
+            DD_min = self.EN_grid['DD'][ 0]
+            DD_max = self.EN_grid['DD'][-1]
+            DT_min = self.EN_grid['DT'][ 0]
+            DT_max = self.EN_grid['DT'][-1]
+            erg_DD = np.sum(self.neutrons['DD'], (0, 1))
+            erg_DT = np.sum(self.neutrons['DT'], (0, 1))
+            s += 'c\n'
+            s += '  sc4   Energy distribution\n'
+            s += '  si4   %s %s %s %s\n' % (DD_min, DD_max, DT_min, DT_max)
+            s += '  sp4  '
+            for i, x in enumerate(np.append(np.append(0, erg_DD), np.append(0, erg_DT))):
+                if i > 0 and i % 6 == 0: s += '\n       '
+                s += ' %.5e' % (x)
+            s += '\n'
+            s += 'c\n'
+            s += dashed_line
+        else:
+            s += 'c\n'
+            s += '  sc4   Energy distribution\n'
+            s += '  ds4 S'
+            for i in range(self.num_a_ints_C):
+                if i > 0 and i % 18 == 0: s += '\n       '
+                s += ' %3u' % (501 + i)
+            s += '\n'
+            s += 'c\n'
+            for i in range(self.num_a_ints_C):
+                sid     = 501 + i
+                erg_DD  = np.sum(self.neutrons['DD'][:, -i - 1, :], 0)
+                erg_DT  = np.sum(self.neutrons['DT'][:, -i - 1, :], 0)
+                inds_DD = np.nonzero(erg_DD)[0]
+                inds_DT = np.nonzero(erg_DT)[0]
+                erg_DD  = erg_DD[inds_DD]
+                erg_DT  = erg_DT[inds_DT]
+                DD_min  = round(self.EN_grid['DD'][inds_DD[ 0]    ], 12)
+                DD_max  = round(self.EN_grid['DD'][inds_DD[-1] + 1], 12)
+                DT_min  = round(self.EN_grid['DT'][inds_DT[ 0]    ], 12)
+                DT_max  = round(self.EN_grid['DT'][inds_DT[-1] + 1], 12)
+                num_DD  = inds_DD[-1] - inds_DD[0]
+                num_DT  = inds_DT[-1] - inds_DT[0]
+                s += '  sc%-3u Energy distribution (%.12g - %.12g degrees)\n' % (sid, self.angle_grid_C[i], self.angle_grid_C[i + 1])
+                s += '  si%-3u %s %ui %s %s %ui %s\n' % (sid, DD_min, num_DD, DD_max, DT_min, num_DT, DT_max)
+                s += '  sp%-3u' % (sid)
+                for j, x in enumerate(np.append(np.append(0, erg_DD), np.append(0, erg_DT))):
+                    if j > 0 and j % 6 == 0: s += '\n       '
+                    s += ' %.5e' % (x)
+                s += '\n'
+                s += 'c\n'
+            s += dashed_line
+
+        # Write file
+        if not os.path.exists('mcnp_sdef'): os.makedirs('mcnp_sdef')
+        fname = os.path.join('mcnp_sdef', '%s_source.txt' % (self.name))
+        print('Writing %s' % (fname))
+        with open(fname, 'w') as w: w.write(s)
 
     def make_plots(self):
 
