@@ -208,10 +208,12 @@ class SHINE_Source():
 
         if self.verbose: print('  End beam energy     = %.6f keV' % (self.EB_grid[-1]))
 
-    def calculate_scraping(self):
+    def calculate_scraping(self, use_atan=False):
 
         # Calculate beam radius at each grid point [cm]
-        self.radius_grid = self.start_radius + self.x_grid * np.atan(self.divergence / 1000)
+        if use_atan: divergence = np.atan(self.divergence / 1000)
+        else:        divergence =         self.divergence / 1000
+        self.radius_grid = self.start_radius + self.x_grid * divergence
 
         # Calculate beam scrape fraction at each grid point (assume flat beam profile, this is conservative)
         self.scrape_grid = 1 - (self.max_radius / self.radius_grid)**2
