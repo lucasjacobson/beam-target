@@ -45,7 +45,7 @@ def get_atom_density(pressure, temperature):
 class SHINE_Source():
 
     def __init__(self, _name, _T_frac, _voltage, _current, _pressure, _temperature, _length, _start_radius, _max_radius,
-                 _divergence, _num_x_ints, _num_x_ints_C, _angle_int, _angle_int_C, _EN_int, _data_dir=None):
+                 _divergence, _num_x_ints, _num_x_ints_C, _angle_int, _angle_int_C, _EN_int, _data_dir=None, _verbose=True):
 
         t0 = time.time()
 
@@ -65,6 +65,7 @@ class SHINE_Source():
         self.angle_int    = float(_angle_int   )  # Angle interval [deg] (internal calculation)
         self.angle_int_C  = float(_angle_int_C )  # Angle interval [deg] (output)
         self.EN_int       = float(_EN_int      )  # Neutron energy interval
+        self.verbose      = bool(_verbose      )
 
         # Data directory
         if _data_dir is None: self.data_dir = 'data'
@@ -137,7 +138,7 @@ class SHINE_Source():
         self.bin_neutrons()
 
         t1 = time.time()
-        print('Ran in %.2f seconds' % (t1 - t0))
+        if self.verbose: print('Ran in %.2f seconds' % (t1 - t0))
 
     def read_stopping_power(self):
 
@@ -205,7 +206,7 @@ class SHINE_Source():
         # Get beam energy on condensed grid
         self.EB_grid_C = np.array(self.EB_grid[::self.x_C_ratio])
 
-        print('  End beam energy     = %.6f keV' % (self.EB_grid[-1]))
+        if self.verbose: print('  End beam energy     = %.6f keV' % (self.EB_grid[-1]))
 
     def calculate_scraping(self):
 
@@ -311,7 +312,7 @@ class SHINE_Source():
 
             # Calculate total neutron yield
             self.nyield[rxn] = np.sum(self.neutrons[rxn])
-            print('  %s neutron yield    = %.5e n/s' % (rxn, self.nyield[rxn]))
+            if self.verbose: print('  %s neutron yield    = %.5e n/s' % (rxn, self.nyield[rxn]))
 
             # Calculate amount of beam scraping
             self.nscrape[rxn] = 1 - np.sum(vals_scr) / np.sum(vals_tot)
@@ -319,14 +320,14 @@ class SHINE_Source():
         self.nyield_tot  = self.nyield['DD'] + self.nyield['DT']
         self.nscrape_tot = (self.nyield['DD'] * self.nscrape['DD'] +
                             self.nyield['DT'] * self.nscrape['DT']) / self.nyield_tot
-        print('  Total neutron yield = %.5e n/s' % (self.nyield_tot))
-        print('  Scrape fraction     = %.5f%%'   % (self.nscrape[rxn] * 100))
+        if self.verbose: print('  Total neutron yield = %.5e n/s' % (self.nyield_tot))
+        if self.verbose: print('  Scrape fraction     = %.5f%%'   % (self.nscrape[rxn] * 100))
 
     def write_hdf5(self):
 
         if not os.path.exists('hdf5'): os.makedirs('hdf5')
         fname = os.path.join('hdf5', '%s.h5' % (self.name))
-        print('Writing %s' % (fname))
+        if self.verbose: print('Writing %s' % (fname))
 
         params = ['voltage', 'current', 'adens', 'length', 'start_radius', 'max_radius', 'divergence',
                   'num_x_ints', 'num_x_ints_C', 'angle_int', 'angle_int_C', 'EN_int']
@@ -540,7 +541,7 @@ class SHINE_Source():
 
         if not os.path.exists('mcnp_sdef'): os.makedirs('mcnp_sdef')
         fname = os.path.join('mcnp_sdef', '%s_source.txt' % (self.name))
-        print('Writing %s' % (fname))
+        if self.verbose: print('Writing %s' % (fname))
         with open(fname, 'w') as w: w.write(self.get_mcnp_sdef(direction))
 
     def make_plots(self):
@@ -569,7 +570,7 @@ class SHINE_Source():
         ax.set_title('SHINE beam energy profile (%s)' % (self.name))
         ax.grid()
         fname = os.path.join('images', '%s_beam_energy.png' % (self.name))
-        print('Writing %s' % (fname))
+        if self.verbose: print('Writing %s' % (fname))
         plt.tight_layout()
         plt.savefig(fname)
         plt.close()
@@ -585,7 +586,7 @@ class SHINE_Source():
         ax.grid()
         ax.legend(loc='lower left')
         fname = os.path.join('images', '%s_beam_current.png' % (self.name))
-        print('Writing %s' % (fname))
+        if self.verbose: print('Writing %s' % (fname))
         plt.tight_layout()
         plt.savefig(fname)
         plt.close()
@@ -601,7 +602,7 @@ class SHINE_Source():
         ax.grid()
         ax.legend(loc='lower left')
         fname = os.path.join('images', '%s_beam_power.png' % (self.name))
-        print('Writing %s' % (fname))
+        if self.verbose: print('Writing %s' % (fname))
         plt.tight_layout()
         plt.savefig(fname)
         plt.close()
@@ -628,7 +629,7 @@ class SHINE_Source():
         ax.grid()
         ax.legend(loc='upper right')
         fname = os.path.join('images', '%s_neutron_position.png' % (self.name))
-        print('Writing %s' % (fname))
+        if self.verbose: print('Writing %s' % (fname))
         plt.tight_layout()
         plt.savefig(fname)
         plt.close()
@@ -651,7 +652,7 @@ class SHINE_Source():
         ax.set_rlabel_position(270)
         ax.set_title('SHINE neutron source angular distribution (%s)' % (self.name))
         fname = os.path.join('images', '%s_neutron_angle.png' % (self.name))
-        print('Writing %s' % (fname))
+        if self.verbose: print('Writing %s' % (fname))
         plt.tight_layout()
         plt.savefig(fname)
         plt.close()
@@ -708,7 +709,7 @@ class SHINE_Source():
             ax.grid()
             ax.legend(loc=lloc)
             fname = os.path.join('images', '%s_neutron_energy_%s.png' % (self.name, case))
-            print('Writing %s' % (fname))
+            if self.verbose: print('Writing %s' % (fname))
             plt.tight_layout()
             plt.savefig(fname)
             plt.close()
