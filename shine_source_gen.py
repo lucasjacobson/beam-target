@@ -385,7 +385,9 @@ class SHINE_Source():
         s += 'c     DT    neutron yield : %.5e n/s (%9.5f%%)\n' % (self.nyield['DT'], self.nyield['DT'] / self.nyield_tot * 100)
         s += 'c     Total neutron yield : %.5e n/s\n'           % (self.nyield_tot  )
         s += 'c\n'
-        s += 'c     Fraction of neutrons lost to scraping : %8.5f%%\n' % (self.nscrape_tot * 100)
+        s += 'c     Beam energy at backstop : %.6f keV\n' % (self.EB_grid[-1])
+        s += 'c\n'
+        s += 'c     Fraction of neutrons lost to scraping : %.5f%%\n' % (self.nscrape_tot * 100)
         s += 'c\n'
         s += dashed_line
 
