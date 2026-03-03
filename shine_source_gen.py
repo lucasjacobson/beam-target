@@ -45,7 +45,7 @@ def get_atom_density(pressure, temperature):
 class SHINE_Source():
 
     def __init__(self, _name, _T_frac, _voltage, _current, _pressure, _temperature, _length, _start_radius, _max_radius,
-                 _divergence, _num_x_ints, _num_x_ints_C, _angle_int, _angle_int_C, _EN_int):
+                 _divergence, _num_x_ints, _num_x_ints_C, _angle_int, _angle_int_C, _EN_int, _data_dir=None):
 
         t0 = time.time()
 
@@ -65,6 +65,10 @@ class SHINE_Source():
         self.angle_int    = float(_angle_int   )  # Angle interval [deg] (internal calculation)
         self.angle_int_C  = float(_angle_int_C )  # Angle interval [deg] (output)
         self.EN_int       = float(_EN_int      )  # Neutron energy interval
+
+        # Data directory
+        if _data_dir is None: self.data_dir = 'data'
+        else:                 self.data_dir = str(_data_dir)
 
         # Check input parameters for errors
         assert(self.T_frac >= 0 and self.T_frac <= 1)
@@ -142,7 +146,7 @@ class SHINE_Source():
         self.sp_data = {}
         unit_conv = {'eV': 1e-3, 'keV': 1.0, 'MeV': 1e3}
         for rxn in ['DT']:
-            fname = os.path.join('data', 'SP_%s.txt' % (rxn))
+            fname = os.path.join(self.data_dir, 'SP_%s.txt' % (rxn))
             with open(fname, 'r') as r: lines = r.readlines()
             self.sp_data[rxn] = {'E': [], 'dEdx': []}
             in_data = False
@@ -164,7 +168,7 @@ class SHINE_Source():
         # Read cross section data from file
         self.xs_data = {}
         for rxn in ['DD', 'DT']:
-            fname = os.path.join('data', 'xs_%s.csv' % (rxn))
+            fname = os.path.join(self.data_dir, 'xs_%s.csv' % (rxn))
             with open(fname, 'r') as r: lines = r.readlines()
             self.xs_data[rxn] = {'E': [], 'total': [], 'coeffs': []}
             E_vals = []
