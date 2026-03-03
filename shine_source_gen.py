@@ -198,6 +198,7 @@ class SHINE_Source():
                 E_end = E_start - dE                  # Energy at end of interval
                 E_avg = (E_start + E_end) / 2         # Average energy in interval
             if np.isnan(E_end): break
+            if E_end < 0:       break
             self.EB_grid[i + 1] = E_end
         self.EB_mids = (self.EB_grid[:-1] + self.EB_grid[1:]) / 2
 
