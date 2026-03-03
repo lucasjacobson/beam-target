@@ -507,18 +507,22 @@ class SHINE_Source():
                 sid = 501 + i
                 if has_DD:
                     erg_DD  = np.sum(self.neutrons['DD'][:, -i - 1, :], 0)
-                    inds_DD = np.nonzero(erg_DD)[0]
-                    erg_DD  = erg_DD[inds_DD]
-                    DD_min  = round(self.EN_grid['DD'][inds_DD[ 0]    ], 12)
-                    DD_max  = round(self.EN_grid['DD'][inds_DD[-1] + 1], 12)
-                    num_DD  = inds_DD[-1] - inds_DD[0]
+                    inds    = np.nonzero(erg_DD)[0]
+                    ind_min = inds[ 0]
+                    ind_max = inds[-1] + 1
+                    erg_DD  = erg_DD[ind_min:ind_max]
+                    DD_min  = round(self.EN_grid['DD'][ind_min], 12)
+                    DD_max  = round(self.EN_grid['DD'][ind_max], 12)
+                    num_DD  = ind_max - ind_min - 1
                 if has_DT:
                     erg_DT  = np.sum(self.neutrons['DT'][:, -i - 1, :], 0)
-                    inds_DT = np.nonzero(erg_DT)[0]
-                    erg_DT  = erg_DT[inds_DT]
-                    DT_min  = round(self.EN_grid['DT'][inds_DT[ 0]    ], 12)
-                    DT_max  = round(self.EN_grid['DT'][inds_DT[-1] + 1], 12)
-                    num_DT  = inds_DT[-1] - inds_DT[0]
+                    inds    = np.nonzero(erg_DT)[0]
+                    ind_min = inds[ 0]
+                    ind_max = inds[-1] + 1
+                    erg_DT  = erg_DT[ind_min:ind_max]
+                    DT_min  = round(self.EN_grid['DT'][ind_min], 12)
+                    DT_max  = round(self.EN_grid['DT'][ind_max], 12)
+                    num_DT  = ind_max - ind_min - 1
                 s += '  sc%-3u Energy distribution (%.12g - %.12g degrees)\n' % (sid, self.angle_grid_C[i], self.angle_grid_C[i + 1])
                 s += '  si%-3u' % (sid)
                 if has_DD: s += ' %s %ui %s' % (DD_min, num_DD, DD_max)
