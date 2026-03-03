@@ -257,11 +257,11 @@ class SHINE_Source():
             # Calculate double-differential cross sections [b/sr]
             self.xs[rxn] = np.zeros((self.num_x_ints, self.num_a_ints))
             for i, E in enumerate(self.EB_mids):
-                total  = np.interp(E, self.xs_data[rxn]['E'], self.xs_data[rxn]['total'])
+                total  = np.interp(E, self.xs_data[rxn]['E'], self.xs_data[rxn]['total'], left=0, right=np.nan)
                 coeffs = np.zeros(self.num_leg)
                 L_vals = np.zeros((self.num_a_ints, self.num_leg))
                 for j in range(self.num_leg):
-                    coeffs[   j] = np.interp(E, self.xs_data[rxn]['E'], self.xs_data[rxn]['coeffs'][:, j])
+                    coeffs[   j] = np.interp(E, self.xs_data[rxn]['E'], self.xs_data[rxn]['coeffs'][:, j], left=0, right=np.nan)
                     L_vals[:, j] = legendre_[j](cosine_cms_mids[i, :])
                 factors = (1 + 2 * gamma[i] * self.cosine_mids + gamma[i]**2)**1.5 / (1 + gamma[i] * self.cosine_mids)
                 self.xs[rxn][i, :] = total * np.sum(coeffs[None, :] * L_vals, 1) * factors
