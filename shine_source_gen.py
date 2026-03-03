@@ -342,7 +342,7 @@ class SHINE_Source():
             hf.create_dataset('neutrons_DD' , data=self.neutrons['DD'], compression='gzip')  # (137, 60, 129)
             hf.create_dataset('neutrons_DT' , data=self.neutrons['DT'], compression='gzip')  # (137, 60, 241)
 
-    def write_mcnp_sdef(self, direction='-z'):
+    def get_mcnp_sdef(self, direction='-z'):
 
         if self.divergence == 0:    divergent = False
         else:                       divergent = True
@@ -531,11 +531,14 @@ class SHINE_Source():
                 s += 'c\n'
         s += dashed_line
 
-        # Write file
+        return s
+
+    def write_mcnp_sdef(self, direction='-z'):
+
         if not os.path.exists('mcnp_sdef'): os.makedirs('mcnp_sdef')
         fname = os.path.join('mcnp_sdef', '%s_source.txt' % (self.name))
         print('Writing %s' % (fname))
-        with open(fname, 'w') as w: w.write(s)
+        with open(fname, 'w') as w: w.write(self.get_mcnp_sdef(direction))
 
     def make_plots(self):
 
