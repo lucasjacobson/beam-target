@@ -252,7 +252,7 @@ class SHINE_Source():
             term2 = M4 * (M1 + M2) * (Q + self.EB_mids / 1000 * M2 / (M1 + M2))
             gamma = np.sqrt(term1 / term2)
             lab_mids = np.radians(self.angle_mids[None, :])
-            cosine_cms_mids = np.cos(lab_mids + np.asin(gamma[:, None] * np.sin(lab_mids)))
+            cosine_cms_mids = np.cos(lab_mids + np.arcsin(gamma[:, None] * np.sin(lab_mids)))
 
             # Pre-calculate Legendre polynomials
             self.num_leg = 7
