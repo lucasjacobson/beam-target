@@ -4,6 +4,7 @@
 
 import argparse
 import multiprocessing as mp
+from functools import partial
 import numpy as np
 
 from shine_source_gen import SHINE_Source
@@ -22,7 +23,7 @@ class Case():
         self.divergence       = divergence
         self.include_upstream = include_upstream
 
-def run_case(name, case):
+def run_case(name, case, verbose=False):
 
     T_frac       = case.T_frac        # Tritium fraction
     voltage      = case.voltage       # Beam voltage [kV]
@@ -57,7 +58,8 @@ def run_case(name, case):
         num_x_ints_list_C = num_x_ints_C
 
     SS = SHINE_Source(name, T_frac, voltage, current, pressure_list, temperature_list, length_list, start_radius,
-                      max_radius, divergence_list, num_x_ints_list, num_x_ints_list_C, angle_int, angle_int_C, EN_int)
+                      max_radius, divergence_list, num_x_ints_list, num_x_ints_list_C, angle_int, angle_int_C, EN_int,
+                      _verbose=verbose)
 
     SS.write_hdf5()
     SS.write_mcnp_sdef()
@@ -69,12 +71,13 @@ def get_args():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-j', '--jobs', type=int, default=mp.cpu_count(), help='number of CPUs')
+    parser.add_argument('-v', '--verbose', action='store_true', help='verbose output')
     args = parser.parse_args()
     return args
 
-def worker(item):
+def worker1(item, verbose):
     name, case = item
-    return name, run_case(name, case)
+    return name, run_case(name, case, verbose)
 
 def main():
 
@@ -85,9 +88,11 @@ def main():
         'DT'       : Case(1.0 ,  280.0,  38.39596, 38.39738, 1800.0, 137.3025, 0.2,   4.1783, 36.0,   False),
     }
 
-    jobs = get_args().jobs
-    if jobs > 1:
-        with mp.Pool(processes=jobs) as pool: sources = dict(dict(pool.map(worker, list(cases.items()))))
-    else: sources = {name: run_case(name, case) for name, case in cases.items()}
+    args = get_args()
+
+    if args.jobs > 1:
+        worker2 = partial(worker1, verbose=args.verbose)
+        with mp.Pool(processes=args.jobs) as pool: sources = dict(pool.map(worker2, cases.items()))
+    else: sources = {name: run_case(name, case, args.verbose) for name, case in cases.items()}
 
 if __name__ == '__main__': main()
