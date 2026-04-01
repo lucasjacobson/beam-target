@@ -2,6 +2,8 @@
 
 # Note: code runs out of memory at 0.025 degree interval
 
+import argparse
+import multiprocessing as mp
 import numpy as np
 
 from shine_source_gen import SHINE_Source
@@ -61,6 +63,19 @@ def run_case(name, case):
     SS.write_mcnp_sdef()
     SS.make_plots()
 
+    return SS
+
+def get_args():
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-j', '--jobs', type=int, default=mp.cpu_count(), help='number of CPUs')
+    args = parser.parse_args()
+    return args
+
+def worker(item):
+    name, case = item
+    return name, run_case(name, case)
+
 def main():
 
     cases = {  #          T_Frac Voltage Current   Pressure  Temp    Length    Radius RadMax  Diverge Upstream
@@ -70,6 +85,9 @@ def main():
         'DT'       : Case(1.0 ,  280.0,  38.39596, 38.39738, 1800.0, 137.3025, 0.2,   4.1783, 36.0,   False),
     }
 
-    for name, case in cases.items(): run_case(name, case)
+    jobs = get_args().jobs
+    if jobs > 1:
+        with mp.Pool(processes=jobs) as pool: sources = dict(dict(pool.map(worker, list(cases.items()))))
+    else: sources = {name: run_case(name, case) for name, case in cases.items()}
 
 if __name__ == '__main__': main()
