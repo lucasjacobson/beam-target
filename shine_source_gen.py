@@ -522,7 +522,7 @@ class SHINE_Source():
             rmids = self.radius_mids_C[::-1] if reverse_x else self.radius_mids_C
             smids = self.scrape_mids_C[::-1] if reverse_x else self.scrape_mids_C
             s += '  ds3 S'
-            for i in range(self.num_x_ints_list_C[-1]):  ##### Fix
+            for i in range(len(rmids)):
                 if i > 0 and i % 18 == 0: s += '\n       '
                 s += ' %3u' % (101 + i)
             s += '\n'
