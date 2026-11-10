@@ -176,6 +176,30 @@ def get_atom_density(pressure, temperature):
     return adens
 
 
+def slow_down(E0, stopping_E, stopping_eps, atom_density, dx):
+    """Return the beam energy [keV] at each grid point as the beam slows down through bins.
+
+    E0 is the starting energy [keV]; stopping_E [keV] and stopping_eps [keV cm^2 per atom] the
+    stopping-power table; atom_density [1/cm^3] and dx [cm] are per bin. The energy loss in
+    each bin uses the stopping power at the bin's average energy, found by fixed-point
+    iteration. If the beam stops or leaves the stopping-power table, the remaining energies
+    are zero. The result has len(dx) + 1 entries.
+    """
+    grid = np.zeros(len(dx) + 1)
+    grid[0] = E0
+    for i in range(len(dx)):
+        E_start = grid[i]
+        E_avg = grid[i]
+        for _ in range(5):
+            eps = np.interp(E_avg, stopping_E, stopping_eps, left=np.nan, right=np.nan)
+            E_end = E_start - eps * atom_density[i] * dx[i]
+            E_avg = (E_start + E_end) / 2
+        if np.isnan(E_end) or E_end < 0:
+            break
+        grid[i + 1] = E_end
+    return grid
+
+
 _FORTRAN_EXPONENT = re.compile(r"^([+-]?(?:\d+\.?\d*|\.\d+))([+-]\d+)$")
 
 
@@ -391,15 +415,23 @@ class ShineSource:
     single region. The last region is the target chamber; earlier regions are normally
     upstream differential-pumping stages.
 
+    Of the target chamber's pressure, its length and the beam energy at the backstop, give
+    any two and the third is calculated (see solve_target_chamber). To calculate the
+    pressure or length, give None as the target chamber's value (the last entry, or the
+    whole argument for a single region) and set beam_energy_backstop. Every upstream region
+    needs its pressure and length.
+
     Args:
         name: Case name, used in output file names and titles.
         T_frac: Atom fraction of tritium in the gas (0 = pure D, 1 = pure T).
         voltage: Beam voltage [kV]. The beam starts with this energy in keV. At most
             MAX_VOLTAGE (40 MeV), the upper limit of the Legendre cross-section data.
         current: Beam current [mA].
-        pressure: Gas pressure in each region [torr].
+        pressure: Gas pressure in each region [torr]; None for the target chamber to
+            calculate it.
         temperature: Gas temperature in each region [degC].
-        length: Length of each region along the beam [cm].
+        length: Length of each region along the beam [cm]; None for the target chamber to
+            calculate it.
         start_radius: Beam radius where it enters the first region [cm].
         wall_radius: Radius of the target chamber wall [cm]. Beam outside this radius is
             scraped.
@@ -416,6 +448,9 @@ class ShineSource:
             data directory next to this file.
         stopping_power: Stopping-power set, one of STOPPING_POWERS: "srim" (default) or
             "icru49". See read_stopping_power.
+        beam_energy_backstop: Beam energy wanted at the backstop, the end of the target
+            chamber [keV]; give it to calculate the target chamber's pressure or length.
+            None (default) calculates the beam energy from the pressure and length.
     """
 
     def __init__(
@@ -437,6 +472,7 @@ class ShineSource:
         energy_bin_width,
         data_dir=None,
         stopping_power="srim",
+        beam_energy_backstop=None,
     ):
         t0 = time.time()
 
@@ -459,6 +495,22 @@ class ShineSource:
         self.energy_bin_width = float(energy_bin_width)
         self.data_dir = DEFAULT_DATA_DIR if data_dir is None else str(data_dir)
         self.stopping_power = str(stopping_power)
+        self.beam_energy_backstop = (
+            None if beam_energy_backstop is None else float(beam_energy_backstop)
+        )
+
+        # Which of the target chamber's pressure and length and the backstop beam energy is
+        # calculated from the other two (a missing pressure or length is NaN here)
+        unknown = [
+            name
+            for name, missing in [
+                ("pressure", np.isnan(self.pressure[-1])),
+                ("length", np.isnan(self.length[-1])),
+                ("beam_energy_backstop", self.beam_energy_backstop is None),
+            ]
+            if missing
+        ]
+        self.calculated = unknown[0] if len(unknown) == 1 else None
 
         self.num_regions = len(self.pressure)
         self.check_input()
@@ -468,6 +520,11 @@ class ShineSource:
         # Deuteron source rate [1/s]
         self.deuteron_rate = self.current / 1000 / ee
 
+        self.read_stopping_power()
+        self.read_cross_sections()
+        if self.calculated != "beam_energy_backstop":
+            self.solve_target_chamber()
+
         self.setup_meshes()
 
         # Gas atom density in each region [1/cm^3]
@@ -476,9 +533,6 @@ class ShineSource:
         # Region properties on the internal and output position meshes
         self.divergence_mids = np.repeat(self.divergence, self.num_x_bins)
         self.atom_density_mids = np.repeat(self.atom_density_per_region, self.num_x_bins)
-
-        self.read_stopping_power()
-        self.read_cross_sections()
 
         self.calculate_beam_energy()
         self.calculate_scraping()
@@ -508,6 +562,21 @@ class ShineSource:
                 len(getattr(self, attr)) == self.num_regions,
                 f"{attr} has {len(getattr(self, attr))} entries, expected {self.num_regions}",
             )
+        require(
+            self.calculated is not None,
+            "give exactly two of the target chamber's pressure and length and "
+            "beam_energy_backstop; the third is calculated",
+        )
+        require(
+            not np.any(np.isnan(self.pressure[:-1])) and not np.any(np.isnan(self.length[:-1])),
+            "every region before the target chamber needs its pressure and length",
+        )
+        if self.beam_energy_backstop is not None:
+            require(
+                0 < self.beam_energy_backstop < self.voltage,
+                f"beam_energy_backstop must be above 0 and below the beam energy at entry "
+                f"({self.voltage:g} keV)",
+            )
         require(0 <= self.T_frac <= 1, "T_frac must be between 0 and 1")
         require(
             0 < self.voltage <= MAX_VOLTAGE,
@@ -515,9 +584,10 @@ class ShineSource:
             "Legendre cross-section data, see data/README.md)",
         )
         require(self.current > 0, "current must be positive")
-        require(np.all(self.pressure > 0), "pressures must be positive")
+        known = [~np.isnan(self.pressure), ~np.isnan(self.length)]
+        require(np.all(self.pressure[known[0]] > 0), "pressures must be positive")
         require(np.all(self.temperature > -273.15), "temperatures must be above 0 K")
-        require(np.all(self.length > 0), "lengths must be positive")
+        require(np.all(self.length[known[1]] > 0), "lengths must be positive")
         require(self.start_radius > 0, "start_radius must be positive")
         require(self.wall_radius > 0, "wall_radius must be positive")
         require(
@@ -545,6 +615,71 @@ class ShineSource:
         require(
             np.all(self.num_x_bins % self.num_x_bins_out == 0),
             "num_x_bins_out must divide num_x_bins in every region",
+        )
+
+    def solve_target_chamber(self):
+        """Calculate the target chamber's pressure or length (whichever is None) that gives
+        beam_energy_backstop at the backstop.
+
+        The beam is slowed down through the upstream regions once, then through the target
+        chamber on its internal mesh (num_x_bins), exactly as the full calculation does, for
+        trial pressures or lengths. The backstop energy falls steadily as either grows, so the
+        value is bracketed by doubling and then found by bisection, to a relative precision of
+        1e-12. The result replaces the NaN in self.pressure or self.length.
+
+        Raises ValueError if the beam is already at or below beam_energy_backstop when it
+        enters the target chamber, or if that energy cannot be reached because it is below
+        the bottom of the stopping-power table (where the beam is treated as stopped).
+        """
+        E_table, eps_table = self.stopping_data["E"], self.stopping_data["eps"]
+        target = self.beam_energy_backstop
+        n_up = self.num_x_bins[:-1]
+        E_in = slow_down(
+            self.voltage,
+            E_table,
+            eps_table,
+            np.repeat(get_atom_density(self.pressure[:-1], self.temperature[:-1]), n_up),
+            np.repeat(self.length[:-1] / n_up, n_up),
+        )[-1]
+        if not E_in > target:
+            raise ValueError(
+                f"{self.name}: the beam enters the target chamber with {E_in:g} keV, not above "
+                f"beam_energy_backstop ({target:g} keV)"
+            )
+
+        n = self.num_x_bins[-1]
+
+        def backstop_energy(value):
+            pressure = value if self.calculated == "pressure" else self.pressure[-1]
+            length = value if self.calculated == "length" else self.length[-1]
+            density = np.full(n, get_atom_density(pressure, self.temperature[-1]))
+            return slow_down(E_in, E_table, eps_table, density, np.full(n, length / n))[-1]
+
+        # Bracket the value (torr or cm), then bisect
+        lo, hi = 0.0, 1.0
+        while backstop_energy(hi) > target:
+            lo, hi = hi, 2 * hi
+        while hi - lo > 1e-12 * hi:
+            mid = (lo + hi) / 2
+            if backstop_energy(mid) > target:
+                lo = mid
+            else:
+                hi = mid
+        value = (lo + hi) / 2
+        if abs(backstop_energy(value) - target) > 1e-6 * target:
+            raise ValueError(
+                f"{self.name}: cannot reach beam_energy_backstop = {target:g} keV: below about "
+                f"{E_table[0]:g} keV the beam is treated as stopped"
+            )
+
+        if self.calculated == "pressure":
+            self.pressure[-1] = value
+        else:
+            self.length[-1] = value
+        units = "torr" if self.calculated == "pressure" else "cm"
+        logger.debug(
+            f"{self.name}: target chamber {self.calculated} = {value:.6g} {units} for a beam "
+            f"energy of {target:g} keV at the backstop"
         )
 
     def setup_meshes(self):
@@ -654,30 +789,15 @@ class ShineSource:
         """Slow the beam down through the gas.
 
         Sets self.beam_energy_grid, the beam energy at each internal grid point [keV], and its
-        midpoint and output-mesh versions. The energy loss in each bin uses the
-        stopping power at the bin's average energy, found by fixed-point iteration.
-        If the beam stops or leaves the stopping-power table, the remaining energies stay
-        at zero.
+        midpoint and output-mesh versions (see slow_down).
         """
-        self.beam_energy_grid = np.zeros(self.x_grid.shape)
-        self.beam_energy_grid[0] = self.voltage
-        for i in range(self.num_x_bins_total):
-            E_start = self.beam_energy_grid[i]
-            E_avg = self.beam_energy_grid[i]
-            for _ in range(5):
-                eps = np.interp(
-                    E_avg,
-                    self.stopping_data["E"],
-                    self.stopping_data["eps"],
-                    left=np.nan,
-                    right=np.nan,
-                )  # Stopping per atom [keV cm^2]
-                dE = eps * self.atom_density_mids[i] * self.dx[i]
-                E_end = E_start - dE
-                E_avg = (E_start + E_end) / 2
-            if np.isnan(E_end) or E_end < 0:
-                break
-            self.beam_energy_grid[i + 1] = E_end
+        self.beam_energy_grid = slow_down(
+            self.voltage,
+            self.stopping_data["E"],
+            self.stopping_data["eps"],
+            self.atom_density_mids,
+            self.dx,
+        )
         self.beam_energy_mids = (self.beam_energy_grid[:-1] + self.beam_energy_grid[1:]) / 2
         self.beam_energy_grid_out = np.array(self.beam_energy_grid[self.out_grid_inds])
 
@@ -884,24 +1004,40 @@ class ShineSource:
         )
 
     def get_inputs(self):
-        """Return the input parameters as a list of (name, value, units)."""
-        return [
-            ("T_frac", self.T_frac, "fraction"),
-            ("voltage", self.voltage, "kV"),
-            ("current", self.current, "mA"),
-            ("pressure", self.pressure, "torr"),
-            ("temperature", self.temperature, "degC"),
-            ("length", self.length, "cm"),
-            ("start_radius", self.start_radius, "cm"),
-            ("wall_radius", self.wall_radius, "cm"),
-            ("divergence", self.divergence, "mrad"),
-            ("num_x_bins", self.num_x_bins, ""),
-            ("num_x_bins_out", self.num_x_bins_out, ""),
-            ("angle_step", self.angle_step, "deg"),
-            ("angle_step_out", self.angle_step_out, "deg"),
-            ("energy_bin_width", self.energy_bin_width, "MeV"),
-            ("stopping_power", self.stopping_power, ""),
-        ]
+        """Return the input parameters as a list of (name, value, units).
+
+        A calculated target chamber pressure or length is given as calculated, and its units
+        say so. beam_energy_backstop is included only if it was given.
+        """
+        calculated = {
+            name: ", target chamber value calculated" if self.calculated == name else ""
+            for name in ("pressure", "length")
+        }
+        requested = []
+        if self.beam_energy_backstop is not None:
+            requested = [("beam_energy_backstop", self.beam_energy_backstop, "keV, requested")]
+        return (
+            [
+                ("T_frac", self.T_frac, "fraction"),
+                ("voltage", self.voltage, "kV"),
+                ("current", self.current, "mA"),
+                ("pressure", self.pressure, "torr" + calculated["pressure"]),
+                ("temperature", self.temperature, "degC"),
+                ("length", self.length, "cm" + calculated["length"]),
+            ]
+            + requested
+            + [
+                ("start_radius", self.start_radius, "cm"),
+                ("wall_radius", self.wall_radius, "cm"),
+                ("divergence", self.divergence, "mrad"),
+                ("num_x_bins", self.num_x_bins, ""),
+                ("num_x_bins_out", self.num_x_bins_out, ""),
+                ("angle_step", self.angle_step, "deg"),
+                ("angle_step_out", self.angle_step_out, "deg"),
+                ("energy_bin_width", self.energy_bin_width, "MeV"),
+                ("stopping_power", self.stopping_power, ""),
+            ]
+        )
 
     def write_hdf5(self, path, run_info=None):
         """Write the source on the output mesh to an HDF5 file at path.

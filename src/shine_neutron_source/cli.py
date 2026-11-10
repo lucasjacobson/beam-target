@@ -26,9 +26,7 @@ CASE_SETTINGS = {
     "T_frac": float,  # Atom fraction of tritium in the gas
     "voltage": float,  # Beam voltage [kV]
     "current": float,  # Beam current [mA]
-    "pressure": float,  # Target chamber pressure [torr]
     "temperature": float,  # Gas temperature [degC], used in every region
-    "length": float,  # Target chamber length [cm]
     "start_radius": float,  # Beam radius where it enters the first region [cm]
     "wall_radius": float,  # Target chamber wall radius [cm]
     "divergence": float,  # Beam divergence in the target chamber [mrad]
@@ -37,6 +35,14 @@ CASE_SETTINGS = {
     "angle_step": float,  # Width of the emission-angle bins [deg] (internal mesh)
     "angle_step_out": float,  # Width of the emission-angle bins [deg] (output mesh)
     "energy_bin_width": float,  # Width of the neutron energy bins [MeV] (output mesh)
+}
+
+# Target chamber settings: every case needs exactly two of these (directly or from
+# [defaults]), and the third is calculated
+TARGET_SETTINGS = {
+    "pressure": float,  # Target chamber pressure [torr]
+    "length": float,  # Target chamber length [cm]
+    "beam_energy_backstop": float,  # Beam energy at the backstop [keV]
 }
 
 # Optional case settings and their defaults
@@ -115,8 +121,12 @@ def load_input(path):
     settings apply to every case unless the case overrides them, and optional
     [upstream.<name>] tables describing gas regions (such as differential-pumping stages)
     that the beam passes through before the target chamber. See CASE_SETTINGS,
-    OPTIONAL_CASE_SETTINGS and UPSTREAM_SETTINGS for the settings and their units, and
-    examples/generic.toml for an example.
+    TARGET_SETTINGS, OPTIONAL_CASE_SETTINGS and UPSTREAM_SETTINGS for the settings and their
+    units, and examples/generic.toml for an example.
+
+    Each case needs two of pressure, length and beam_energy_backstop; the third is
+    calculated. If a case and [defaults] together give all three, the two the case sets
+    itself are used.
 
     Each returned settings dict has "source", the keyword arguments for ShineSource
     (without name), and "direction", the MCNP SDEF beam direction.
@@ -127,7 +137,7 @@ def load_input(path):
         except tomllib.TOMLDecodeError as e:
             raise InputError(f"{path}: {e}") from None
     _check_keys(path, data, ["defaults", "upstream", "cases"], what="table")
-    allowed = list(CASE_SETTINGS) + list(OPTIONAL_CASE_SETTINGS)
+    allowed = list(CASE_SETTINGS) + list(TARGET_SETTINGS) + list(OPTIONAL_CASE_SETTINGS)
 
     defaults = data.get("defaults", {})
     _check_keys(f"{path} [defaults]", defaults, allowed)
@@ -153,6 +163,22 @@ def load_input(path):
             raise InputError(f"{where}: missing {', '.join(missing)}")
         for key, expected in CASE_SETTINGS.items():
             _check_type(where, key, s[key], expected)
+        given = [key for key in TARGET_SETTINGS if key in s]
+        if len(given) == 3:  # The case's own two override the third from [defaults]
+            given = [key for key in TARGET_SETTINGS if key in case]
+            if len(given) != 2:
+                raise InputError(
+                    f"{where}: pressure, length and beam_energy_backstop are all set; give "
+                    "two of them (the third is calculated)"
+                )
+        if len(given) != 2:
+            raise InputError(
+                f"{where}: give two of pressure, length and beam_energy_backstop (the third "
+                f"is calculated); got {', '.join(given) or 'none'}"
+            )
+        for key in given:
+            _check_type(where, key, s[key], TARGET_SETTINGS[key])
+        target = {key: s[key] if key in given else None for key in TARGET_SETTINGS}
         if s["direction"] not in SDEF_DIRECTIONS:
             raise InputError(
                 f"{where}: direction must be one of {', '.join(SDEF_DIRECTIONS)}, "
@@ -179,7 +205,7 @@ def load_input(path):
             if s["upstream"] not in upstreams:
                 raise InputError(f"{where}: no [upstream.{s['upstream']}] table")
             up = upstreams[s["upstream"]]
-        pressure = up["pressure"] + [s["pressure"]]
+        pressure = up["pressure"] + [target["pressure"]]
         resolved[name] = {
             "source": {
                 "T_frac": s["T_frac"],
@@ -187,7 +213,7 @@ def load_input(path):
                 "current": s["current"],
                 "pressure": pressure,
                 "temperature": [s["temperature"]] * len(pressure),
-                "length": up["length"] + [s["length"]],
+                "length": up["length"] + [target["length"]],
                 "start_radius": s["start_radius"],
                 "wall_radius": s["wall_radius"],
                 "divergence": up["divergence"] + [s["divergence"]],
@@ -197,6 +223,7 @@ def load_input(path):
                 "angle_step_out": s["angle_step_out"],
                 "energy_bin_width": s["energy_bin_width"],
                 "stopping_power": s["stopping_power"],
+                "beam_energy_backstop": target["beam_energy_backstop"],
             },
             "direction": s["direction"],
             "entry_position": [float(v) for v in entry],

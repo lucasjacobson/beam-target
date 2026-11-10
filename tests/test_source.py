@@ -6,7 +6,7 @@ import tomllib
 import h5py
 import numpy as np
 import pytest
-from conftest import make_source
+from conftest import SMALL_CASE, make_source
 
 from shine_neutron_source.source import HDF5_FORMAT_VERSION, MAX_VOLTAGE, SDEF_RADIUS_DECIMALS
 
@@ -96,6 +96,96 @@ def test_beam_stops_inside_target(T_frac, stopping_power):
     assert source.backstop_power == 0  # All the beam power stays in the target
 
 
+# --- Two of pressure, length and backstop energy -------------------------------------------
+
+
+@pytest.mark.parametrize("calculated", ["pressure", "length"])
+@pytest.mark.parametrize("stopping_power", ["srim", "icru49"])
+def test_calculate_pressure_or_length(calculated, stopping_power):
+    """Giving the backstop energy of a forward run recovers that run's pressure or length,
+    and the rest of the results with it."""
+    forward = make_source(stopping_power=stopping_power)
+    E_end = forward.beam_energy_grid[-1]
+    s = make_source(
+        stopping_power=stopping_power, **{calculated: [None]}, beam_energy_backstop=E_end
+    )
+    assert s.calculated == calculated
+    assert getattr(s, calculated)[-1] == pytest.approx(SMALL_CASE[calculated][-1], rel=1e-9)
+    assert s.beam_energy_grid[-1] == pytest.approx(E_end, rel=1e-9)
+    assert s.yield_total == pytest.approx(forward.yield_total, rel=1e-8)
+    inputs = {name: (value, units) for name, value, units in s.get_inputs()}
+    assert inputs["beam_energy_backstop"] == (E_end, "keV, requested")
+    assert inputs[calculated][1].endswith("target chamber value calculated")
+    assert "beam_energy_backstop" not in [name for name, _, _ in forward.get_inputs()]
+    assert forward.calculated == "beam_energy_backstop"
+
+
+@pytest.mark.parametrize("calculated", ["pressure", "length"])
+def test_calculate_with_upstream_regions(calculated):
+    """Only the target chamber's value is calculated; the upstream region slows the beam
+    first."""
+    regions = dict(
+        pressure=[0.5, 5.0],
+        temperature=[25.0, 25.0],
+        length=[20.0, 50.0],
+        divergence=[0.0, 30.0],
+        num_x_bins=[4, 40],
+        num_x_bins_out=[1, 10],
+    )
+    forward = make_source(**regions)
+    values = {calculated: [regions[calculated][0], None]}
+    s = make_source(**{**regions, **values}, beam_energy_backstop=forward.beam_energy_grid[-1])
+    np.testing.assert_allclose(getattr(s, calculated), regions[calculated], rtol=1e-9)
+
+
+def test_target_chamber_needs_two_of_three():
+    for overrides in [
+        dict(beam_energy_backstop=100.0),  # All three given
+        dict(pressure=None, length=None, beam_energy_backstop=100.0),  # Only one
+        dict(pressure=None),  # Only length
+    ]:
+        with pytest.raises(ValueError, match="give exactly two"):
+            make_source(**overrides)
+
+
+@pytest.mark.parametrize(
+    "overrides, message",
+    [
+        (dict(length=None, beam_energy_backstop=280.0), "must be above 0 and below"),
+        (dict(length=None, beam_energy_backstop=0.0), "must be above 0 and below"),
+        (dict(length=None, beam_energy_backstop=1e-6), "cannot reach beam_energy_backstop"),
+        (
+            dict(
+                pressure=[None, 5.0],
+                temperature=[25.0, 25.0],
+                length=[20.0, None],
+                divergence=[0.0, 30.0],
+                num_x_bins=[4, 40],
+                num_x_bins_out=[1, 10],
+                beam_energy_backstop=100.0,
+            ),
+            "every region before the target chamber",
+        ),
+        (
+            dict(
+                pressure=[50.0, None],
+                temperature=[25.0, 25.0],
+                length=[100.0, 50.0],
+                divergence=[0.0, 30.0],
+                num_x_bins=[40, 40],
+                num_x_bins_out=[1, 10],
+                beam_energy_backstop=100.0,
+            ),
+            "enters the target chamber with",
+        ),
+    ],
+    ids=["at entry energy", "zero", "below the stopping table", "upstream missing", "upstream"],
+)
+def test_backstop_energy_rejected(overrides, message):
+    with pytest.raises(ValueError, match=message):
+        make_source(**overrides)
+
+
 def test_beam_power_adds_up(mixed_source):
     """The beam power splits into gas, wall and backstop with nothing lost or double counted."""
     s = mixed_source
@@ -153,7 +243,7 @@ def test_reference_results(T_frac, stopping_power):
         (dict(voltage=MAX_VOLTAGE + 0.1), "voltage must be between"),
         (dict(T_frac=1.5), "T_frac must be between 0 and 1"),
         (dict(current=0.0), "current must be positive"),
-        (dict(pressure=[float("nan")]), "pressures must be positive"),
+        (dict(pressure=[0.0]), "pressures must be positive"),
         (dict(temperature=[25.0, 25.0]), "temperature has 2 entries"),
         (dict(angle_step_out=7.0), "angle_step_out must divide 180"),
         (dict(angle_step=4.0), "multiple of angle_step"),

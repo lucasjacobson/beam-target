@@ -97,10 +97,43 @@ upstream = "stages"
     assert source["temperature"] == [25.0, 25.0, 25.0]
 
 
+def test_two_of_three_target_settings(tmp_path):
+    """A case gives two of pressure, length and beam_energy_backstop; the third is None and
+    is calculated. Two set in the case itself override a third from [defaults]."""
+    path = write_input(
+        tmp_path,
+        BASE
+        + """
+[cases.fixed_length]
+pressure = 5.0
+
+[cases.find_length]
+pressure = 5.0
+beam_energy_backstop = 100.0
+
+[cases.find_pressure]
+length = 20.0
+beam_energy_backstop = 100.0
+""",
+    )
+    cases = {name: c["source"] for name, c in load_input(path).items()}
+    assert cases["fixed_length"]["length"] == [50.0]
+    assert cases["fixed_length"]["beam_energy_backstop"] is None
+    assert cases["find_length"]["length"] == [None]  # Length from [defaults] is overridden
+    assert cases["find_length"]["beam_energy_backstop"] == 100.0
+    assert cases["find_pressure"]["pressure"] == [None]
+    assert cases["find_pressure"]["length"] == [20.0]
+
+
 @pytest.mark.parametrize(
     "extra, message",
     [
-        ("[cases.a]\n", "missing pressure"),
+        ("[cases.a]\n", "give two of pressure, length and beam_energy_backstop .*got length"),
+        (
+            "[cases.a]\npressure = 5.0\nlength = 9.0\nbeam_energy_backstop = 100.0\n",
+            "are all set",
+        ),
+        ('[cases.a]\npressure = 5.0\nbeam_energy_backstop = "low"\n', "must be float"),
         ("[cases.a]\npressure = 5.0\nvoltge = 3\n", "unknown setting"),
         ('[cases.a]\npressure = "high"\n', "pressure must be float"),
         ("[cases.a]\npressure = 5.0\nnum_x_bins = 2.5\n", "num_x_bins must be int"),
@@ -121,6 +154,8 @@ upstream = "stages"
     ],
     ids=[
         "missing",
+        "all three target settings",
+        "backstop energy type",
         "misspelt",
         "wrong type",
         "float for int",
@@ -226,7 +261,7 @@ def test_main_verbose_messages(tmp_path, caplog):
 
 @pytest.mark.parametrize(
     "args, message",
-    [(["-c", "nope"], "no case(s) named nope"), (["--list"], "missing pressure")],
+    [(["-c", "nope"], "no case(s) named nope"), (["--list"], "give two of pressure")],
     ids=["unknown case", "bad input file"],
 )
 def test_main_errors(tmp_path, capsys, args, message):

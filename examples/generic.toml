@@ -5,6 +5,12 @@
 # Settings in [defaults] apply to every case unless the case sets them itself. Every case
 # needs all of the settings below, either directly or from [defaults].
 #
+# Of the target chamber's pressure and length and the beam energy at the backstop, give any
+# two and the third is calculated. These cases give pressure and length; to calculate the
+# length instead, replace it with, for example:
+#
+#   beam_energy_backstop = 30.0  # keV, beam energy at the end of the target chamber
+#
 # A case can put gas regions in front of the target chamber (for example differential-
 # pumping stages) by naming an [upstream.<name>] table:
 #
