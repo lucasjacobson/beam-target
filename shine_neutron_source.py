@@ -372,7 +372,7 @@ class SHINE_Source():
         self.nscrape_tot = (self.nyield['DD'] * self.nscrape['DD'] +
                             self.nyield['DT'] * self.nscrape['DT']) / self.nyield_tot
         if self.verbose: print(f'  {self.name:<16} : Total neutron yield = {self.nyield_tot:.5e} n/s')
-        if self.verbose: print(f'  {self.name:<16} : Scrape fraction     = {self.nscrape[rxn] * 100:.5f}%')
+        if self.verbose: print(f'  {self.name:<16} : Scrape fraction     = {self.nscrape_tot * 100:.5f}%')
 
     def write_hdf5(self):
 
@@ -430,8 +430,8 @@ class SHINE_Source():
         s += 'c\n'
         s += dashed_line
         s += 'c\n'
-        s += 'c     # of distance intervals                 : %.12g\n'     % (self.num_x_ints_total  )
-        s += 'c     # of distance intervals (internal calc) : %.12g\n'     % (self.num_x_ints_total_C)
+        s += 'c     # of distance intervals                 : %.12g\n'     % (self.num_x_ints_total_C)
+        s += 'c     # of distance intervals (internal calc) : %.12g\n'     % (self.num_x_ints_total  )
         s += 'c     Angle interval                          : %.12g deg\n' % (self.angle_int_C       )
         s += 'c     Angle interval (internal calc)          : %.12g deg\n' % (self.angle_int         )
         s += 'c     Neutron energy interval                 : %.12g MeV\n' % (self.EN_int            )
