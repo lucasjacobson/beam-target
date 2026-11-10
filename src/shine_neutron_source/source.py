@@ -1020,9 +1020,12 @@ class ShineSource:
         return si, sp
 
     def write_mcnp_sdef(self, path, direction="-z"):
-        """Write the MCNP SDEF card (see get_mcnp_sdef) to a text file at path."""
+        """Write the MCNP SDEF card (see get_mcnp_sdef) to a text file at path.
+
+        The file is ASCII with Unix (LF) line endings on every platform.
+        """
         _make_parent_dir(path)
-        with open(path, "w") as w:
+        with open(path, "w", encoding="ascii", newline="\n") as w:
             w.write(self.get_mcnp_sdef(direction))
 
     def make_plots(self, directory):
