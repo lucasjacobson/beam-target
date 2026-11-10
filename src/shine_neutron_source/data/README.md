@@ -60,6 +60,18 @@ documentation states there is no angular-distribution information outside the Le
 table), so the code stops reading at EMAXL and limits the beam voltage to 40,000 kV
 (`MAX_VOLTAGE`).
 
+### Total cross sections
+
+Integrating over solid angle leaves only the l = 0 Legendre term, so the total cross section
+is σ(E) = 4π σ₀(E) C₀(E). Over the deuteron energies shown (up to 500 keV), the DT cross
+section peaks at 5.0 b at 108 keV, while the DD cross section rises steadily; its maximum,
+about 0.1 b, lies at 2–3 MeV.
+
+![DD and DT total cross sections from DROSG-2000](../../../docs/figures/total_cross_sections.png)
+
+The figure is made by [`docs/figures/plot_total_cross_sections.py`](../../../docs/figures/plot_total_cross_sections.py)
+from the data files in this directory.
+
 ## Stopping powers
 
 Two stopping-power sets are available, chosen with the `stopping_power` setting (in an input
@@ -120,6 +132,12 @@ SRIM is 2–3.5 % lower than ICRU 49 where the beam enters the target. For the g
 `examples/generic.toml`, `"icru49"` gives neutron yields 1.4 % (DT) to 2.2 % (DD) lower than
 `"srim"`, and a beam energy at the backstop of about 7.6–7.7 keV instead of 9.9–10 keV. The choice of
 stopping powers is therefore a systematic uncertainty of about 2 % on the yields.
+
+![Stopping power of deuterons in tritium gas, SRIM vs ICRU 49](../../../docs/figures/stopping_power.png)
+
+The figure shows the total stopping per tritium atom as the code uses it for each setting, and
+their ratio; the kinks in the ratio come from the spacing of the two tables. It is made by
+[`docs/figures/plot_stopping_power.py`](../../../docs/figures/plot_stopping_power.py).
 
 ## References
 
