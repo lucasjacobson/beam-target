@@ -42,7 +42,7 @@ import time
 import h5py
 import matplotlib
 import numpy as np
-from scipy.special import legendre
+from numpy.polynomial.legendre import legval
 
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt  # Must follow matplotlib.use
@@ -728,9 +728,8 @@ class ShineSource:
         self.EN = {}
 
         for rxn, (M1, M2, M3, M4, _Q) in REACTIONS.items():
-            # Legendre polynomials for every coefficient in the data file
-            num_leg = self.xs_data[rxn]["coeffs"].shape[1]
-            legendre_ = [legendre(x) for x in range(num_leg)]
+            E_table = self.xs_data[rxn]["E"]
+            coeff_table = self.xs_data[rxn]["coeffs"]
 
             # Double-differential cross sections [b/sr]: the CM angular distribution times
             # the CM-to-lab solid angle factor; and neutron energies [MeV]. Both come from
@@ -742,21 +741,18 @@ class ShineSource:
                     E / 1000, self.cosine_mids, M1, M2, M3, M4
                 )
                 self.EN[rxn][i, :] = EN
-                total = np.interp(
-                    E, self.xs_data[rxn]["E"], self.xs_data[rxn]["total"], left=0, right=np.nan
+                total = np.interp(E, E_table, self.xs_data[rxn]["total"], left=0, right=np.nan)
+                coeffs = np.array(
+                    [
+                        np.interp(E, E_table, coeff_table[:, j], left=0, right=np.nan)
+                        for j in range(coeff_table.shape[1])
+                    ]
                 )
-                coeffs = np.zeros(num_leg)
-                L_vals = np.zeros((self.num_a_ints, num_leg))
-                for j in range(num_leg):
-                    coeffs[j] = np.interp(
-                        E,
-                        self.xs_data[rxn]["E"],
-                        self.xs_data[rxn]["coeffs"][:, j],
-                        left=0,
-                        right=np.nan,
-                    )
-                    L_vals[:, j] = legendre_[j](mu_cm)
-                self.xs[rxn][i, :] = total * np.sum(coeffs[None, :] * L_vals, 1) * jacobian
+                # Evaluate the Legendre series only up to its last non-zero coefficient: the
+                # higher coefficients are zero at beam energies below about 400 keV
+                nonzero = np.flatnonzero(coeffs)
+                coeffs = coeffs[: nonzero[-1] + 1] if len(nonzero) else coeffs[:1]
+                self.xs[rxn][i, :] = total * legval(mu_cm, coeffs) * jacobian
 
     def bin_neutrons(self):
         """Tally neutrons onto the output (position, angle, energy) mesh.
