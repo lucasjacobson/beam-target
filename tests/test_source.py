@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from conftest import make_source
 
-from shine_neutron_source.source import MAX_VOLTAGE
+from shine_neutron_source.source import HDF5_FORMAT_VERSION, MAX_VOLTAGE
 
 # --- Physics checks ------------------------------------------------------------------------
 
@@ -211,16 +211,53 @@ def test_sdef_file(mixed_source, tmp_path):
     dashed = "c " + "-" * 78 + "\n"
     block = text.split(dashed)[2]
     header = tomllib.loads("\n".join(line[2:] for line in block.splitlines()))
-    summary = tomllib.loads(mixed_source.get_summary({"sdef_direction": "-z"}))
+    run = {"sdef_direction": "-z", "sdef_entry_position": [0.0, 0.0, 0.0]}
+    summary = tomllib.loads(mixed_source.get_summary(run))
     assert header == summary
     assert header["run"]["sdef_direction"] == "-z"
     assert header["inputs"]["stopping_power"] == "srim"
+    # Then notes on using the source
+    notes = text.split(dashed)[3]
+    assert "multiply them by yield_total" in notes
+    assert "not on position along the" in notes
 
 
 @pytest.mark.parametrize("direction", ["-x", "+x", "-y", "+y", "-z", "+z"])
 def test_sdef_directions(mixed_source, direction):
     text = mixed_source.get_mcnp_sdef(direction)
     assert "axs = " in text and "vec = " in text
+
+
+@pytest.mark.parametrize(
+    "direction, pos, backstop",
+    [
+        ("+x", "1 2 3", "51 2 3"),
+        ("-x", "1 2 3", "-49 2 3"),
+        ("+y", "1 2 3", "1 52 3"),
+        ("-y", "1 2 3", "1 -48 3"),
+        ("+z", "1 2 3", "1 2 53"),
+        ("-z", "1 2 -47", "1 2 -47"),  # The -z card runs along +z from the backstop end
+    ],
+)
+def test_sdef_entry_position(mixed_source, direction, pos, backstop):
+    """For every direction, the beam enters at entry_position and travels the 50 cm source
+    length along the direction to the backstop."""
+    text = mixed_source.get_mcnp_sdef(direction, entry_position=(1, 2, 3))
+    assert f"        pos = {pos}\n" in text
+    assert "The beam enters at (1 2 3) cm" in text
+    assert f"reaches the backstop at ({backstop}) cm, 50 cm further on" in text
+    assert ("POS is the backstop end" in text) == (direction == "-z")
+
+
+def test_sdef_default_entry_position(mixed_source):
+    assert "        pos = 0 0 0\n" in mixed_source.get_mcnp_sdef("+z")
+    assert "        pos = 0 0 -50\n" in mixed_source.get_mcnp_sdef("-z")
+
+
+@pytest.mark.parametrize("entry", [(1, 2), (1, 2, float("nan")), (1, 2, 3, 4)])
+def test_sdef_invalid_entry_position(mixed_source, entry):
+    with pytest.raises(ValueError, match="entry_position must be three numbers"):
+        mixed_source.get_mcnp_sdef("-z", entry_position=entry)
 
 
 def test_sdef_invalid_direction(mixed_source):
@@ -235,16 +272,32 @@ def test_isotropic_source_sdef():
 
 
 def test_hdf5_file(mixed_source, tmp_path):
+    s = mixed_source
     path = tmp_path / "source.h5"
-    mixed_source.write_hdf5(path)
+    s.write_hdf5(path, {"input_file": "cases.toml"})
     with h5py.File(path) as f:
+        assert f.attrs["format"] == "shine-neutron-source"
+        assert f.attrs["format_version"] == HDF5_FORMAT_VERSION
         assert f.attrs["name"] == "test"
         assert f.attrs["code_version"]
+        assert f.attrs["created"] == s.created
+        assert f.attrs["input_file"] == "cases.toml"
         assert f["inputs/T_frac"][()] == 0.5
         assert f["inputs/stopping_power"][()] == b"srim"
         assert f["inputs/voltage"].attrs["units"] == "kV"
+        for name, value, units in s.get_results():  # The same results as summary.toml
+            np.testing.assert_allclose(f[f"results/{name}"][()], value, rtol=1e-12)
+            assert f[f"results/{name}"].attrs["units"] == units
+        for key in f:
+            if not isinstance(f[key], h5py.Group):
+                assert f[key].attrs["description"] and "units" in f[key].attrs
+        # Per-interval beam values, as used in the SDEF card and the axial profile
+        np.testing.assert_allclose(f["radius_mids"][()], s.radius_mids_C)
+        np.testing.assert_allclose(f["scrape_mids"][()], s.scrape_mids_C)
+        assert len(f["EB_mids"]) == len(f["current_mids"]) == len(f["x_grid"]) - 1
         for rxn in ("DD", "DT"):
             neutrons = f[f"neutrons_{rxn}"]
+            assert list(neutrons.attrs["dimensions"]) == ["position", "angle", "energy"]
             assert neutrons.attrs["units"] == "n/s"
             assert neutrons.shape == (
                 len(f["x_grid"]) - 1,

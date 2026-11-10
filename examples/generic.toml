@@ -26,7 +26,10 @@ num_x_ints_C = 137   # position intervals in the target chamber, output
 angle_int    = 0.01  # deg, internal calculation
 angle_int_C  = 3.0   # deg, output (180 gives an isotropic source)
 EN_int       = 0.01  # MeV, output neutron energy interval
-direction    = "-z"  # MCNP SDEF beam direction: -x, +x, -y, +y, -z or +z
+
+# MCNP SDEF card: where the source goes in the MCNP geometry
+direction      = "-z"             # beam direction: -x, +x, -y, +y, -z or +z
+entry_position = [0.0, 0.0, 0.0]  # cm, where the beam enters the first gas region
 
 # Physics
 stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)

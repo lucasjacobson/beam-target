@@ -44,6 +44,7 @@ OPTIONAL_CASE_SETTINGS = {
     "direction": "-z",  # MCNP SDEF beam direction, see SDEF_DIRECTIONS
     "upstream": None,  # Name of an [upstream.<name>] table to put before the target chamber
     "stopping_power": "srim",  # Stopping-power set, see STOPPING_POWERS
+    "entry_position": [0.0, 0.0, 0.0],  # cm, where the beam enters (MCNP coordinates)
 }
 
 # Upstream stage settings: name -> (type, default). None means required. num_x_ints,
@@ -157,6 +158,15 @@ def load_input(path):
                 f"{where}: direction must be one of {', '.join(SDEF_DIRECTIONS)}, "
                 f"got {s['direction']!r}"
             )
+        entry = s["entry_position"]
+        if not (
+            isinstance(entry, list)
+            and len(entry) == 3
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in entry)
+        ):
+            raise InputError(
+                f"{where}: entry_position must be a list of three numbers [x, y, z], got {entry!r}"
+            )
         if s["stopping_power"] not in STOPPING_POWERS:
             raise InputError(
                 f"{where}: stopping_power must be one of {', '.join(STOPPING_POWERS)}, "
@@ -189,6 +199,7 @@ def load_input(path):
                 "stopping_power": s["stopping_power"],
             },
             "direction": s["direction"],
+            "entry_position": [float(v) for v in entry],
         }
     return resolved
 
@@ -221,11 +232,13 @@ def run_case(name, settings, output_dir="output", input_file=None):
     )
     source = ShineSource(name=name, **s)
     case_dir = os.path.join(output_dir, name)
-    source.write_hdf5(os.path.join(case_dir, "source.h5"))
     run_info = {} if input_file is None else {"input_file": str(input_file)}
-    source.write_mcnp_sdef(os.path.join(case_dir, "source.sdef"), settings["direction"], run_info)
+    direction, entry = settings["direction"], settings["entry_position"]
+    source.write_hdf5(os.path.join(case_dir, "source.h5"), run_info)
+    source.write_mcnp_sdef(os.path.join(case_dir, "source.sdef"), direction, run_info, entry)
     source.make_plots(os.path.join(case_dir, "plots"))
-    source.write_text_files(case_dir, {**run_info, "sdef_direction": settings["direction"]})
+    sdef_info = {"sdef_direction": direction, "sdef_entry_position": entry}
+    source.write_text_files(case_dir, {**run_info, **sdef_info})
     logger.info(
         f"{name}: {source.nyield_tot:.3e} n/s in {time.time() - t0:.1f} s "
         f"-> {os.path.join(case_dir, '')}"  # Trailing separator: a directory

@@ -111,6 +111,8 @@ upstream = "stages"
         ),
         ('[cases.a]\npressure = 5.0\ndirection = "z"\n', "direction must be one of"),
         ('[cases.a]\npressure = 5.0\nstopping_power = "pstar"\n', "stopping_power must be one of"),
+        ("[cases.a]\npressure = 5.0\nentry_position = [1.0, 2.0]\n", "entry_position must be"),
+        ('[cases.a]\npressure = 5.0\nentry_position = [1, 2, "z"]\n', "entry_position must be"),
         ('[cases."a/b"]\npressure = 5.0\n', "case names may only use"),
         ("", r"no \[cases.<name>\] tables"),
         ("[case.a]\npressure = 5.0\n", "unknown table"),
@@ -125,6 +127,8 @@ upstream = "stages"
         "stage count",
         "direction",
         "stopping power",
+        "entry position length",
+        "entry position type",
         "case name",
         "no cases",
         "unknown table",
@@ -163,10 +167,25 @@ def test_main_runs_cases(tmp_path):
         assert run["name"] == case
         assert run["input_file"] == str(path)
         assert run["sdef_direction"] == "-z"
+        assert run["sdef_entry_position"] == [0.0, 0.0, 0.0]  # Default
         assert "c input_file = " in (case_dir / "source.sdef").read_text()
         with h5py.File(case_dir / "source.h5") as f:
             assert f.attrs["name"] == case
             assert f.attrs["created"] == run["created"]  # One creation time for every output
+            assert f.attrs["input_file"] == str(path)
+
+
+def test_entry_position_reaches_sdef(tmp_path):
+    text = TWO_CASES.replace(
+        "[cases.mix]\n", '[cases.mix]\nentry_position = [5, 0, 10.5]\ndirection = "+z"\n'
+    )
+    path = write_input(tmp_path, text)
+    assert load_input(path)["mix"]["entry_position"] == [5.0, 0.0, 10.5]
+    out = tmp_path / "out"
+    main([str(path), "-o", str(out), "-j", "1", "-c", "mix"])
+    assert "        pos = 5 0 10.5\n" in (out / "mix" / "source.sdef").read_text()
+    with open(out / "mix" / "summary.toml", "rb") as f:
+        assert tomllib.load(f)["run"]["sdef_entry_position"] == [5.0, 0.0, 10.5]
 
 
 def test_main_selected_case_in_parallel(tmp_path):

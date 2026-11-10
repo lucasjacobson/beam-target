@@ -62,6 +62,9 @@ STOPPING_POWERS = {
     "icru49": "ICRU 49 electronic (protons in H2 gas, same velocity) + SRIM nuclear",
 }
 
+# Version of the HDF5 output layout; increase it whenever the layout changes
+HDF5_FORMAT_VERSION = 1
+
 # Highest allowed beam voltage [kV]. The DROSG Legendre tables in data/ end at 40 MeV; the
 # rows above that are not angular distributions (see data/README.md).
 MAX_VOLTAGE = 40000.0
@@ -105,7 +108,8 @@ REACTIONS = {
 # For "-z" the extent runs along +z and the position-dependent distributions are written
 # in reverse order instead of using AXS = 0 0 -1, which ADVANTG does not handle correctly.
 # As a result, for "-z" POS is the downstream (backstop) end of the source; for every other
-# direction POS is the point where the beam enters the first gas region.
+# direction POS is the point where the beam enters the first gas region. get_mcnp_sdef takes
+# the beam entry point for every direction and sets POS accordingly.
 SDEF_DIRECTIONS = {
     "-x": ("-1 0 0", "-1 0 0", False),
     "+x": ("1 0 0", "1 0 0", False),
@@ -837,53 +841,84 @@ class ShineSource:
             ("stopping_power", self.stopping_power, ""),
         ]
 
-    def write_hdf5(self, path):
+    def write_hdf5(self, path, run_info=None):
         """Write the source on the output mesh to an HDF5 file at path.
 
-        File attributes record how the file was made: name (case name), code_version
-        (see get_code_version) and created (UTC time). The inputs group holds every input
-        parameter (see the class docstring), one dataset each.
+        File attributes: format ("shine-neutron-source") and format_version (HDF5_FORMAT_VERSION,
+        increased whenever the layout changes), name (case name), code_version (see
+        get_code_version), created (UTC time) and any run_info entries (such as the input
+        file). The inputs group holds every input parameter (see get_inputs) and the results
+        group the key results (see get_results), one dataset each with a "units" attribute.
 
-        Result datasets (each has a "units" attribute):
+        Datasets, each with "units" and "description" attributes ("grid" arrays hold values at
+        mesh boundaries, "mids" arrays one value per interval):
 
-        - x_grid, EB_grid, radius_grid, scrape_grid, current_grid: position mesh and the
-          beam energy, radius, scrape fraction and current at each position grid point.
+        - x_grid: position mesh along the beam.
+        - EB_grid, radius_grid, scrape_grid, current_grid: beam energy, edge radius, scraped
+          fraction and current at each position grid point.
+        - EB_mids, radius_mids, scrape_mids, current_mids: the same per position interval, as
+          used in the SDEF card and axial_profile.txt.
         - angle_grid: emission angle mesh, relative to the beam direction.
         - EN_grid_DD, EN_grid_DT: neutron energy mesh for each reaction.
-        - neutrons_DD, neutrons_DT: neutron emission rate in each
-          (position, angle, energy) cell, with shape
-          (len(x_grid) - 1, len(angle_grid) - 1, len(EN_grid_<rxn>) - 1).
+        - neutrons_DD, neutrons_DT: neutron emission rate in each (position, angle, energy)
+          cell, with shape (len(x_grid) - 1, len(angle_grid) - 1, len(EN_grid_<rxn>) - 1); their
+          "dimensions" attribute names the axes.
         """
         _make_parent_dir(path)
         datasets = [
-            ("x_grid", self.x_grid_C, "cm"),
-            ("EB_grid", self.EB_grid_C, "keV"),
-            ("radius_grid", self.radius_grid_C, "cm"),
-            ("scrape_grid", self.scrape_grid_C, "fraction"),
-            ("current_grid", self.current_grid_C, "mA"),
-            ("angle_grid", self.angle_grid_C, "deg"),
-            ("EN_grid_DD", self.EN_grid["DD"], "MeV"),
-            ("EN_grid_DT", self.EN_grid["DT"], "MeV"),
-            ("neutrons_DD", self.neutrons["DD"], "n/s"),
-            ("neutrons_DT", self.neutrons["DT"], "n/s"),
-        ]
+            ("x_grid", self.x_grid_C, "cm", "position mesh along the beam (interval boundaries)"),
+            ("EB_grid", self.EB_grid_C, "keV", "beam energy at each position grid point"),
+            ("radius_grid", self.radius_grid_C, "cm",
+             "beam edge radius at each position grid point, capped at the wall radius"),
+            ("scrape_grid", self.scrape_grid_C, "fraction",
+             "fraction of the beam scraped off at each position grid point"),
+            ("current_grid", self.current_grid_C, "mA", "beam current at each position grid point"),
+            ("EB_mids", (self.EB_grid_C[:-1] + self.EB_grid_C[1:]) / 2, "keV",
+             "beam energy at the centre of each position interval"),
+            ("radius_mids", self.radius_mids_C, "cm",
+             "beam edge radius over each position interval (root mean square), as in the SDEF"),
+            ("scrape_mids", self.scrape_mids_C, "fraction",
+             "fraction of the beam scraped off, averaged over each position interval"),
+            ("current_mids", self.current_mids_C, "mA",
+             "beam current, averaged over each position interval"),
+            ("angle_grid", self.angle_grid_C, "deg", "emission angle mesh, from the beam direction"),
+            ("EN_grid_DD", self.EN_grid["DD"], "MeV", "neutron energy mesh for D(d,n)3He"),
+            ("EN_grid_DT", self.EN_grid["DT"], "MeV", "neutron energy mesh for T(d,n)4He"),
+            ("neutrons_DD", self.neutrons["DD"], "n/s",
+             "D(d,n)3He neutron emission rate in each (position, angle, energy) cell"),
+            ("neutrons_DT", self.neutrons["DT"], "n/s",
+             "T(d,n)4He neutron emission rate in each (position, angle, energy) cell"),
+        ]  # fmt: skip
         with h5py.File(path, "w") as hf:
+            hf.attrs["format"] = "shine-neutron-source"
+            hf.attrs["format_version"] = HDF5_FORMAT_VERSION
             hf.attrs["name"] = self.name
             hf.attrs["code_version"] = get_code_version()
             hf.attrs["created"] = self.created
-            inputs = hf.create_group("inputs")
-            for key, value, units in self.get_inputs():
-                inputs.create_dataset(key, data=value)
-                inputs[key].attrs["units"] = units
-            for key, data, units in datasets:
+            for key, value in (run_info or {}).items():
+                hf.attrs[key] = value
+            for group_name, entries in [
+                ("inputs", self.get_inputs()),
+                ("results", self.get_results()),
+            ]:
+                group = hf.create_group(group_name)
+                for key, value, units in entries:
+                    group.create_dataset(key, data=value)
+                    group[key].attrs["units"] = units
+            for key, data, units, description in datasets:
                 hf.create_dataset(key, data=data, compression="gzip")
                 hf[key].attrs["units"] = units
+                hf[key].attrs["description"] = description
+            for rxn in ("DD", "DT"):
+                hf[f"neutrons_{rxn}"].attrs["dimensions"] = ["position", "angle", "energy"]
 
-    def get_mcnp_sdef(self, direction="-z", run_info=None):
+    def get_mcnp_sdef(self, direction="-z", run_info=None, entry_position=(0.0, 0.0, 0.0)):
         """Return an MCNP SDEF source definition as a string.
 
-        The source is a cylinder along the beam axis, starting at POS = 0 0 0 (see
-        SDEF_DIRECTIONS for the -z case). Distributions:
+        The source is a cylinder along the beam axis, starting where the beam enters the first
+        gas region (entry_position) and extending along the beam direction. POS is set from
+        entry_position for every direction, including -z, whose card runs along +z with POS at
+        the backstop end (see SDEF_DIRECTIONS). Distributions:
 
         - d1: position along the axis (EXT).
         - d2: emission direction relative to VEC (omitted for an isotropic source).
@@ -892,30 +927,64 @@ class ShineSource:
         - d4: neutron energy, dependent on emission angle (via distributions 501, 502,
           ...) unless the source is isotropic.
 
-        The comment block at the top is the case summary (see get_summary), including the
-        direction.
+        The comments at the top are the case summary (see get_summary), including the
+        direction and entry position, then notes on using the source: how to normalize tallies,
+        where the source lies, and that neutron energy does not depend on position.
 
         Args:
             direction: Beam direction, one of SDEF_DIRECTIONS ("-x", "+x", ..., "+z").
             run_info: Optional extra entries for the summary's [run] section.
+            entry_position: Point where the beam enters the first gas region, (x, y, z) [cm].
         """
         if direction not in SDEF_DIRECTIONS:
             raise ValueError(
                 f"direction must be one of {', '.join(SDEF_DIRECTIONS)}, got {direction!r}"
             )
+        entry = np.array(entry_position, dtype=float)
+        if entry.shape != (3,) or not np.all(np.isfinite(entry)):
+            raise ValueError(
+                f"entry_position must be three numbers (x, y, z), got {entry_position!r}"
+            )
         axs, vec, reverse_x = SDEF_DIRECTIONS[direction]
+        length = self.x_grid_C[-1]
+        backstop = entry + length * np.array(vec.split(), dtype=float)
+        pos = backstop if reverse_x else entry  # For -z the card runs along +z from the backstop
+
+        def point(p):
+            return " ".join(f"{v + 0.0:.12g}" for v in p)  # + 0.0 turns -0.0 into 0
+
         divergent = not np.all(self.divergence_list == 0)
         isotropic = self.angle_int_C == 180
         has_DD = self.T_frac < 1
         has_DT = self.T_frac > 0
         dashed_line = "c " + "-" * 78 + "\n"
 
-        s = self._sdef_header(dashed_line, {**(run_info or {}), "sdef_direction": direction})
+        run = {**(run_info or {}), "sdef_direction": direction, "sdef_entry_position": entry}
+        s = self._sdef_header(dashed_line, run)
+
+        # Notes on using the source
+        s += "c\n"
+        s += "c     Using this source:\n"
+        s += "c     - Tallies are per source neutron: multiply them by yield_total\n"
+        s += f"c       ({self.nyield_tot:.6e} n/s) for absolute rates.\n"
+        s += f"c     - The beam enters at ({point(entry)}) cm, travels along {direction} and\n"
+        s += (
+            f"c       reaches the backstop at ({point(backstop)}) cm, {length:.6g} cm further on.\n"
+        )
+        if reverse_x:
+            s += "c       This -z card runs along +z, so POS is the backstop end.\n"
+        if isotropic:
+            s += "c     - Emission is isotropic, with one energy spectrum for all positions.\n"
+        else:
+            s += "c     - Neutron energy depends on emission angle but not on position along the\n"
+            s += "c       beam: the drop in neutron energy as the beam slows is averaged out.\n"
+        s += "c\n"
+        s += dashed_line
 
         # SDEF card
         s += "c\n"
         s += "  sdef  par = n\n"
-        s += "        pos = 0 0 0\n"
+        s += f"        pos = {point(pos)}\n"
         s += f"        axs = {axs}\n"
         s += f"        vec = {vec}\n"
         s += "        ext = d1\n"
@@ -1042,14 +1111,14 @@ class ShineSource:
             sp = np.append(sp, np.append(0, spectrum[ind_min:ind_max]))
         return si, sp
 
-    def write_mcnp_sdef(self, path, direction="-z", run_info=None):
+    def write_mcnp_sdef(self, path, direction="-z", run_info=None, entry_position=(0.0, 0.0, 0.0)):
         """Write the MCNP SDEF card (see get_mcnp_sdef) to a text file at path.
 
         The file is ASCII with Unix (LF) line endings on every platform.
         """
         _make_parent_dir(path)
         with open(path, "w", encoding="ascii", newline="\n") as w:
-            w.write(self.get_mcnp_sdef(direction, run_info))
+            w.write(self.get_mcnp_sdef(direction, run_info, entry_position))
 
     def reactions_present(self):
         """Return the reactions the gas can produce: "DD" if it contains deuterium, "DT" if it
@@ -1097,7 +1166,7 @@ class ShineSource:
         results += [
             ("beam_energy_region_end", self.EB_grid[region_ends], "keV, at the end of each region"),
             ("beam_energy_backstop", self.EB_grid[-1], "keV"),
-            ("beam_radius_backstop", self.radius_grid[-1], "cm, capped at the wall radius"),
+            ("beam_radius_backstop", self.radius_grid[-1], "cm, beam edge; capped at the wall"),
             ("beam_current_backstop", self.current_grid[-1], "mA, after scraping"),
             ("beam_power_entry", self.voltage * self.current / 1000, "kW"),
             ("beam_power_backstop", self.EB_grid[-1] * self.current_grid[-1] / 1000, "kW"),
@@ -1169,7 +1238,7 @@ class ShineSource:
                 "start of position interval [cm]",
                 "end of position interval [cm]",
                 "beam energy at the interval centre [keV]",
-                "beam radius over the interval [cm] (RMS; capped at the wall radius)",
+                "beam edge radius over the interval [cm] (root mean square; capped at the wall)",
                 "fraction of the beam scraped off, averaged over the interval",
                 "DD neutrons [n/s]",
                 "DT neutrons [n/s]",
