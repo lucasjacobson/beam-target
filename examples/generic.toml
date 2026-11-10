@@ -28,6 +28,9 @@ angle_int_C  = 3.0   # deg, output (180 gives an isotropic source)
 EN_int       = 0.01  # MeV, output neutron energy interval
 direction    = "-z"  # MCNP SDEF beam direction: -x, +x, -y, +y, -z or +z
 
+# Physics
+stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
+
 [cases.DD]
 T_frac       = 0.0       # atom fraction of tritium in the gas
 voltage      = 280.0     # kV

@@ -15,7 +15,7 @@ import re
 import shutil
 import tomllib
 
-from .source import SDEF_DIRECTIONS, ShineSource
+from .source import SDEF_DIRECTIONS, STOPPING_POWERS, ShineSource
 
 # Case settings: name -> required type. Every case needs all of them, either directly or
 # from [defaults].
@@ -40,6 +40,7 @@ CASE_SETTINGS = {
 OPTIONAL_CASE_SETTINGS = {
     "direction": "-z",  # MCNP SDEF beam direction, see SDEF_DIRECTIONS
     "upstream": None,  # Name of an [upstream.<name>] table to put before the target chamber
+    "stopping_power": "srim",  # Stopping-power set, see STOPPING_POWERS
 }
 
 # Upstream stage settings: name -> (type, default). None means required. num_x_ints,
@@ -153,6 +154,11 @@ def load_input(path):
                 f"{where}: direction must be one of {', '.join(SDEF_DIRECTIONS)}, "
                 f"got {s['direction']!r}"
             )
+        if s["stopping_power"] not in STOPPING_POWERS:
+            raise InputError(
+                f"{where}: stopping_power must be one of {', '.join(STOPPING_POWERS)}, "
+                f"got {s['stopping_power']!r}"
+            )
 
         # Gas regions: upstream stages (if any), then the target chamber
         up = {key: [] for key in UPSTREAM_SETTINGS}
@@ -177,6 +183,7 @@ def load_input(path):
                 "angle_int": s["angle_int"],
                 "angle_int_C": s["angle_int_C"],
                 "EN_int": s["EN_int"],
+                "stopping_power": s["stopping_power"],
             },
             "direction": s["direction"],
         }

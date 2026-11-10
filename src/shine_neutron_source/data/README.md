@@ -1,14 +1,17 @@
 # Nuclear data
 
 The files in this directory are read by `ShineSource` (see `read_drosg_koe`,
-`read_cross_sections` and `read_stopping_power` in `source.py`). They are kept exactly as
-distributed, including their Windows (CRLF) line endings (see `.gitattributes`).
+`read_srim_stopping`, `read_pstar`, `read_cross_sections` and `read_stopping_power` in
+`source.py`). The DROSG and SRIM files are kept exactly as distributed, including their Windows
+(CRLF) line endings (see `.gitattributes`).
 
 | File | Contents | Source |
 |---|---|---|
 | `d2hags.koe` | D(d,n)³He cross sections | DROSG-2000 v12.01 |
 | `d3hags.koe` | T(d,n)⁴He cross sections | DROSG-2000 v12.01 |
-| `SP_DT.txt` | Stopping power of deuterons in tritium gas | SRIM-2012.01 |
+| `srim_deuteron_in_D_gas.txt` | Stopping power of deuterons in deuterium gas | SRIM-2012.01 |
+| `srim_deuteron_in_T_gas.txt` | Stopping power of deuterons in tritium gas | SRIM-2012.01 |
+| `pstar_hydrogen.txt` | Stopping power of protons in hydrogen gas | ICRU Report 49 (NIST PSTAR) |
 
 ## Cross sections: `d2hags.koe`, `d3hags.koe`
 
@@ -57,17 +60,66 @@ documentation states there is no angular-distribution information outside the Le
 table), so the code stops reading at EMAXL and limits the beam voltage to 40,000 kV
 (`MAX_VOLTAGE`).
 
-## Stopping power: `SP_DT.txt`
+## Stopping powers
+
+Two stopping-power sets are available, chosen with the `stopping_power` setting (in an input
+file, or the `stopping_power` argument of `ShineSource`):
+
+| `stopping_power` | Electronic stopping | Nuclear stopping |
+|---|---|---|
+| `"srim"` (default) | SRIM-2012.01 | SRIM-2012.01 |
+| `"icru49"` | ICRU Report 49 (`pstar_hydrogen.txt`) | SRIM-2012.01 |
+
+Both are used as stopping per gas atom, multiplied by the atom density. For a D/T mixture the
+stopping per atom is combined per atom (Bragg additivity): (1 − T_frac) × the value in
+deuterium + T_frac × the value in tritium. Electronic stopping, which dominates, is the same
+for D and T (one electron each). Nuclear stopping per atom is about 45 % higher in deuterium
+than in tritium, but it is below 1.5 % of the total above 10 keV and below 0.1 % above
+100 keV: compared with using the tritium table for all mixtures, it lowers the DD yield of the
+generic DD case by 0.03 %.
+
+### SRIM: `srim_deuteron_in_D_gas.txt`, `srim_deuteron_in_T_gas.txt`
 
 Unmodified output of SRIM (<http://www.srim.org/>), version SRIM-2012.01 with the SRIM-2006
-calculation method, generated 6 June 2024: stopping power of deuterons (mass 2.013553 amu) in a
-pure tritium gas target (2.5526 × 10⁻⁶ g/cm³, Bragg correction 0%), from 1.1 eV to 100 MeV. The
-code uses the electronic and nuclear stopping columns, in MeV/(mg/cm²).
+calculation method, generated 6 June 2024 (SRIM's own file names `SRIM_d_Gas_D.txt` and
+`SRIM_d_Gas_T.txt`): stopping power of deuterons (mass 2.013553 amu) in pure deuterium and pure
+tritium gas targets (Bragg correction 0%), from 1.1 eV to 100 MeV. The code uses the electronic
+and nuclear stopping columns, in MeV/(mg/cm²), and converts them to stopping per atom with the
+exact mass of each target isotope, identified from the header's density and atom density. It
+checks that each file has the expected target isotope, that both use the same energy grid and
+that their electronic stopping per atom agrees within 1 % (it agrees within 0.06 %).
 
-The table is used for any D/T mixture: electronic stopping per atom is the same for D and T,
-so the code multiplies the per-mass stopping power by the density the gas would have if every
-atom were tritium. This neglects the small isotope dependence of nuclear stopping. See the
-note on `rho_T_equiv_list` in `source.py`.
+Per-atom mixing was checked against SRIM runs for D/T mixtures from 5 % to 95 % tritium, which
+SRIM models as a single hydrogen target with the average mass: total stopping agrees within
+0.35 % from 2 to 400 keV. The nuclear parts differ by up to 4 %, because nuclear stopping is
+not linear in the target mass; per-atom mixing describes a real mixture of D and T atoms.
+
+### ICRU Report 49: `pstar_hydrogen.txt`
+
+Stopping powers of protons in hydrogen gas from ICRU Report 49, as tabulated by NIST PSTAR
+(<https://physics.nist.gov/PhysRefData/Star/Text/PSTAR.html>, material 001, retrieved
+9 November 2026), with the values copied exactly as printed (see the file header). The code
+uses the electronic stopping at the proton energy with the same velocity as the deuteron,
+E_p = E_d × m_p/m_d ≈ E_d/2, converted to stopping per atom with the atomic weight ICRU 49 uses
+(1.00794). The ICRU 49 nuclear stopping is for protons, so the nuclear part comes from SRIM,
+mixed per atom as above. The
+table starts at a proton energy of 1 keV, so it covers deuteron energies from 2 keV; below that
+the beam is treated as stopped.
+
+### How the two compare
+
+Electronic stopping per atom, deuterons in hydrogen gas:
+
+| Deuteron energy | SRIM / ICRU 49 |
+|---|---|
+| 2–10 keV | 0.99–1.01 |
+| 20–100 keV | 0.97–1.00 |
+| 150–400 keV | 0.965–0.985 |
+
+SRIM is 2–3.5 % lower than ICRU 49 where the beam enters the target. For the generic cases in
+`examples/generic.toml`, `"icru49"` gives neutron yields 1.4 % (DT) to 2.2 % (DD) lower than
+`"srim"`, and a beam energy at the backstop of about 7.6–7.7 keV instead of 9.9–10 keV. The choice of
+stopping powers is therefore a systematic uncertainty of about 2 % on the yields.
 
 ## References
 
@@ -78,3 +130,8 @@ note on `rho_T_equiv_list` in `source.py`.
   <https://www-nds.iaea.org/public/libraries/drosg2000/iaeands-v12.01.pdf>.)
 - J. F. Ziegler, M. D. Ziegler and J. P. Biersack, "SRIM – The stopping and range of ions in
   matter (2010)", Nucl. Instrum. Methods Phys. Res. B 268 (2010) 1818–1823.
+- ICRU Report 49, *Stopping Powers and Ranges for Protons and Alpha Particles*, International
+  Commission on Radiation Units and Measurements (1993).
+- M. J. Berger, J. S. Coursey, M. A. Zucker and J. Chang, *ESTAR, PSTAR, and ASTAR: Computer
+  Programs for Calculating Stopping-Power and Range Tables for Electrons, Protons, and Helium
+  Ions*, NIST Standard Reference Database 124.

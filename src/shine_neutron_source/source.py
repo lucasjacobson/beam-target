@@ -4,7 +4,7 @@ A deuteron beam passes through one or more gas regions containing a deuterium/tr
 mixture. For each region the user gives a pressure, temperature, length and beam
 divergence. The calculation:
 
-1. Slows the beam down along its path using SRIM stopping powers.
+1. Slows the beam down along its path using SRIM or ICRU 49 stopping powers.
 2. Grows the beam radius with its divergence and removes the fraction of the beam that
    strikes the target wall (beam scraping).
 3. Evaluates the D(d,n)3He and T(d,n)4He double-differential cross sections at each
@@ -52,6 +52,14 @@ DEFAULT_DATA_DIR = os.path.join(CODE_DIR, "data")
 # DROSG-2000 cross-section file for each reaction (in data/)
 DROSG_FILES = {"DD": "d2hags.koe", "DT": "d3hags.koe"}
 
+# Stopping-power data files (in data/) and the available stopping-power sets
+SRIM_FILES = {"D": "srim_deuteron_in_D_gas.txt", "T": "srim_deuteron_in_T_gas.txt"}
+PSTAR_FILE = "pstar_hydrogen.txt"
+STOPPING_POWERS = {
+    "srim": "SRIM-2012.01, deuterons in hydrogen-isotope gas",
+    "icru49": "ICRU 49 electronic (protons in H2 gas, same velocity) + SRIM nuclear",
+}
+
 # Highest allowed beam voltage [kV]. The DROSG Legendre tables in data/ end at 40 MeV; the
 # rows above that are not angular distributions (see data/README.md).
 MAX_VOLTAGE = 40000.0
@@ -63,10 +71,13 @@ REPO_DIR = os.path.normcase(os.path.dirname(os.path.dirname(CODE_DIR)))
 NA = 6.02214076e23  # Avogadro constant [1/mol]
 ee = 1.602176634e-19  # Elementary charge [C]
 kB = 1.380649e-23  # Boltzmann constant [J/K]
-mD = 2.0141017778  # Mass of deuterium atom [amu]
-mT = 3.0160492777  # Mass of tritium atom [amu]
+A_H_ICRU49 = 1.00794  # Atomic weight of hydrogen used by ICRU Report 49 [g/mol]
+
+# Atomic masses of the hydrogen isotopes [amu]
+HYDROGEN_ATOM_MASSES = {"H": 1.00782503207, "D": 2.0141017778, "T": 3.0160492777}
 
 # Nuclear rest-mass energies [MeV]
+M_P = 938.27208816  # Proton (H-1)
 M_N = 939.56542194  # Neutron (n-1)
 M_D = 1875.612945  # Deuteron (H-2)
 M_H = 2808.39161112  # Helion (He-3)
@@ -175,6 +186,56 @@ def read_drosg_koe(fname):
     return data[:, 0], data[:, 1], data[:, 2:]
 
 
+def read_srim_stopping(fname):
+    """Read a SRIM stopping-power table (SRIM's "Stopping Units = MeV/(mg/cm2)" output).
+
+    The per-mass values are converted to stopping per target atom, so the result does not
+    depend on which hydrogen isotope the SRIM target was. The isotope is identified from the
+    header line "Density = <rho> g/cm3 = <n> atoms/cm3" and its exact atomic mass is used (the
+    header values are rounded to 5 significant figures, too coarse to use directly).
+
+    Returns (E [keV], S_elec, S_nuc [keV cm^2 per atom], isotope) where isotope is "H", "D"
+    or "T". Raises ValueError if the target is not a hydrogen isotope.
+    """
+    with open(fname, "r", encoding="ascii") as f:
+        lines = f.read().splitlines()
+    m = re.search(r"Density\s*=\s*(\S+)\s*g/cm3\s*=\s*(\S+)\s*atoms/cm3", "\n".join(lines[:20]))
+    if not m:
+        raise ValueError(f"{fname}: no 'Density = ... g/cm3 = ... atoms/cm3' header line")
+    header_amu = float(m.group(1)) / float(m.group(2)) * NA  # Target atom mass [amu]
+    isotope = min(HYDROGEN_ATOM_MASSES, key=lambda k: abs(HYDROGEN_ATOM_MASSES[k] - header_amu))
+    if abs(HYDROGEN_ATOM_MASSES[isotope] / header_amu - 1) > 1e-3:
+        raise ValueError(
+            f"{fname}: target atom mass {header_amu:.4f} amu is not a hydrogen isotope"
+        )
+    atom_mass = HYDROGEN_ATOM_MASSES[isotope] / NA  # [g]
+
+    # The data table sits between the first two lines that start with "-"
+    unit_conv = {"eV": 1e-3, "keV": 1.0, "MeV": 1e3}  # To keV
+    rows = []
+    in_data = False
+    for line in lines:
+        if line.startswith("-"):
+            in_data = not in_data
+            continue
+        if in_data:
+            tokens = line.split()
+            E = float(f"{float(tokens[0]) * unit_conv[tokens[1]]:.5g}")  # [keV], 5 sig. figs
+            rows.append([E, float(tokens[2]), float(tokens[3])])
+    data = np.array(rows)
+    to_per_atom = 1e6 * atom_mass  # MeV/(mg/cm^2) -> keV cm^2/g -> keV cm^2 per atom
+    return data[:, 0], data[:, 1] * to_per_atom, data[:, 2] * to_per_atom, isotope
+
+
+def read_pstar(fname):
+    """Read a PSTAR table (see data/pstar_hydrogen.txt; lines starting with # are comments).
+
+    Returns (E [MeV], S_elec, S_nuc [MeV cm^2/g]) for protons as arrays.
+    """
+    data = np.loadtxt(fname, comments="#", ndmin=2)
+    return data[:, 0], data[:, 1], data[:, 2]
+
+
 def get_package_version():
     """Return the installed package version, or "unknown" if the package is not installed."""
     try:
@@ -267,9 +328,11 @@ class ShineSource:
         angle_int_C: Emission angle interval of the output mesh [deg]. Must divide 180
             and be a multiple of angle_int. 180 gives an isotropic source.
         EN_int: Neutron energy interval of the output mesh [MeV].
-        data_dir: Directory holding SP_DT.txt, d2hags.koe and d3hags.koe. Defaults to the
+        data_dir: Directory holding the data files (see data/README.md). Defaults to the
             data directory next to this file.
         verbose: Print progress and summary values.
+        stopping_power: Stopping-power set, one of STOPPING_POWERS: "srim" (default) or
+            "icru49". See read_stopping_power.
     """
 
     def __init__(
@@ -291,6 +354,7 @@ class ShineSource:
         EN_int,
         data_dir=None,
         verbose=False,
+        stopping_power="srim",
     ):
         t0 = time.time()
 
@@ -312,6 +376,7 @@ class ShineSource:
         self.EN_int = float(EN_int)
         self.data_dir = DEFAULT_DATA_DIR if data_dir is None else str(data_dir)
         self.verbose = bool(verbose)
+        self.stopping_power = str(stopping_power)
 
         self.num_regions = len(self.pressure_list)
         self.check_input()
@@ -321,22 +386,13 @@ class ShineSource:
 
         self.setup_meshes()
 
-        # Gas properties in each region
+        # Gas atom density in each region [1/cm^3]
         self.adens_list = get_atom_density(self.pressure_list, self.temperature_list)
-
-        # Mass density [g/cm^3] the gas would have if every atom were tritium. The SRIM
-        # table is for deuterons in pure tritium, so multiplying its stopping power (per
-        # unit mass) by this density gives the energy loss per unit length. Electronic
-        # stopping per atom is the same for D and T (one electron each), so this holds for
-        # any D/T mix. It is equivalent to scaling the stopping power by m_T / m_D for
-        # deuterium, and neglects the small isotope dependence of nuclear stopping.
-        self.rho_T_equiv_list = self.adens_list * mT / NA
 
         # Region properties on the internal and output position meshes
         self.divergence_vals = np.repeat(self.divergence_list, self.num_x_ints_list)
         self.adens_vals = np.repeat(self.adens_list, self.num_x_ints_list)
         self.adens_vals_C = np.repeat(self.adens_list, self.num_x_ints_list_C)
-        self.rho_T_equiv_vals = np.repeat(self.rho_T_equiv_list, self.num_x_ints_list)
 
         self.read_stopping_power()
         self.read_cross_sections()
@@ -385,6 +441,11 @@ class ShineSource:
         require(self.angle_int > 0, "angle_int must be positive")
         require(self.angle_int_C > 0, "angle_int_C must be positive")
         require(self.EN_int > 0, "EN_int must be positive")
+        require(
+            self.stopping_power in STOPPING_POWERS,
+            f"stopping_power must be one of {', '.join(STOPPING_POWERS)}, "
+            f"got {self.stopping_power!r}",
+        )
         require(_is_multiple(180, self.angle_int_C), "angle_int_C must divide 180")
         require(
             _is_multiple(self.angle_int_C, self.angle_int),
@@ -434,33 +495,51 @@ class ShineSource:
         self.inds_C = np.append(0, np.cumsum(self.x_C_ratio_vals))
 
     def read_stopping_power(self):
-        """Read SRIM stopping powers for deuterons in tritium gas from SP_DT.txt.
+        """Read the stopping power of deuterons in the gas, per atom.
 
-        Stores self.sp_data["DT"] with "E" [keV] and "dEdx" (electronic + nuclear)
-        [keV-cm^2/g]. See the note on rho_T_equiv_list for how it is used for D/T mixes.
+        Stores self.sp_data with "E" (deuteron energy [keV]) and "eps" (electronic + nuclear
+        stopping per gas atom [keV cm^2]); the energy loss per unit length is eps times the
+        atom density. The D/T mixture is handled per atom (Bragg additivity): the stopping is
+        (1 - T_frac) times that in deuterium plus T_frac times that in tritium.
+
+        - "srim": electronic and nuclear stopping from the SRIM tables for deuterons in D and
+          T gas (SRIM_FILES).
+        - "icru49": electronic stopping from ICRU Report 49 for protons in hydrogen gas
+          (PSTAR_FILE), taken at the proton energy with the same velocity
+          (E_p = E_d * M_P / M_D), plus the mixed SRIM nuclear stopping, because the ICRU 49
+          nuclear stopping is for protons. Electronic stopping does not depend on the
+          hydrogen isotope. The table covers deuteron energies from about 2 keV upwards;
+          below that the beam is treated as stopped.
+
+        Raises ValueError if a SRIM file's target is not the expected isotope, or if the two
+        SRIM files have different energy grids or electronic stopping per atom that differs
+        by more than 1% (it should be the same for D and T).
         """
-        unit_conv = {"eV": 1e-3, "keV": 1.0, "MeV": 1e3}  # To keV
-        fname = os.path.join(self.data_dir, "SP_DT.txt")
-        with open(fname, "r") as r:
-            lines = r.readlines()
+        tables = {}
+        for isotope, fname in SRIM_FILES.items():
+            path = os.path.join(self.data_dir, fname)
+            *table, found = read_srim_stopping(path)
+            if found != isotope:
+                raise ValueError(f"{path}: SRIM target is {found}, expected {isotope}")
+            tables[isotope] = table
+        (E, S_elec_D, S_nuc_D), (E_T, S_elec_T, S_nuc_T) = tables["D"], tables["T"]
+        if not np.array_equal(E, E_T):
+            raise ValueError("The SRIM tables for D and T have different energy grids")
+        if np.max(np.abs(S_elec_D / S_elec_T - 1)) > 0.01:
+            raise ValueError("The SRIM tables for D and T disagree on electronic stopping")
+        f_D, f_T = 1 - self.T_frac, self.T_frac
+        S_elec = f_D * S_elec_D + f_T * S_elec_T
+        S_nuc = f_D * S_nuc_D + f_T * S_nuc_T
 
-        # The data table sits between the first two lines that start with "-"
-        E_vals = []
-        dEdx_vals = []
-        in_data = False
-        for line in lines:
-            if line[0] == "-":
-                in_data = not in_data
-                continue
-            if not in_data:
-                continue
-            tokens = line.split()
-            E = float(f"{float(tokens[0]) * unit_conv[tokens[1]]:.5g}")  # [keV], 5 sig. figs
-            dEdx_e = float(tokens[2]) * 1e6  # Electronic, MeV/(mg/cm^2) -> keV-cm^2/g
-            dEdx_n = float(tokens[3]) * 1e6  # Nuclear, MeV/(mg/cm^2) -> keV-cm^2/g
-            E_vals.append(E)
-            dEdx_vals.append(dEdx_e + dEdx_n)
-        self.sp_data = {"DT": {"E": np.array(E_vals), "dEdx": np.array(dEdx_vals)}}
+        if self.stopping_power == "icru49":
+            E_p, P_elec, _ = read_pstar(os.path.join(self.data_dir, PSTAR_FILE))
+            E_d = E_p * 1000 * M_D / M_P  # Deuteron energy at the same velocity [keV]
+            P_elec = P_elec * 1000 * A_H_ICRU49 / NA  # MeV cm^2/g -> keV cm^2 per atom
+            keep = (E >= E_d[0]) & (E <= E_d[-1])
+            # Log-log interpolation of the ICRU 49 values onto the SRIM energy grid
+            S_elec = np.exp(np.interp(np.log(E[keep]), np.log(E_d), np.log(P_elec)))
+            E, S_nuc = E[keep], S_nuc[keep]
+        self.sp_data = {"E": E, "eps": S_elec + S_nuc}
 
     def read_cross_sections(self):
         """Read the DD and DT cross sections from the DROSG-2000 files (see read_drosg_koe).
@@ -495,14 +574,10 @@ class ShineSource:
             E_start = self.EB_grid[i]
             E_avg = self.EB_grid[i]
             for _ in range(5):
-                dEdx = np.interp(
-                    E_avg,
-                    self.sp_data["DT"]["E"],
-                    self.sp_data["DT"]["dEdx"],
-                    left=np.nan,
-                    right=np.nan,
-                )  # [keV-cm^2/g]
-                dE = dEdx * self.rho_T_equiv_vals[i] * self.dx_vals[i]
+                eps = np.interp(
+                    E_avg, self.sp_data["E"], self.sp_data["eps"], left=np.nan, right=np.nan
+                )  # Stopping per atom [keV cm^2]
+                dE = eps * self.adens_vals[i] * self.dx_vals[i]
                 E_end = E_start - dE
                 E_avg = (E_start + E_end) / 2
             if np.isnan(E_end) or E_end < 0:
@@ -699,6 +774,7 @@ class ShineSource:
             ("angle_int", self.angle_int, "deg"),
             ("angle_int_C", self.angle_int_C, "deg"),
             ("EN_int", self.EN_int, "MeV"),
+            ("stopping_power", self.stopping_power, ""),
         ]
 
     def write_hdf5(self, path):
@@ -885,6 +961,7 @@ class ShineSource:
         s += f"c     Beam start_radius  : {self.start_radius:.12g} cm\n"
         s += f"c     Beam max_radius    : {self.max_radius:.12g} cm\n"
         s += f"c     Beam divergence    : {self.divergence_list[-1]:.12g} mrad\n"
+        s += f"c     Stopping power     : {self.stopping_power}\n"
         s += "c\n"
         s += dashed_line
         s += "c\n"
