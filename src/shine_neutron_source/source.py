@@ -118,6 +118,9 @@ REACTIONS = {
     "DT": (M_H2, M_H3, M_N1, M_HE4, Q_DT),  # T(d,n)4He
 }
 
+# Target isotope of each reaction: the beam deuteron reacts with this atom
+REACTION_TARGETS = {"DD": "D", "DT": "T"}
+
 # MCNP source direction -> (AXS vector, VEC vector, reverse the position distributions).
 # For "-z" the extent runs along +z and the position-dependent distributions are written
 # in reverse order instead of using AXS = 0 0 -1, which ADVANTG does not handle correctly.
@@ -558,13 +561,7 @@ class ShineSource:
             self.solve_target_chamber()
 
         self.setup_meshes()
-
-        # Gas atom density in each region [1/cm^3]
-        self.atom_density_per_region = get_atom_density(self.pressure, self.temperature)
-
-        # Region properties on the internal and output position meshes
-        self.divergence_mids = np.repeat(self.divergence, self.num_x_bins)
-        self.atom_density_mids = np.repeat(self.atom_density_per_region, self.num_x_bins)
+        self.setup_regions()
 
         self.calculate_beam_energy()
         self.calculate_scraping()
@@ -673,29 +670,25 @@ class ShineSource:
         enters the target chamber, or if that energy cannot be reached because it is below
         the bottom of the stopping-power table (where the beam is treated as stopped).
         """
-        E_table, eps_table = self.stopping_data["E"], self.stopping_data["eps"]
         target = self.beam_energy_backstop
-        n_up = self.num_x_bins[:-1]
-        E_in = slow_down(
-            self.voltage,
-            E_table,
-            eps_table,
-            np.repeat(get_atom_density(self.pressure[:-1], self.temperature[:-1]), n_up),
-            np.repeat(self.length[:-1] / n_up, n_up),
-        )[-1]
+        last = self.num_regions - 1
+        atom_density = get_atom_density(self.pressure, self.temperature)  # NaN for an unknown
+        E_in = self._slow_down_regions(self.voltage, range(last), atom_density, self.length)[-1]
         if not E_in > target:
             raise ValueError(
                 f"{self.name}: the beam enters the target chamber with {E_in:g} keV, not above "
                 f"beam_energy_backstop ({target:g} keV)"
             )
 
-        n = self.num_x_bins[-1]
-
         def backstop_energy(value):
-            pressure = value if self.calculated == "pressure" else self.pressure[-1]
-            length = value if self.calculated == "length" else self.length[-1]
-            density = np.full(n, get_atom_density(pressure, self.temperature[-1]))
-            return slow_down(E_in, E_table, eps_table, density, np.full(n, length / n))[-1]
+            pressure = self.pressure.copy()
+            length = self.length.copy()
+            if self.calculated == "pressure":
+                pressure[last] = value
+            else:
+                length[last] = value
+            density = get_atom_density(pressure, self.temperature)
+            return self._slow_down_regions(E_in, [last], density, length)[-1]
 
         # Bracket the value (torr or cm), then bisect
         lo, hi = 0.0, 1.0
@@ -711,7 +704,7 @@ class ShineSource:
         if abs(backstop_energy(value) - target) > 1e-6 * target:
             raise ValueError(
                 f"{self.name}: cannot reach beam_energy_backstop = {target:g} keV: below about "
-                f"{E_table[0]:g} keV the beam is treated as stopped"
+                f"{self.stopping_per_region[last][0][0]:g} keV the beam is treated as stopped"
             )
 
         if self.calculated == "pressure":
@@ -723,6 +716,52 @@ class ShineSource:
             f"{self.name}: target chamber {self.calculated} = {value:.6g} {units} for a beam "
             f"energy of {target:g} keV at the backstop"
         )
+
+    def setup_regions(self):
+        """Set the target properties of each region and spread them over the position mesh.
+
+        Every region is described by its total atom density [1/cm^3], the atom fractions of
+        deuterium and tritium (the reaction targets) and the stopping power per atom averaged
+        over its composition (see read_stopping_power), so the energy loss per unit length is
+        the atom density times that stopping. Each region is D/T gas, with atom density from
+        its pressure and temperature (get_atom_density) and T_frac of its atoms tritium.
+
+        Sets self.atom_density_per_region, self.atom_fractions_per_region (isotope -> array),
+        self.target_density_per_region and self.target_density_mids (reaction -> density of
+        its target atoms [1/cm^3], per region and per internal bin) and self.divergence_mids.
+        """
+        self.atom_density_per_region = get_atom_density(self.pressure, self.temperature)
+        self.atom_fractions_per_region = {
+            "D": np.full(self.num_regions, 1 - self.T_frac),
+            "T": np.full(self.num_regions, self.T_frac),
+        }
+        self.target_density_per_region = {
+            rxn: self.atom_density_per_region * self.atom_fractions_per_region[isotope]
+            for rxn, isotope in REACTION_TARGETS.items()
+        }
+        self.target_density_mids = {
+            rxn: np.repeat(density, self.num_x_bins)
+            for rxn, density in self.target_density_per_region.items()
+        }
+        self.divergence_mids = np.repeat(self.divergence, self.num_x_bins)
+
+    def _slow_down_regions(self, E0, regions, atom_density, length):
+        """Return the beam energy [keV] at each internal grid point through the given regions
+        (indices into the region arrays), starting at E0 [keV], for the given atom density
+        [1/cm^3] and length [cm] of each of them. See slow_down."""
+        grid = [np.array([E0])]
+        for r in regions:
+            n = self.num_x_bins[r]
+            E_table, eps_table = self.stopping_per_region[r]
+            region_grid = slow_down(
+                grid[-1][-1],
+                E_table,
+                eps_table,
+                np.full(n, atom_density[r]),
+                np.full(n, length[r] / n),
+            )
+            grid.append(region_grid[1:])
+        return np.concatenate(grid)
 
     def setup_meshes(self):
         """Build the internal and output meshes in position and emission angle."""
@@ -766,8 +805,9 @@ class ShineSource:
         """Read the stopping power of deuterons in the gas, per atom.
 
         Stores self.stopping_data with "E" (deuteron energy [keV]) and "eps" (electronic +
-        nuclear stopping per gas atom [keV cm^2]); the energy loss per unit length is eps times
-        the atom density. The D/T mixture is handled per atom (Bragg additivity): the stopping is
+        nuclear stopping per gas atom [keV cm^2]), and self.stopping_per_region, an (E, eps)
+        pair for each region (all the same gas for now); the energy loss per unit length is eps
+        times the atom density. The D/T mixture is handled per atom (Bragg additivity): the stopping is
         (1 - T_frac) times that in deuterium plus T_frac times that in tritium.
 
         - "srim": electronic and nuclear stopping from the SRIM tables for deuterons in D and
@@ -808,6 +848,7 @@ class ShineSource:
             S_elec = np.exp(np.interp(np.log(E[keep]), np.log(E_d), np.log(P_elec)))
             E, S_nuc = E[keep], S_nuc[keep]
         self.stopping_data = {"E": E, "eps": S_elec + S_nuc}
+        self.stopping_per_region = [(E, S_elec + S_nuc)] * self.num_regions
 
     def read_cross_sections(self):
         """Read the DD and DT cross sections from the DROSG-2000 files (see read_drosg_koe).
@@ -828,17 +869,13 @@ class ShineSource:
             }
 
     def calculate_beam_energy(self):
-        """Slow the beam down through the gas.
+        """Slow the beam down through the regions.
 
         Sets self.beam_energy_grid, the beam energy at each internal grid point [keV], and its
         midpoint and output-mesh versions (see slow_down).
         """
-        self.beam_energy_grid = slow_down(
-            self.voltage,
-            self.stopping_data["E"],
-            self.stopping_data["eps"],
-            self.atom_density_mids,
-            self.dx,
+        self.beam_energy_grid = self._slow_down_regions(
+            self.voltage, range(self.num_regions), self.atom_density_per_region, self.length
         )
         self.beam_energy_mids = (self.beam_energy_grid[:-1] + self.beam_energy_grid[1:]) / 2
         self.beam_energy_grid_out = np.array(self.beam_energy_grid[self.out_grid_inds])
@@ -890,14 +927,13 @@ class ShineSource:
         """
         deuterons_per_mA = 1e-3 / ee  # [1/s]
         yield_per_mA = 0.0
-        for rxn, frac in [("DD", 1 - self.T_frac), ("DT", self.T_frac)]:
+        for rxn in REACTIONS:
             per_bin = np.sum(self.ddxs[rxn] * self.solid_angles[None, :], axis=1)
             yield_per_mA += np.sum(
                 per_bin
-                * self.atom_density_mids
+                * self.target_density_mids[rxn]
                 * 1e-24
                 * self.dx
-                * frac
                 * deuterons_per_mA
                 * (1 - self.scrape_mids)
             )
@@ -1007,7 +1043,7 @@ class ShineSource:
         self.yields = {}
         self.neutron_scrape_fractions = {}
 
-        for rxn, frac in [("DD", 1 - self.T_frac), ("DT", self.T_frac)]:
+        for rxn in REACTIONS:
             # Neutron energy mesh: spans this reaction's energies, aligned to energy_bin_width
             energy_min = (
                 np.floor(np.min(self.neutron_energy[rxn]) / self.energy_bin_width)
@@ -1047,7 +1083,7 @@ class ShineSource:
 
             # Neutron rate in each internal cell [n/s], with and without scraping
             areas = np.tile(self.solid_angles, self.num_x_bins_total)
-            factor = (self.atom_density_mids * 1e-24 * self.dx * frac * self.deuteron_rate)[:, None]
+            factor = (self.target_density_mids[rxn] * 1e-24 * self.dx * self.deuteron_rate)[:, None]
             vals_scr = (self.ddxs[rxn] * factor * (1 - self.scrape_mids[:, None])).ravel() * areas
             vals_tot = (self.ddxs[rxn] * factor).ravel() * areas
 
@@ -1233,8 +1269,8 @@ class ShineSource:
 
         divergent = not np.all(self.divergence == 0)
         isotropic = self.angle_step_out == 180
-        has_DD = self.T_frac < 1
-        has_DT = self.T_frac > 0
+        has_DD = "DD" in self.reactions_present()
+        has_DT = "DT" in self.reactions_present()
         dashed_line = "c " + "-" * 78 + "\n"
 
         run = {**(run_info or {}), "sdef_direction": direction, "sdef_entry_position": entry}
@@ -1406,9 +1442,9 @@ class ShineSource:
             w.write(self.get_mcnp_sdef(direction, run_info, entry_position))
 
     def reactions_present(self):
-        """Return the reactions the gas can produce: "DD" if it contains deuterium, "DT" if it
-        contains tritium."""
-        return [rxn for rxn, frac in (("DD", 1 - self.T_frac), ("DT", self.T_frac)) if frac > 0]
+        """Return the reactions the target can produce: "DD" if any region contains deuterium,
+        "DT" if any contains tritium."""
+        return [rxn for rxn in REACTIONS if np.any(self.target_density_per_region[rxn] > 0)]
 
     def neutrons_by_angle_and_energy(self):
         """Return the neutron source integrated over position, on one energy mesh for both
