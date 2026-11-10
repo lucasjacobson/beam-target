@@ -1,21 +1,20 @@
 #!/usr/bin/python3
 
 import os
-import h5py
-import time
 import textwrap
+import time
+
+import h5py
+import matplotlib
 import numpy as np
-from itertools import product
 from scipy.special import legendre
 
-import matplotlib
 matplotlib.use('Agg')
 from matplotlib import pyplot as plt
-from matplotlib import colors as mcolors
 from matplotlib import ticker as mticker
 
-try: profile
-except:
+try: profile  # noqa: F821 (injected by kernprof when line profiling)
+except NameError:
     def profile(func): return func
 
 # Physical constants
@@ -215,9 +214,6 @@ class SHINE_Source():
             fname = os.path.join(self.data_dir, 'xs_%s.csv' % (rxn))
             with open(fname, 'r') as r: lines = r.readlines()
             self.xs_data[rxn] = {'E': [], 'total': [], 'coeffs': []}
-            E_vals = []
-            totals = []
-            coeffs = []
             for line in lines[1:]:
                 tokens = line.split(',')
                 self.xs_data[rxn]['E'     ].append(float(tokens[0]) * 1000)  # keV

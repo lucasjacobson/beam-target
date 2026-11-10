@@ -5,9 +5,11 @@
 import argparse
 import multiprocessing as mp
 from functools import partial
+
 import numpy as np
 
 from shine_neutron_source import SHINE_Source
+
 
 class Case():
     def __init__(self, T_frac, voltage, current, pressure, temperature, length,
@@ -92,7 +94,8 @@ def main():
 
     if args.jobs > 1:
         worker2 = partial(worker1, verbose=args.verbose)
-        with mp.Pool(processes=args.jobs) as pool: sources = dict(pool.map(worker2, cases.items()))
-    else: sources = {name: run_case(name, case, args.verbose) for name, case in cases.items()}
+        with mp.Pool(processes=args.jobs) as pool: pool.map(worker2, cases.items())
+    else:
+        for name, case in cases.items(): run_case(name, case, args.verbose)
 
 if __name__ == '__main__': main()

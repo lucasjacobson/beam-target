@@ -1,0 +1,6 @@
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# pycodestyle errors/warnings (PEP 8), pyflakes, import sorting
+select = ["E", "W", "F", "I"]
