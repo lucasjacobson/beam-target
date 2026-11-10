@@ -139,6 +139,15 @@ The figure shows the total stopping per tritium atom as the code uses it for eac
 their ratio; the kinks in the ratio come from the spacing of the two tables. It is made by
 [`docs/figures/plot_stopping_power.py`](../../../docs/figures/plot_stopping_power.py).
 
+## Licensing
+
+The MIT License in the repository's `LICENSE` file covers this project's code and
+documentation, not the data files in this directory. `d2hags.koe` and `d3hags.koe` (DROSG-2000),
+`srim_deuteron_in_D_gas.txt` and `srim_deuteron_in_T_gas.txt` (SRIM output) and
+`pstar_hydrogen.txt` (NIST PSTAR / ICRU Report 49) are redistributed unmodified, or with values
+copied exactly, from the sources above, which are freely available, and remain subject to their
+sources' terms. Please cite those sources when using the data.
+
 ## References
 
 - M. Drosg, DROSG-2000, Codes and database for 60 neutron source reactions, documented in the
