@@ -4,3 +4,8 @@ line-length = 100
 [tool.ruff.lint]
 # pycodestyle errors/warnings (PEP 8), pyflakes, import sorting
 select = ["E", "W", "F", "I"]
+
+[tool.ruff.lint.pycodestyle]
+# The formatter wraps code at 100; allow up to 120 for lines it can't break
+# (long comments, the `# fmt: off` case table in driver.py)
+max-line-length = 120
