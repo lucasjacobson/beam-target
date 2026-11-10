@@ -375,9 +375,9 @@ class SHINE_Source:
                         right=np.nan,
                     )
                     L_vals[:, j] = legendre_[j](cosine_cms_mids[i, :])
-                factors = (1 + 2 * gamma[i] * self.cosine_mids + gamma[i] ** 2) ** 1.5 / (
-                    1 + gamma[i] * self.cosine_mids
-                )
+                # Jacobian dOmega_cm / dOmega_lab, evaluated at the CM angle
+                mu_cm = cosine_cms_mids[i, :]
+                factors = (1 + 2 * gamma[i] * mu_cm + gamma[i] ** 2) ** 1.5 / (1 + gamma[i] * mu_cm)
                 self.xs[rxn][i, :] = total * np.sum(coeffs[None, :] * L_vals, 1) * factors
 
             # Calculate neutron energies [MeV]
