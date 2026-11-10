@@ -3,6 +3,7 @@
 import re
 import shutil
 
+import h5py
 import numpy as np
 import pytest
 from conftest import data_path
@@ -179,3 +180,51 @@ def test_copy_of_data_dir_is_usable(tmp_path):
     data_dir = tmp_path / "data"
     shutil.copytree(data_path(""), data_dir)
     assert make_source(data_dir=str(data_dir)).yield_total == make_source().yield_total
+
+
+# --- SRIM tables for every element (srim_stopping.h5) ---------------------------------------
+
+
+@pytest.fixture(scope="module")
+def srim_h5():
+    with h5py.File(data_path("srim_stopping.h5"), "r") as f:
+        yield f
+
+
+def test_srim_h5_layout(srim_h5):
+    f = srim_h5
+    assert f.attrs["srim_version"] == "SRIM-2012.01"
+    targets = [t.decode() for t in f["targets"][()]]
+    assert len(targets) == 95 and targets[:2] == ["H", "He"] and targets[-3:] == ["D", "T", "He3"]
+    assert list(f["target_Z"][:92]) == list(range(1, 93))
+    E = f["energy"][()]
+    assert len(E) == 208 and E[0] == pytest.approx(0.0011) and E[-1] == pytest.approx(1e5)
+    for particle, z in [("p", 1), ("d", 1), ("t", 1), ("h", 2), ("a", 2)]:
+        assert f[particle].attrs["Z"] == z
+        for phase in ("solid", "gas"):
+            for key in ("electronic", "nuclear"):
+                data = f[particle][phase][key][()]
+                assert data.shape == (95, 208)
+                assert np.all(np.isfinite(data)) and np.all(data >= 0)
+                assert np.all(data[:, :-1].max(axis=1) > 0)
+
+
+@pytest.mark.parametrize("isotope", ["D", "T"])
+def test_srim_h5_matches_text_tables(srim_h5, isotope):
+    """The deuteron tables in D and T gas agree with the text files the code uses now, apart from
+    the rounding of SRIM's 4-figure output in the two unit systems."""
+    E, S_elec, S_nuc, _ = read_srim_stopping(data_path(SRIM_FILES[isotope]))
+    i = [t.decode() for t in srim_h5["targets"][()]].index(isotope)
+    to_per_atom = 1e-18  # eV/(1e15 atoms/cm2) -> keV cm2 per atom
+    np.testing.assert_allclose(srim_h5["energy"][()], E, rtol=1e-4)
+    gas = srim_h5["d"]["gas"]
+    np.testing.assert_allclose(gas["electronic"][i] * to_per_atom, S_elec, rtol=1e-3)
+    np.testing.assert_allclose(gas["nuclear"][i] * to_per_atom, S_nuc, rtol=1e-3)
+
+
+def test_srim_h5_phases_differ(srim_h5):
+    """SRIM treats gas and solid targets differently, so both phases are kept."""
+    for particle in ("p", "d", "a"):
+        solid = srim_h5[particle]["solid"]["electronic"][()]
+        gas = srim_h5[particle]["gas"]["electronic"][()]
+        assert np.max(np.abs(gas / solid - 1)) > 0.05

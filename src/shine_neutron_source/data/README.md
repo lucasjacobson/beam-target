@@ -12,6 +12,7 @@ The files in this directory are read by `ShineSource` (see `read_drosg_koe`,
 | `srim_deuteron_in_D_gas.txt` | Stopping power of deuterons in deuterium gas | SRIM-2012.01 |
 | `srim_deuteron_in_T_gas.txt` | Stopping power of deuterons in tritium gas | SRIM-2012.01 |
 | `pstar_hydrogen.txt` | Stopping power of protons in hydrogen gas | ICRU Report 49 (NIST PSTAR) |
+| `srim_stopping.h5` | Stopping powers of p, d, t, ³He and α in every element, solid and gas | SRIM-2012.01 |
 
 ## Cross sections: `d2hags.koe`, `d3hags.koe`
 
@@ -88,7 +89,7 @@ deuterium + T_frac × the value in tritium. Electronic stopping, which dominates
 for D and T (one electron each). Nuclear stopping per atom is about 45 % higher in deuterium
 than in tritium, but it is below 1.5 % of the total above 10 keV and below 0.1 % above
 100 keV: compared with using the tritium table for all mixtures, it lowers the DD yield of the
-generic pure-deuterium case (`T000pct`) by 0.03 %.
+generic pure-deuterium case (`DD`) by 0.03 %.
 
 ### SRIM: `srim_deuteron_in_D_gas.txt`, `srim_deuteron_in_T_gas.txt`
 
@@ -105,6 +106,46 @@ Per-atom mixing was checked against SRIM runs for D/T mixtures from 5 % to 95 % 
 SRIM models as a single hydrogen target with the average mass: total stopping agrees within
 0.35 % from 2 to 400 keV. The nuclear parts differ by up to 4 %, because nuclear stopping is
 not linear in the target mass; per-atom mixing describes a real mixture of D and T atoms.
+
+### SRIM for every element: `srim_stopping.h5`
+
+Stopping powers from SRIM-2012.01 (SRIM-2006 calculation method) for five beam particles in
+every single-element target, generated with SRIM's batch program (SR Module) by
+[`scripts/make_srim_tables.py`](../../../scripts/make_srim_tables.py), which documents every
+setting. SRIM is needed only to regenerate the file, not to use it. The file is not yet used by
+the code; it is the basis for targets other than D/T gas.
+
+- **Beam particles:** proton, deuteron, triton, helion (³He) and alpha, with CODATA 2022
+  nuclear masses.
+- **Targets:** elements Z = 1–92 at SRIM's natural atomic masses, plus the isotopes D, T and
+  ³He (95 targets).
+- **Phases:** solid and gas, each with SRIM's own phase treatment. SRIM's gas-phase stopping
+  differs from its solid-phase stopping by up to about 9 % at low energies (1–5 % for the
+  noble gases), so a hydride target should use the solid-phase hydrogen values and a gas
+  target the gas-phase ones.
+- **Energies:** 208 values from 1.1 eV to 100 MeV, the same for every table and the same grid
+  as the two text files above.
+
+Stopping is stored per target atom, in eV/(10¹⁵ atoms/cm²), exactly as SRIM printed it (4
+significant figures), so it does not depend on the target density. Stopping in a compound or
+mixture is the sum over its atoms (Bragg additivity). SRIM's compound corrections do not cover
+metal hydrides, so for those SRIM itself would also use Bragg additivity.
+
+Layout (each dataset has a `units` attribute; stopping datasets also have `dimensions`):
+
+| Path | Contents |
+|---|---|
+| `energy` | beam energy [keV], shape (208,) |
+| `targets`, `target_Z`, `target_mass` | target names (`H` … `U`, then `D`, `T`, `He3`), atomic numbers and masses [u] |
+| `<particle>/<phase>/electronic` | electronic stopping, shape (95 targets, 208 energies) |
+| `<particle>/<phase>/nuclear` | nuclear stopping, same shape |
+
+`<particle>` is `p`, `d`, `t`, `h` or `a` (each group has `Z`, `mass` and `description`
+attributes) and `<phase>` is `solid` or `gas`. File attributes record the SRIM version,
+creation date and generating script. The script checks that the file holds exactly the values
+in SRIM's output files. The deuteron tables for D and T gas agree with
+`srim_deuteron_in_D_gas.txt` and `srim_deuteron_in_T_gas.txt` within 0.06 %, the rounding of
+SRIM's printed values in the two unit systems.
 
 ### ICRU Report 49: `pstar_hydrogen.txt`
 
@@ -143,7 +184,7 @@ their ratio; the kinks in the ratio come from the spacing of the two tables. It 
 
 The MIT License in the repository's `LICENSE` file covers this project's code and
 documentation, not the data files in this directory. `d2hags.koe` and `d3hags.koe` (DROSG-2000),
-`srim_deuteron_in_D_gas.txt` and `srim_deuteron_in_T_gas.txt` (SRIM output) and
+`srim_deuteron_in_D_gas.txt`, `srim_deuteron_in_T_gas.txt` and `srim_stopping.h5` (SRIM output) and
 `pstar_hydrogen.txt` (NIST PSTAR / ICRU Report 49) are redistributed unmodified, or with values
 copied exactly, from the sources above, which are freely available, and remain subject to their
 sources' terms. Please cite those sources when using the data.
