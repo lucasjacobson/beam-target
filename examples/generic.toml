@@ -17,6 +17,12 @@
 # A case can put gas regions in front of the target chamber (for example differential-
 # pumping stages) by naming an [upstream.<name>] table; see [upstream.stages] below. If
 # [defaults] names one, a case can remove it with upstream = false.
+#
+# The target chamber (and any upstream stage) holds D/T gas with T_frac of its atoms tritium,
+# unless it names a [materials.<name>] table with material = "<name>": a gas of any
+# composition, or a solid such as a metal hydride; see [materials] below. A solid target
+# chamber has no pressure, temperature or T_frac (values in [defaults] are ignored), and
+# needs its length or beam_energy_backstop.
 
 [defaults]
 # Beam and target
@@ -52,6 +58,18 @@ num_x_bins     = 10            # optional (default 10): internal bins per stage
 num_x_bins_out = 1             # optional (default 1): output bins per stage
 divergence     = 0.0           # optional (default 0): mrad
 
+# Materials other than D/T gas (illustrative values). composition gives atom ratios, or for a
+# gas the mole fractions of its molecules; D, T and 3He are the isotopes. A solid needs its
+# mass density.
+[materials."TiD1.5"]
+phase       = "solid"
+density     = 3.9  # g/cm3
+composition = { Ti = 1.0, D = 1.5 }
+
+[materials.DT_argon]
+phase       = "gas"
+composition = { D2 = 0.49, T2 = 0.49, Ar = 0.02 }
+
 # --- Gas mixtures ----------------------------------------------------------------------------
 
 # Pure deuterium: DD neutrons only
@@ -64,6 +82,27 @@ T_frac = 1.0
 
 # 50/50 D/T: everything from [defaults]. The DT50_ cases below change one thing each.
 [cases.DT50]
+
+# 50/50 D/T with 2 % argon (by molecule): same pressure, fewer D and T atoms, more stopping
+[cases.DT50_argon]
+material = "DT_argon"
+
+# --- Solid targets ---------------------------------------------------------------------------
+
+# A titanium deuteride target 5 micrometres thick: the beam stops in about 2 micrometres.
+# Divergence means nothing over micrometres, so it is 0 (a constant beam radius).
+[cases.TiD_thick]
+material   = "TiD1.5"
+length     = 5e-4  # cm
+current    = 1.0   # mA
+divergence = 0.0   # mrad
+
+# The TiD1.5 thickness that leaves the beam with 100 keV
+[cases.TiD_find_thickness]
+material             = "TiD1.5"
+beam_energy_backstop = 100.0  # keV
+current              = 1.0    # mA
+divergence           = 0.0    # mrad
 
 # --- Physics -------------------------------------------------------------------------------
 

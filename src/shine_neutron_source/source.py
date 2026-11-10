@@ -73,7 +73,7 @@ HYDROGEN_ISOTOPES = ("H", "D", "T")
 SDEF_RADIUS_DECIMALS = 5
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
-HDF5_FORMAT_VERSION = 2
+HDF5_FORMAT_VERSION = 3
 
 # Error message when a case produces no neutrons
 NO_NEUTRONS = (
@@ -233,7 +233,8 @@ class Material:
             pressure and temperature of the region it fills.
 
     Attributes: atom_fractions ({atom: fraction of all atoms}) and atoms_per_unit (atoms per
-    molecule for a gas, averaged over the mixture; atoms per formula unit for a solid).
+    species listed in the composition, averaged over the amounts: for a gas, the mean number
+    of atoms per molecule, which converts the molecule density to an atom density).
     """
 
     def __init__(self, name, composition, phase="solid", density=None):
@@ -445,6 +446,11 @@ def _toml_value(value):
     return text if any(c in text for c in ".enai") else text + ".0"
 
 
+def _toml_key(key):
+    """Return key as a TOML key: bare if it can be, quoted otherwise."""
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else _toml_value(key)
+
+
 def _make_parent_dir(path):
     """Create the directory that will contain path, if it does not exist."""
     parent = os.path.dirname(path)
@@ -505,37 +511,44 @@ def _save_figure(fig, fname, close=True):
 
 
 class ShineSource:
-    """Neutron source term for a deuteron beam in a D/T gas target.
+    """Neutron source term for a deuteron beam in a target containing deuterium and/or tritium.
 
     The whole calculation runs when the object is created; afterwards use write_hdf5(),
     write_mcnp_sdef(), write_text_files() and make_plots() to write the results. Summary
     values are logged at DEBUG level to the "shine_neutron_source" logger (silent unless
     logging is configured).
 
-    pressure, temperature, length, divergence, num_x_bins and num_x_bins_out take one value
-    per gas region, in the order the beam passes through them; a scalar is treated as a
-    single region. The last region is the target chamber; earlier regions are normally
-    upstream differential-pumping stages.
+    pressure, temperature, length, divergence, num_x_bins, num_x_bins_out and material take one
+    value per region, in the order the beam passes through them; a scalar is treated as a
+    single region. The last region is the target chamber (a gas, or a solid target such as a
+    metal hydride); earlier regions are normally upstream differential-pumping stages.
+
+    Each region is filled with a Material, or with D/T gas (T_frac of its atoms tritium) where
+    material is None. A gas region needs its pressure and temperature; a solid region has
+    neither (give None), since its density is part of the material. Neutrons come from the
+    deuterium (D(d,n)3He) and tritium (T(d,n)4He) atoms; other atoms only slow the beam.
 
     Give either the beam current or the total neutron yield (yield_total), and the other is
     calculated: the yield is proportional to the current. Give None for the current to
     calculate it.
 
     Of the target chamber's pressure, its length and the beam energy at the backstop, give
-    any two and the third is calculated (see solve_target_chamber). To calculate the
-    pressure or length, give None as the target chamber's value (the last entry, or the
-    whole argument for a single region) and set beam_energy_backstop. Every upstream region
-    needs its pressure and length.
+    any two and the third is calculated (see solve_target_chamber); for a solid target
+    chamber, give its length or the backstop energy. To calculate the pressure or length,
+    give None as the target chamber's value (the last entry, or the whole argument for a
+    single region) and set beam_energy_backstop. Every upstream region needs its length, and
+    its pressure if it is a gas.
 
     Args:
         name: Case name, used in output file names and titles.
-        T_frac: Atom fraction of tritium in the gas (0 = pure D, 1 = pure T).
+        T_frac: Atom fraction of tritium in the D/T gas of regions without a material (0 =
+            pure D, 1 = pure T). May be None if every region has a material.
         voltage: Beam voltage [kV]. The beam starts with this energy in keV. At most
             MAX_VOLTAGE (40 MeV), the upper limit of the Legendre cross-section data.
         current: Beam current [mA]; None to calculate it from yield_total.
         pressure: Gas pressure in each region [torr]; None for the target chamber to
-            calculate it.
-        temperature: Gas temperature in each region [degC].
+            calculate it, and None for a solid region.
+        temperature: Gas temperature in each region [degC]; None for a solid region.
         length: Length of each region along the beam [cm]; None for the target chamber to
             calculate it.
         start_radius: Beam radius where it enters the first region [cm].
@@ -559,6 +572,8 @@ class ShineSource:
             None (default) calculates the beam energy from the pressure and length.
         yield_total: Total neutron yield wanted [n/s]; give it, with current None, to
             calculate the current. None (default) calculates the yield from the current.
+        material: The Material filling each region, or None for D/T gas (see T_frac).
+            None (default) means D/T gas everywhere.
     """
 
     def __init__(
@@ -582,12 +597,13 @@ class ShineSource:
         stopping_power="srim",
         beam_energy_backstop=None,
         yield_total=None,
+        material=None,
     ):
         t0 = time.time()
 
         # Input parameters
         self.name = str(name)
-        self.T_frac = float(T_frac)
+        self.T_frac = None if T_frac is None else float(T_frac)
         self.voltage = float(voltage)
         self.current = None if current is None else float(current)
         self.requested_yield_total = None if yield_total is None else float(yield_total)
@@ -610,12 +626,20 @@ class ShineSource:
             None if beam_energy_backstop is None else float(beam_energy_backstop)
         )
 
+        self.num_regions = len(self.length)
+        if material is None or isinstance(material, Material):
+            material = [material] * self.num_regions
+        # The materials given (None for D/T gas); D/T gas is filled in after check_input
+        self.materials = list(material)
+        self.solid = np.array([m is not None and m.phase == "solid" for m in self.materials])
+
         # Which of the target chamber's pressure and length and the backstop beam energy is
-        # calculated from the other two (a missing pressure or length is NaN here)
+        # calculated from the other two (a missing pressure or length is NaN here). A solid
+        # target chamber has no pressure.
         unknown = [
             name
             for name, missing in [
-                ("pressure", np.isnan(self.pressure[-1])),
+                ("pressure", not self.solid[-1] and np.isnan(self.pressure[-1])),
                 ("length", np.isnan(self.length[-1])),
                 ("beam_energy_backstop", self.beam_energy_backstop is None),
             ]
@@ -623,9 +647,9 @@ class ShineSource:
         ]
         self.calculated = unknown[0] if len(unknown) == 1 else None
 
-        self.num_regions = len(self.pressure)
         self.check_input()
-        self.materials = [dt_gas(self.T_frac)] * self.num_regions
+        dt = None if self.T_frac is None else dt_gas(self.T_frac)
+        self.materials = [dt if m is None else m for m in self.materials]
         self.num_x_bins = self.num_x_bins.astype(int)
         self.num_x_bins_out = self.num_x_bins_out.astype(int)
 
@@ -658,32 +682,62 @@ class ShineSource:
                 raise ValueError(f"{self.name}: {message}")
 
         for attr in [
+            "pressure",
             "temperature",
-            "length",
             "divergence",
             "num_x_bins",
             "num_x_bins_out",
+            "materials",
         ]:
             require(
                 len(getattr(self, attr)) == self.num_regions,
                 f"{attr} has {len(getattr(self, attr))} entries, expected {self.num_regions}",
             )
         require(
-            self.calculated is not None,
-            "give exactly two of the target chamber's pressure and length and "
-            "beam_energy_backstop; the third is calculated",
+            all(m is None or isinstance(m, Material) for m in self.materials),
+            "material must be a Material or None (D/T gas) for each region",
+        )
+        if self.solid[-1]:
+            require(
+                self.calculated is not None,
+                "give exactly one of the target chamber's length and beam_energy_backstop (it "
+                "is a solid); the other is calculated",
+            )
+        else:
+            require(
+                self.calculated is not None,
+                "give exactly two of the target chamber's pressure and length and "
+                "beam_energy_backstop; the third is calculated",
+            )
+        gas = ~self.solid
+        for r in np.flatnonzero(self.solid):
+            require(
+                np.isnan(self.pressure[r]) and np.isnan(self.temperature[r]),
+                f"region {r + 1} is a solid ({self.materials[r].name}), so it takes no pressure "
+                "or temperature (give None)",
+            )
+        require(
+            not np.any(np.isnan(self.pressure[:-1][gas[:-1]]))
+            and not np.any(np.isnan(self.length[:-1])),
+            "every region before the target chamber needs its length, and its pressure if it is "
+            "a gas",
         )
         require(
-            not np.any(np.isnan(self.pressure[:-1])) and not np.any(np.isnan(self.length[:-1])),
-            "every region before the target chamber needs its pressure and length",
+            not np.any(np.isnan(self.temperature[gas])),
+            "every gas region needs its temperature",
         )
+        if any(m is None for m in self.materials):
+            require(
+                self.T_frac is not None and 0 <= self.T_frac <= 1,
+                "T_frac must be between 0 and 1 (it sets the D/T gas of regions without a "
+                "material)",
+            )
         if self.beam_energy_backstop is not None:
             require(
                 0 < self.beam_energy_backstop < self.voltage,
                 f"beam_energy_backstop must be above 0 and below the beam energy at entry "
                 f"({self.voltage:g} keV)",
             )
-        require(0 <= self.T_frac <= 1, "T_frac must be between 0 and 1")
         require(
             0 < self.voltage <= MAX_VOLTAGE,
             f"voltage must be between 0 and {MAX_VOLTAGE:g} kV (the upper limit of the "
@@ -699,7 +753,7 @@ class ShineSource:
             require(self.requested_yield_total > 0, "yield_total must be positive")
         known = [~np.isnan(self.pressure), ~np.isnan(self.length)]
         require(np.all(self.pressure[known[0]] > 0), "pressures must be positive")
-        require(np.all(self.temperature > -273.15), "temperatures must be above 0 K")
+        require(np.all(self.temperature[gas] > -273.15), "temperatures must be above 0 K")
         require(np.all(self.length[known[1]] > 0), "lengths must be positive")
         require(self.start_radius > 0, "start_radius must be positive")
         require(self.wall_radius > 0, "wall_radius must be positive")
@@ -1054,30 +1108,32 @@ class ShineSource:
         )
 
     def calculate_beam_power(self):
-        """Work out where the beam power goes: into the gas, onto the wall or to the backstop.
+        """Work out where the beam power goes: into the target material, onto the wall or to the backstop.
 
         Beam power is beam energy times current (keV x mA = W). Along each bin, the beam
-        still in it deposits the energy it loses in the gas (current x energy loss), and the
+        still in it deposits the energy it loses in the target material (current x energy loss), and the
         beam scraped off hits the wall carrying its energy there (energy x current lost). Both
         use the bin averages of the other quantity, which makes the three parts add up to the
         entry power exactly. The power reaching the backstop is the remaining current times
         the final beam energy.
 
-        Sets self.gas_power_mids and self.wall_power_mids [kW] per bin on the internal and
-        output meshes (output bins are sums), and the totals self.gas_power,
+        Sets self.deposited_power_mids and self.wall_power_mids [kW] per bin on the internal and
+        output meshes (output bins are sums), and the totals self.deposited_power,
         self.wall_power and self.backstop_power [kW].
         """
         beam_energy_mids = (self.beam_energy_grid[:-1] + self.beam_energy_grid[1:]) / 2
-        self.gas_power_mids = self.current_mids * -np.diff(self.beam_energy_grid) / 1000
+        self.deposited_power_mids = self.current_mids * -np.diff(self.beam_energy_grid) / 1000
         self.wall_power_mids = beam_energy_mids * -np.diff(self.current_grid) / 1000
-        self.gas_power_mids_out = np.add.reduceat(self.gas_power_mids, self.out_grid_inds[:-1])
+        self.deposited_power_mids_out = np.add.reduceat(
+            self.deposited_power_mids, self.out_grid_inds[:-1]
+        )
         self.wall_power_mids_out = np.add.reduceat(self.wall_power_mids, self.out_grid_inds[:-1])
-        self.gas_power = np.sum(self.gas_power_mids)
+        self.deposited_power = np.sum(self.deposited_power_mids)
         self.wall_power = np.sum(self.wall_power_mids)
         self.backstop_power = self.beam_energy_grid[-1] * self.current_grid[-1] / 1000
         logger.debug(
             f"{self.name}: beam power {self.voltage * self.current / 1000:.4g} kW: "
-            f"{self.gas_power:.4g} kW into the gas, {self.wall_power:.4g} kW onto the wall, "
+            f"{self.deposited_power:.4g} kW deposited, {self.wall_power:.4g} kW onto the wall, "
             f"{self.backstop_power:.4g} kW to the backstop"
         )
 
@@ -1209,17 +1265,29 @@ class ShineSource:
             f"{self.neutron_scrape_fraction * 100:.3f} % lost to beam scraping"
         )
 
+    def unique_materials(self):
+        """Return the materials used, each once, in order of first use."""
+        unique = []
+        for material in self.materials:
+            if all(material is not m for m in unique):
+                unique.append(material)
+        return unique
+
     def get_inputs(self):
         """Return the input parameters as a list of (name, value, units).
 
         A calculated target chamber pressure or length is given as calculated, and its units
         say so, as does a calculated current. beam_energy_backstop and yield_total are
-        included only if they were given.
+        included only if they were given, and T_frac only if some region holds D/T gas.
+        material lists each region's material by name (see unique_materials).
         """
         calculated = {
             name: ", target chamber value calculated" if self.calculated == name else ""
             for name in ("pressure", "length")
         }
+        t_frac = [] if self.T_frac is None else [("T_frac", self.T_frac, "fraction")]
+        nan_solid = "; nan for a solid" if np.any(self.solid) else ""
+        material_names = [m.name for m in self.materials]
         requested_yield = []
         if self.requested_yield_total is not None:
             requested_yield = [("yield_total", self.requested_yield_total, "n/s, requested")]
@@ -1227,15 +1295,16 @@ class ShineSource:
         if self.beam_energy_backstop is not None:
             requested = [("beam_energy_backstop", self.beam_energy_backstop, "keV, requested")]
         return (
-            [
-                ("T_frac", self.T_frac, "fraction"),
+            t_frac
+            + [
                 ("voltage", self.voltage, "kV"),
                 ("current", self.current, "mA, calculated" if self.current_calculated else "mA"),
             ]
             + requested_yield
             + [
-                ("pressure", self.pressure, "torr" + calculated["pressure"]),
-                ("temperature", self.temperature, "degC"),
+                ("material", material_names, "per region; see [materials]"),
+                ("pressure", self.pressure, "torr" + calculated["pressure"] + nan_solid),
+                ("temperature", self.temperature, "degC" + nan_solid),
                 ("length", self.length, "cm" + calculated["length"]),
             ]
             + requested
@@ -1260,6 +1329,8 @@ class ShineSource:
         get_code_version), created (UTC time) and any run_info entries (such as the input
         file). The inputs group holds every input parameter (see get_inputs) and the results
         group the key results (see get_results), one dataset each with a "units" attribute.
+        The materials group has a group for each material used, whose attributes give its
+        phase, density (solids), composition and atom fractions.
 
         Datasets, each with "units" and "description" attributes ("grid" arrays hold values at
         mesh boundaries, "mids" arrays one value per bin):
@@ -1314,8 +1385,21 @@ class ShineSource:
             ]:
                 group = hf.create_group(group_name)
                 for key, value, units in entries:
+                    if isinstance(value, list) and value and isinstance(value[0], str):
+                        value = np.array(value, dtype=h5py.string_dtype())
                     group.create_dataset(key, data=value)
                     group[key].attrs["units"] = units
+            materials = hf.create_group("materials")
+            for material in self.unique_materials():
+                g = materials.create_group(material.name)
+                g.attrs["phase"] = material.phase
+                if material.density is not None:
+                    g.attrs["density"] = material.density
+                    g.attrs["density_units"] = "g/cm3"
+                g.attrs["composition_formulas"] = list(material.composition)
+                g.attrs["composition_amounts"] = list(material.composition.values())
+                g.attrs["atoms"] = list(material.atom_fractions)
+                g.attrs["atom_fractions"] = list(material.atom_fractions.values())
             for key, data, units, description in datasets:
                 hf.create_dataset(key, data=data, compression="gzip")
                 hf[key].attrs["units"] = units
@@ -1587,6 +1671,7 @@ class ShineSource:
             results.append((f"mean_neutron_energy_{rxn}", mean, "MeV, over all angles"))
         region_ends = np.cumsum(self.num_x_bins)
         results += [
+            ("atom_density", self.atom_density_per_region, "atoms/cm3, in each region"),
             (
                 "beam_energy_region_end",
                 self.beam_energy_grid[region_ends],
@@ -1596,7 +1681,11 @@ class ShineSource:
             ("beam_radius_backstop", self.radius_grid[-1], "cm, beam edge; capped at the wall"),
             ("beam_current_backstop", self.current_grid[-1], "mA, after scraping"),
             ("beam_power_entry", self.voltage * self.current / 1000, "kW"),
-            ("beam_power_gas", self.gas_power, "kW, deposited in the gas"),
+            (
+                "beam_power_deposited",
+                self.deposited_power,
+                "kW, deposited in the target material (gas or solid)",
+            ),
             ("beam_power_wall", self.wall_power, "kW, carried onto the wall by scraping"),
             ("beam_power_backstop", self.backstop_power, "kW"),
             ("neutron_scrape_fraction", self.neutron_scrape_fraction, "neutrons lost to scraping"),
@@ -1609,8 +1698,9 @@ class ShineSource:
         Sections: [run] (case name, code version, creation time and any run_info entries, such
         as the input file and SDEF direction), [inputs] (the ShineSource arguments, see
         get_inputs; lists have one value per gas region in beam order) and [results] (see
-        get_results). Units are given in comments. title adds a first comment line saying what
-        the file is. The "=" signs are aligned across all sections, and so are the comments
+        get_results), followed by a [materials.<name>] table for each material used (phase,
+        density for a solid, composition). Units are given in comments. title adds a first
+        comment line saying what the file is. The "=" signs are aligned across all sections, and so are the comments
         (except after values too long for the comment column).
         """
         sections = {
@@ -1632,6 +1722,16 @@ class ShineSource:
             for name, value, comment in entries:
                 text = f"{name:<{key_width}} = {_toml_value(value)}"
                 s += f"{text:<{comment_column}} # {comment}\n" if comment else text + "\n"
+        for material in self.unique_materials():
+            s += f"\n[materials.{_toml_key(material.name)}]\n"
+            s += f"{'phase':<{key_width}} = {_toml_value(material.phase)}\n"
+            if material.density is not None:
+                text = f"{'density':<{key_width}} = {_toml_value(material.density)}"
+                s += f"{text:<{comment_column}} # g/cm3\n"
+            composition = ", ".join(
+                f"{_toml_key(k)} = {_toml_value(v)}" for k, v in material.composition.items()
+            )
+            s += f"{'composition':<{key_width}} = {{ {composition} }}\n"
         return s
 
     def write_text_files(self, directory, run_info=None):
@@ -1641,7 +1741,7 @@ class ShineSource:
           its [run] section).
         - axial_profile.txt: neutrons per output position bin, integrated over angle and
           energy, with the beam energy, radius and scraped fraction, and the beam power
-          deposited in the gas and carried onto the wall in each bin.
+          deposited in the target material and carried onto the wall in each bin.
         - energy_spectrum.txt: neutrons per energy bin, integrated over position and angle.
         - angular_distribution.txt: neutrons per emission-angle bin (angle from the beam
           direction), integrated over position and energy, also per steradian.
@@ -1675,7 +1775,7 @@ class ShineSource:
                 "DD neutrons [n/s]",
                 "DT neutrons [n/s]",
                 "total neutrons [n/s]",
-                "beam power deposited in the gas over the bin [kW]",
+                "beam power deposited in the target material over the bin [kW]",
                 "beam power carried onto the wall by scraping over the bin [kW]",
             ],
             [
@@ -1687,7 +1787,7 @@ class ShineSource:
                 axial["DD"],
                 axial["DT"],
                 axial["DD"] + axial["DT"],
-                self.gas_power_mids_out,
+                self.deposited_power_mids_out,
                 self.wall_power_mids_out,
             ],
         )
@@ -1762,26 +1862,37 @@ class ShineSource:
         self.plot_neutron_angle(directory)
         self.plot_neutron_energy(directory)
 
+    def _position_units(self):
+        """Return (scale, unit) for position plots: micrometres if the whole source is shorter
+        than 1 mm (such as a solid target), centimetres otherwise. Positions in cm are
+        multiplied by scale; quantities per cm are divided by it."""
+        if self.x_grid_out[-1] < 0.1:
+            return 1e4, r"$\mu$m"
+        return 1.0, "cm"
+
     def _mark_regions(self, ax):
-        """Draw dashed lines at the boundaries between gas regions."""
+        """Draw dashed lines at the boundaries between regions."""
+        scale, _ = self._position_units()
         for x in np.cumsum(self.length)[:-1]:
-            ax.axvline(x, color="gray", linestyle="--", linewidth=0.8)
+            ax.axvline(x * scale, color="gray", linestyle="--", linewidth=0.8)
 
     def _set_position_axis(self, ax, mark_regions=True):
-        """Label the position axis and (unless mark_regions is False) mark the gas regions."""
+        """Label the position axis and (unless mark_regions is False) mark the regions."""
+        scale, unit = self._position_units()
         if mark_regions:
             self._mark_regions(ax)
-        ax.set_xlim(0, self.x_grid_out[-1])
+        ax.set_xlim(0, self.x_grid_out[-1] * scale)
         if self.num_regions > 1:
-            ax.set_xlabel("Distance along the beam [cm] (dashed lines: region boundaries)")
+            ax.set_xlabel(f"Distance along the beam [{unit}] (dashed lines: region boundaries)")
         else:
-            ax.set_xlabel("Distance into the target chamber [cm]")
+            ax.set_xlabel(f"Distance into the target [{unit}]")
 
     @_plot_style
     def plot_beam(self, directory):
         """Plot the beam energy, radius, current and deposited power against position, in a
         2 x 2 grid."""
-        x = self.x_grid_out
+        scale, unit = self._position_units()
+        x = self.x_grid_out * scale
         fig, axes = plt.subplots(2, 2, sharex=True, figsize=(13, 9))
         (ax_energy, ax_radius), (ax_current, ax_power) = axes
 
@@ -1799,13 +1910,14 @@ class ShineSource:
         ax_current.set_ylabel("Beam current [mA]")
         ax_current.set_ylim(0, 1.05 * self.current)
 
-        # Power per unit length [W/cm] in each output bin, with the totals in the legend
+        # Power per unit length [W per cm or um] in each output bin, totals in the legend
         entry = self.voltage * self.current / 1000
-        gas_label = f"Into the gas ({self.gas_power:.3g} kW)"
+        deposited_label = f"Deposited in the target ({self.deposited_power:.3g} kW)"
         wall_label = f"Onto the wall ({self.wall_power:.3g} kW)"
-        ax_power.stairs(self.gas_power_mids_out * 1000 / self.dx_out, x, label=gas_label)
-        ax_power.stairs(self.wall_power_mids_out * 1000 / self.dx_out, x, label=wall_label)
-        ax_power.set_ylabel("Power deposited [W/cm]")
+        per_length = 1000 / (self.dx_out * scale)
+        ax_power.stairs(self.deposited_power_mids_out * per_length, x, label=deposited_label)
+        ax_power.stairs(self.wall_power_mids_out * per_length, x, label=wall_label)
+        ax_power.set_ylabel(f"Power deposited [W/{unit}]")
         ax_power.set_ylim(bottom=0)
         ax_power.legend(
             loc="center left",
@@ -1824,9 +1936,10 @@ class ShineSource:
     @_plot_style
     def plot_neutron_position(self, directory):
         """Plot the neutrons per unit length against position, on linear and log scales."""
-        x = self.x_grid_out
+        scale, unit = self._position_units()
+        x = self.x_grid_out * scale
         lines = [
-            (rxn, np.sum(self.neutrons[rxn], (1, 2)) / self.dx_out)
+            (rxn, np.sum(self.neutrons[rxn], (1, 2)) / (self.dx_out * scale))
             for rxn in self.reactions_present()
         ]
         if len(lines) > 1:
@@ -1836,7 +1949,7 @@ class ShineSource:
         for label, per_cm in lines:
             ax.stairs(per_cm, x, label=label)
         self._set_position_axis(ax)
-        ax.set_ylabel(r"Neutrons per unit length [n/(cm$\cdot$s)]")
+        ax.set_ylabel(rf"Neutrons per unit length [n/({unit}$\cdot$s)]")
         ax.set_title(f"Neutron source along the beam ({self.name})")
         ax.set_ylim(bottom=0)
         ax.grid()

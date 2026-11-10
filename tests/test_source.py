@@ -196,7 +196,7 @@ def test_calculate_current(mixed_source):
     assert s.current == pytest.approx(mixed_source.current, rel=1e-12)
     assert s.yield_total == pytest.approx(mixed_source.yield_total, rel=1e-12)
     np.testing.assert_allclose(s.current_grid, mixed_source.current_grid, rtol=1e-12)
-    assert s.gas_power == pytest.approx(mixed_source.gas_power, rel=1e-12)
+    assert s.deposited_power == pytest.approx(mixed_source.deposited_power, rel=1e-12)
     inputs = {name: (value, units) for name, value, units in s.get_inputs()}
     assert inputs["current"][1] == "mA, calculated"
     assert inputs["yield_total"] == (mixed_source.yield_total, "n/s, requested")
@@ -242,17 +242,17 @@ def test_beam_power_adds_up(mixed_source):
     """The beam power splits into gas, wall and backstop with nothing lost or double counted."""
     s = mixed_source
     entry = s.voltage * s.current / 1000
-    assert s.wall_power > 0 and s.gas_power > 0 and s.backstop_power > 0
-    assert s.gas_power + s.wall_power + s.backstop_power == pytest.approx(entry, rel=1e-12)
-    assert np.all(s.gas_power_mids >= 0) and np.all(s.wall_power_mids >= 0)
-    assert s.gas_power_mids_out.sum() == pytest.approx(s.gas_power, rel=1e-12)
+    assert s.wall_power > 0 and s.deposited_power > 0 and s.backstop_power > 0
+    assert s.deposited_power + s.wall_power + s.backstop_power == pytest.approx(entry, rel=1e-12)
+    assert np.all(s.deposited_power_mids >= 0) and np.all(s.wall_power_mids >= 0)
+    assert s.deposited_power_mids_out.sum() == pytest.approx(s.deposited_power, rel=1e-12)
     assert s.wall_power_mids_out.sum() == pytest.approx(s.wall_power, rel=1e-12)
 
 
 def test_beam_power_without_scraping():
     s = make_source(divergence=[0.0])
     assert s.wall_power == 0
-    assert s.gas_power + s.backstop_power == pytest.approx(s.voltage * s.current / 1000)
+    assert s.deposited_power + s.backstop_power == pytest.approx(s.voltage * s.current / 1000)
 
 
 def test_neutron_energies(mixed_source):
@@ -579,7 +579,7 @@ def test_text_files(mixed_source, tmp_path):
     np.testing.assert_allclose(axial[:, 4], s.scrape_mids_out, rtol=1e-6, atol=1e-12)
     assert np.all(np.diff(axial[:, 4]) >= 0) and 0 < axial[-1, 4] < 1  # Scraping grows
     check_sums(axial, 5, 6, 7)
-    assert axial[:, 8].sum() == pytest.approx(s.gas_power, rel=1e-5)
+    assert axial[:, 8].sum() == pytest.approx(s.deposited_power, rel=1e-5)
     assert axial[:, 9].sum() == pytest.approx(s.wall_power, rel=1e-5)
 
     energy = np.loadtxt(tmp_path / "energy_spectrum.txt")
@@ -601,7 +601,9 @@ def test_text_files(mixed_source, tmp_path):
     assert summary["run"]["code_version"]
     for name, value, _ in s.get_inputs():  # Every input, with the right type
         expected = value.tolist() if isinstance(value, np.ndarray) else value
-        if isinstance(expected, str):
+        if isinstance(expected, str) or (
+            isinstance(expected, list) and isinstance(expected[0], str)
+        ):
             assert summary["inputs"][name] == expected
         else:
             assert summary["inputs"][name] == pytest.approx(expected, rel=1e-6)
@@ -615,7 +617,7 @@ def test_text_files(mixed_source, tmp_path):
     assert results["beam_energy_backstop"] == pytest.approx(s.beam_energy_grid[-1], rel=1e-6)
     assert results["beam_energy_region_end"] == pytest.approx([s.beam_energy_grid[-1]], rel=1e-6)
     assert results["beam_power_entry"] == pytest.approx(280 * 10 / 1000)  # kV x mA -> kW
-    parts = [results[f"beam_power_{p}"] for p in ("gas", "wall", "backstop")]
+    parts = [results[f"beam_power_{p}"] for p in ("deposited", "wall", "backstop")]
     assert sum(parts) == pytest.approx(results["beam_power_entry"], rel=1e-6)
     assert results["beam_current_backstop"] < 10  # Part of the beam is scraped off
     assert results["neutron_scrape_fraction"] == pytest.approx(s.neutron_scrape_fraction, rel=1e-6)

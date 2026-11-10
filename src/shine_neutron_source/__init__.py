@@ -13,7 +13,14 @@ logging is configured (the command line shows it; see setup_logging).
 import logging
 
 from .cli import InputError, load_input, main, run_case, setup_logging
-from .source import ShineSource, get_atom_density, get_code_version, get_package_version
+from .source import (
+    Material,
+    ShineSource,
+    get_atom_density,
+    get_code_version,
+    get_package_version,
+    parse_formula,
+)
 
 __version__ = get_package_version()
 
@@ -21,12 +28,14 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
     "InputError",
+    "Material",
     "ShineSource",
     "__version__",
     "get_atom_density",
     "get_code_version",
     "load_input",
     "main",
+    "parse_formula",
     "run_case",
     "setup_logging",
 ]
