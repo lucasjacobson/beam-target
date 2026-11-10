@@ -11,6 +11,11 @@
 #
 #   beam_energy_backstop = 30.0  # keV, beam energy at the end of the target chamber
 #
+# Likewise give either the beam current or the total neutron yield, and the other is
+# calculated. To calculate the current, replace it with, for example:
+#
+#   yield_total = 1e13  # n/s
+#
 # A case can put gas regions in front of the target chamber (for example differential-
 # pumping stages) by naming an [upstream.<name>] table:
 #

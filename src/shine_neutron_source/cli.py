@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 CASE_SETTINGS = {
     "T_frac": float,  # Atom fraction of tritium in the gas
     "voltage": float,  # Beam voltage [kV]
-    "current": float,  # Beam current [mA]
     "temperature": float,  # Gas temperature [degC], used in every region
     "start_radius": float,  # Beam radius where it enters the first region [cm]
     "wall_radius": float,  # Target chamber wall radius [cm]
@@ -43,6 +42,13 @@ TARGET_SETTINGS = {
     "pressure": float,  # Target chamber pressure [torr]
     "length": float,  # Target chamber length [cm]
     "beam_energy_backstop": float,  # Beam energy at the backstop [keV]
+}
+
+# Beam settings: every case needs exactly one of these (directly or from [defaults]), and
+# the other is calculated
+BEAM_SETTINGS = {
+    "current": float,  # Beam current [mA]
+    "yield_total": float,  # Total neutron yield [n/s]
 }
 
 # Optional case settings and their defaults
@@ -121,12 +127,13 @@ def load_input(path):
     settings apply to every case unless the case overrides them, and optional
     [upstream.<name>] tables describing gas regions (such as differential-pumping stages)
     that the beam passes through before the target chamber. See CASE_SETTINGS,
-    TARGET_SETTINGS, OPTIONAL_CASE_SETTINGS and UPSTREAM_SETTINGS for the settings and their
-    units, and examples/generic.toml for an example.
+    TARGET_SETTINGS, BEAM_SETTINGS, OPTIONAL_CASE_SETTINGS and UPSTREAM_SETTINGS for the
+    settings and their units, and examples/generic.toml for an example.
 
     Each case needs two of pressure, length and beam_energy_backstop; the third is
     calculated. If a case and [defaults] together give all three, the two the case sets
-    itself are used.
+    itself are used. Likewise each case needs one of current and yield_total, and if both
+    are given, the one the case sets itself is used.
 
     Each returned settings dict has "source", the keyword arguments for ShineSource
     (without name), and "direction", the MCNP SDEF beam direction.
@@ -137,7 +144,12 @@ def load_input(path):
         except tomllib.TOMLDecodeError as e:
             raise InputError(f"{path}: {e}") from None
     _check_keys(path, data, ["defaults", "upstream", "cases"], what="table")
-    allowed = list(CASE_SETTINGS) + list(TARGET_SETTINGS) + list(OPTIONAL_CASE_SETTINGS)
+    allowed = (
+        list(CASE_SETTINGS)
+        + list(TARGET_SETTINGS)
+        + list(BEAM_SETTINGS)
+        + list(OPTIONAL_CASE_SETTINGS)
+    )
 
     defaults = data.get("defaults", {})
     _check_keys(f"{path} [defaults]", defaults, allowed)
@@ -179,6 +191,20 @@ def load_input(path):
         for key in given:
             _check_type(where, key, s[key], TARGET_SETTINGS[key])
         target = {key: s[key] if key in given else None for key in TARGET_SETTINGS}
+        given = [key for key in BEAM_SETTINGS if key in s]
+        if len(given) == 2:  # The case's own setting overrides the other from [defaults]
+            given = [key for key in BEAM_SETTINGS if key in case]
+            if len(given) != 1:
+                raise InputError(
+                    f"{where}: current and yield_total are both set; give one of them (the "
+                    "other is calculated)"
+                )
+        if len(given) != 1:
+            raise InputError(
+                f"{where}: give one of current and yield_total (the other is calculated)"
+            )
+        _check_type(where, given[0], s[given[0]], float)
+        beam = {key: s[key] if key in given else None for key in BEAM_SETTINGS}
         if s["direction"] not in SDEF_DIRECTIONS:
             raise InputError(
                 f"{where}: direction must be one of {', '.join(SDEF_DIRECTIONS)}, "
@@ -210,7 +236,7 @@ def load_input(path):
             "source": {
                 "T_frac": s["T_frac"],
                 "voltage": s["voltage"],
-                "current": s["current"],
+                "current": beam["current"],
                 "pressure": pressure,
                 "temperature": [s["temperature"]] * len(pressure),
                 "length": up["length"] + [target["length"]],
@@ -224,6 +250,7 @@ def load_input(path):
                 "energy_bin_width": s["energy_bin_width"],
                 "stopping_power": s["stopping_power"],
                 "beam_energy_backstop": target["beam_energy_backstop"],
+                "yield_total": beam["yield_total"],
             },
             "direction": s["direction"],
             "entry_position": [float(v) for v in entry],
@@ -253,8 +280,12 @@ def run_case(name, settings, output_dir="output", input_file=None):
     """
     t0 = time.time()
     s = settings["source"]
+    if s["current"] is None:
+        beam = f"yield {s['yield_total']:.4e} n/s"
+    else:
+        beam = f"{s['current']:g} mA"
     logger.debug(
-        f"{name}: starting: T_frac {s['T_frac']:g}, {s['voltage']:g} kV, {s['current']:g} mA, "
+        f"{name}: starting: T_frac {s['T_frac']:g}, {s['voltage']:g} kV, {beam}, "
         f"{len(s['pressure'])} gas region(s), stopping power {s['stopping_power']}"
     )
     source = ShineSource(name=name, **s)

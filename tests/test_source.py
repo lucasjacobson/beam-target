@@ -186,6 +186,58 @@ def test_backstop_energy_rejected(overrides, message):
         make_source(**overrides)
 
 
+# --- Current or yield ------------------------------------------------------------------------
+
+
+def test_calculate_current(mixed_source):
+    """Giving a forward run's yield recovers its current, and everything else with it."""
+    s = make_source(current=None, yield_total=mixed_source.yield_total)
+    assert s.current_calculated and not mixed_source.current_calculated
+    assert s.current == pytest.approx(mixed_source.current, rel=1e-12)
+    assert s.yield_total == pytest.approx(mixed_source.yield_total, rel=1e-12)
+    np.testing.assert_allclose(s.current_grid, mixed_source.current_grid, rtol=1e-12)
+    assert s.gas_power == pytest.approx(mixed_source.gas_power, rel=1e-12)
+    inputs = {name: (value, units) for name, value, units in s.get_inputs()}
+    assert inputs["current"][1] == "mA, calculated"
+    assert inputs["yield_total"] == (mixed_source.yield_total, "n/s, requested")
+    assert "yield_total" not in [name for name, _, _ in mixed_source.get_inputs()]
+
+
+def test_yield_scales_current():
+    """Doubling the requested yield doubles the current."""
+    one = make_source(current=None, yield_total=1e10)
+    two = make_source(current=None, yield_total=2e10)
+    assert two.current == pytest.approx(2 * one.current, rel=1e-12)
+    assert two.yield_total == pytest.approx(2e10, rel=1e-12)
+
+
+def test_calculate_current_and_length(mixed_source):
+    """Both kinds of calculation together."""
+    s = make_source(
+        current=None,
+        yield_total=mixed_source.yield_total,
+        length=[None],
+        beam_energy_backstop=mixed_source.beam_energy_grid[-1],
+    )
+    assert s.length[-1] == pytest.approx(50.0, rel=1e-9)
+    assert s.current == pytest.approx(mixed_source.current, rel=1e-8)
+
+
+@pytest.mark.parametrize(
+    "overrides, message",
+    [
+        (dict(yield_total=1e10), "give exactly one of current and yield_total"),
+        (dict(current=None), "give exactly one of current and yield_total"),
+        (dict(current=None, yield_total=0.0), "yield_total must be positive"),
+        (dict(current=None, yield_total=1e10, voltage=1.0), "no neutrons are produced"),
+    ],
+    ids=["both", "neither", "zero yield", "no neutrons"],
+)
+def test_current_or_yield_rejected(overrides, message):
+    with pytest.raises(ValueError, match=message):
+        make_source(**overrides)
+
+
 def test_beam_power_adds_up(mixed_source):
     """The beam power splits into gas, wall and backstop with nothing lost or double counted."""
     s = mixed_source

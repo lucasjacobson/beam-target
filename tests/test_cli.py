@@ -125,6 +125,21 @@ beam_energy_backstop = 100.0
     assert cases["find_pressure"]["length"] == [20.0]
 
 
+def test_current_or_yield(tmp_path):
+    """A case gives the current or the yield; one set in the case overrides the other from
+    [defaults]."""
+    path = write_input(
+        tmp_path,
+        BASE + "\n[cases.by_current]\npressure = 5.0\n\n"
+        "[cases.by_yield]\npressure = 5.0\nyield_total = 1e10\n",
+    )
+    cases = {name: c["source"] for name, c in load_input(path).items()}
+    assert cases["by_current"]["current"] == 10.0
+    assert cases["by_current"]["yield_total"] is None
+    assert cases["by_yield"]["current"] is None  # The current from [defaults] is overridden
+    assert cases["by_yield"]["yield_total"] == 1e10
+
+
 @pytest.mark.parametrize(
     "extra, message",
     [
@@ -134,6 +149,8 @@ beam_energy_backstop = 100.0
             "are all set",
         ),
         ('[cases.a]\npressure = 5.0\nbeam_energy_backstop = "low"\n', "must be float"),
+        ("[cases.a]\npressure = 5.0\ncurrent = 5.0\nyield_total = 1e10\n", "are both set"),
+        ('[cases.a]\npressure = 5.0\nyield_total = "many"\n', "yield_total must be float"),
         ("[cases.a]\npressure = 5.0\nvoltge = 3\n", "unknown setting"),
         ('[cases.a]\npressure = "high"\n', "pressure must be float"),
         ("[cases.a]\npressure = 5.0\nnum_x_bins = 2.5\n", "num_x_bins must be int"),
@@ -156,6 +173,8 @@ beam_energy_backstop = 100.0
         "missing",
         "all three target settings",
         "backstop energy type",
+        "current and yield",
+        "yield type",
         "misspelt",
         "wrong type",
         "float for int",

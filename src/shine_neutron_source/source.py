@@ -70,6 +70,13 @@ SDEF_RADIUS_DECIMALS = 4
 # Version of the HDF5 output layout; increase it whenever the layout changes
 HDF5_FORMAT_VERSION = 2
 
+# Error message when a case produces no neutrons
+NO_NEUTRONS = (
+    "no neutrons are produced. Check that the beam voltage is high enough (the cross-section "
+    "data start at 1.8 keV for DD and 10 keV for DT) and that the beam is not scraped away "
+    "entirely."
+)
+
 # Highest allowed beam voltage [kV]. The DROSG Legendre tables in data/ end at 40 MeV; the
 # rows above that are not angular distributions (see data/README.md).
 MAX_VOLTAGE = 40000.0
@@ -415,6 +422,10 @@ class ShineSource:
     single region. The last region is the target chamber; earlier regions are normally
     upstream differential-pumping stages.
 
+    Give either the beam current or the total neutron yield (yield_total), and the other is
+    calculated: the yield is proportional to the current. Give None for the current to
+    calculate it.
+
     Of the target chamber's pressure, its length and the beam energy at the backstop, give
     any two and the third is calculated (see solve_target_chamber). To calculate the
     pressure or length, give None as the target chamber's value (the last entry, or the
@@ -426,7 +437,7 @@ class ShineSource:
         T_frac: Atom fraction of tritium in the gas (0 = pure D, 1 = pure T).
         voltage: Beam voltage [kV]. The beam starts with this energy in keV. At most
             MAX_VOLTAGE (40 MeV), the upper limit of the Legendre cross-section data.
-        current: Beam current [mA].
+        current: Beam current [mA]; None to calculate it from yield_total.
         pressure: Gas pressure in each region [torr]; None for the target chamber to
             calculate it.
         temperature: Gas temperature in each region [degC].
@@ -451,6 +462,8 @@ class ShineSource:
         beam_energy_backstop: Beam energy wanted at the backstop, the end of the target
             chamber [keV]; give it to calculate the target chamber's pressure or length.
             None (default) calculates the beam energy from the pressure and length.
+        yield_total: Total neutron yield wanted [n/s]; give it, with current None, to
+            calculate the current. None (default) calculates the yield from the current.
     """
 
     def __init__(
@@ -473,6 +486,7 @@ class ShineSource:
         data_dir=None,
         stopping_power="srim",
         beam_energy_backstop=None,
+        yield_total=None,
     ):
         t0 = time.time()
 
@@ -480,7 +494,9 @@ class ShineSource:
         self.name = str(name)
         self.T_frac = float(T_frac)
         self.voltage = float(voltage)
-        self.current = float(current)
+        self.current = None if current is None else float(current)
+        self.requested_yield_total = None if yield_total is None else float(yield_total)
+        self.current_calculated = self.current is None
         self.pressure = np.atleast_1d(np.array(pressure, dtype=float))
         self.temperature = np.atleast_1d(np.array(temperature, dtype=float))
         self.length = np.atleast_1d(np.array(length, dtype=float))
@@ -517,9 +533,6 @@ class ShineSource:
         self.num_x_bins = self.num_x_bins.astype(int)
         self.num_x_bins_out = self.num_x_bins_out.astype(int)
 
-        # Deuteron source rate [1/s]
-        self.deuteron_rate = self.current / 1000 / ee
-
         self.read_stopping_power()
         self.read_cross_sections()
         if self.calculated != "beam_energy_backstop":
@@ -536,8 +549,11 @@ class ShineSource:
 
         self.calculate_beam_energy()
         self.calculate_scraping()
-        self.calculate_beam_power()
         self.calculate_ddxs()
+        if self.current_calculated:
+            self.solve_current()
+        self.calculate_beam_current()
+        self.calculate_beam_power()
         self.bin_neutrons()
 
         # Recorded once, so every output of this case has the same creation time
@@ -583,7 +599,14 @@ class ShineSource:
             f"voltage must be between 0 and {MAX_VOLTAGE:g} kV (the upper limit of the "
             "Legendre cross-section data, see data/README.md)",
         )
-        require(self.current > 0, "current must be positive")
+        require(
+            (self.current is None) != (self.requested_yield_total is None),
+            "give exactly one of current and yield_total; the other is calculated",
+        )
+        if self.current is not None:
+            require(self.current > 0, "current must be positive")
+        if self.requested_yield_total is not None:
+            require(self.requested_yield_total > 0, "yield_total must be positive")
         known = [~np.isnan(self.pressure), ~np.isnan(self.length)]
         require(np.all(self.pressure[known[0]] > 0), "pressures must be positive")
         require(np.all(self.temperature > -273.15), "temperatures must be above 0 K")
@@ -812,8 +835,8 @@ class ShineSource:
         is 1 - (wall_radius / r)^2. This is conservative. Divergence is used as
         dr/dx = divergence / 1000 (small-angle approximation) unless use_atan is True.
 
-        Sets the beam radius [cm], scrape fraction and current [mA] on the internal and
-        output meshes. Radii are capped at wall_radius after the scrape fraction is found.
+        Sets the beam radius [cm] and scrape fraction on the internal and output meshes.
+        Radii are capped at wall_radius after the scrape fraction is found.
         """
         if use_atan:
             divergence_mids = np.arctan(self.divergence_mids / 1000)
@@ -829,19 +852,54 @@ class ShineSource:
         rsq_mids = (self.radius_grid[:-1] ** 2 + self.radius_grid[1:] ** 2) / 2
         self.radius_mids = np.sqrt(rsq_mids)  # RMS radius in each bin
 
-        self.current_grid = self.current * (1 - self.scrape_grid)
-        self.current_mids = (self.current_grid[:-1] + self.current_grid[1:]) / 2
-
         # Output mesh: grid values are sampled, midpoint values are averaged
         def condense(vals):
             return np.add.reduceat(vals, self.out_grid_inds[:-1]) / self.x_ratio_out
 
         self.radius_grid_out = np.array(self.radius_grid[self.out_grid_inds])
         self.scrape_grid_out = np.array(self.scrape_grid[self.out_grid_inds])
-        self.current_grid_out = np.array(self.current_grid[self.out_grid_inds])
         self.radius_mids_out = np.sqrt(condense(rsq_mids))
         self.scrape_mids_out = condense(self.scrape_mids)
-        self.current_mids_out = condense(self.current_mids)
+
+    def solve_current(self):
+        """Calculate the beam current [mA] that gives the requested total neutron yield.
+
+        The yield is proportional to the current, so the current is the requested yield
+        divided by the yield per mA. The yield per mA is summed from the lab cross sections
+        the same way bin_neutrons sums the yield, so the final yield matches the request to
+        rounding error. Raises ValueError if the case produces no neutrons.
+        """
+        deuterons_per_mA = 1e-3 / ee  # [1/s]
+        yield_per_mA = 0.0
+        for rxn, frac in [("DD", 1 - self.T_frac), ("DT", self.T_frac)]:
+            per_bin = np.sum(self.ddxs[rxn] * self.solid_angles[None, :], axis=1)
+            yield_per_mA += np.sum(
+                per_bin
+                * self.atom_density_mids
+                * 1e-24
+                * self.dx
+                * frac
+                * deuterons_per_mA
+                * (1 - self.scrape_mids)
+            )
+        if yield_per_mA == 0:
+            raise ValueError(f"{self.name}: {NO_NEUTRONS}")
+        self.current = self.requested_yield_total / yield_per_mA
+        logger.debug(
+            f"{self.name}: beam current = {self.current:.6g} mA for a total neutron yield of "
+            f"{self.requested_yield_total:.4e} n/s"
+        )
+
+    def calculate_beam_current(self):
+        """Set the deuteron rate [1/s] and the beam current [mA] after scraping, on the
+        internal and output meshes."""
+        self.deuteron_rate = self.current / 1000 / ee
+        self.current_grid = self.current * (1 - self.scrape_grid)
+        self.current_mids = (self.current_grid[:-1] + self.current_grid[1:]) / 2
+        self.current_grid_out = np.array(self.current_grid[self.out_grid_inds])
+        self.current_mids_out = (
+            np.add.reduceat(self.current_mids, self.out_grid_inds[:-1]) / self.x_ratio_out
+        )
 
     def calculate_beam_power(self):
         """Work out where the beam power goes: into the gas, onto the wall or to the backstop.
@@ -989,11 +1047,7 @@ class ShineSource:
 
         self.yield_total = self.yields["DD"] + self.yields["DT"]
         if self.yield_total == 0:
-            raise ValueError(
-                f"{self.name}: no neutrons are produced. Check that the beam voltage is high "
-                "enough (the cross-section data start at 1.8 keV for DD and 10 keV for DT) and "
-                "that the beam is not scraped away entirely."
-            )
+            raise ValueError(f"{self.name}: {NO_NEUTRONS}")
         self.neutron_scrape_fraction = (
             self.yields["DD"] * self.neutron_scrape_fractions["DD"]
             + self.yields["DT"] * self.neutron_scrape_fractions["DT"]
@@ -1007,12 +1061,16 @@ class ShineSource:
         """Return the input parameters as a list of (name, value, units).
 
         A calculated target chamber pressure or length is given as calculated, and its units
-        say so. beam_energy_backstop is included only if it was given.
+        say so, as does a calculated current. beam_energy_backstop and yield_total are
+        included only if they were given.
         """
         calculated = {
             name: ", target chamber value calculated" if self.calculated == name else ""
             for name in ("pressure", "length")
         }
+        requested_yield = []
+        if self.requested_yield_total is not None:
+            requested_yield = [("yield_total", self.requested_yield_total, "n/s, requested")]
         requested = []
         if self.beam_energy_backstop is not None:
             requested = [("beam_energy_backstop", self.beam_energy_backstop, "keV, requested")]
@@ -1020,7 +1078,10 @@ class ShineSource:
             [
                 ("T_frac", self.T_frac, "fraction"),
                 ("voltage", self.voltage, "kV"),
-                ("current", self.current, "mA"),
+                ("current", self.current, "mA, calculated" if self.current_calculated else "mA"),
+            ]
+            + requested_yield
+            + [
                 ("pressure", self.pressure, "torr" + calculated["pressure"]),
                 ("temperature", self.temperature, "degC"),
                 ("length", self.length, "cm" + calculated["length"]),
