@@ -1,37 +1,35 @@
-# Generic beam-target cases for shine_neutron_source.
+# Generic beam-target cases for shine_neutron_source, one for each feature of the code.
 #
-# Run with:  python -m shine_neutron_source examples/generic.toml
+# Run with:  python -m shine_neutron_source examples/generic.toml -j 4
+#
+# Memory use is roughly 2.5 GB per case at the mesh below, so limit the number of cases run
+# in parallel with -j (the default is one per CPU). Run a single case with -c NAME.
 #
 # Settings in [defaults] apply to every case unless the case sets them itself. Every case
-# needs all of the settings below, either directly or from [defaults].
+# needs all of the settings below, either directly or from [defaults]. Here [defaults] holds
+# a 50/50 D/T target, and each case changes only what it demonstrates.
 #
-# Of the target chamber's pressure and length and the beam energy at the backstop, give any
-# two and the third is calculated. These cases give pressure and length; to calculate the
-# length instead, replace it with, for example:
-#
-#   beam_energy_backstop = 30.0  # keV, beam energy at the end of the target chamber
-#
-# Likewise give either the beam current or the total neutron yield, and the other is
-# calculated. To calculate the current, replace it with, for example:
-#
-#   yield_total = 1e13  # n/s
+# Of the target chamber's pressure and length and the beam energy at the backstop
+# (beam_energy_backstop), give any two and the third is calculated. Likewise give either the
+# beam current or the total neutron yield (yield_total), and the other is calculated. When
+# [defaults] and a case together give too many, the ones the case sets itself are used.
 #
 # A case can put gas regions in front of the target chamber (for example differential-
-# pumping stages) by naming an [upstream.<name>] table:
-#
-#   [upstream.example]
-#   pressure       = [1e-3, 1e-2]  # torr, one per stage, in beam order
-#   length         = [50.0, 50.0]  # cm
-#   num_x_bins     = 10            # optional (default 10): internal bins per stage
-#   num_x_bins_out = 1             # optional (default 1): output bins per stage
-#   divergence     = 0.0           # optional (default 0): mrad
-#
-#   [cases.with_upstream]
-#   upstream = "example"
-#   ...
+# pumping stages) by naming an [upstream.<name>] table; see [upstream.stages] below.
 
 [defaults]
-# Mesh. Memory use is roughly 2.5 GB per case at these settings.
+# Beam and target
+T_frac       = 0.5     # atom fraction of tritium in the gas
+voltage      = 280.0   # kV
+current      = 50.0    # mA
+pressure     = 38.0    # torr, target chamber
+temperature  = 1800.0  # degC
+length       = 137.0   # cm, target chamber
+start_radius = 0.2     # cm, beam radius at entry
+wall_radius  = 4.1783  # cm, target chamber wall
+divergence   = 36.0    # mrad
+
+# Mesh
 num_x_bins       = 1370  # position bins in the target chamber, internal calculation
 num_x_bins_out   = 137   # position bins in the target chamber, output
 angle_step       = 0.01  # deg, internal calculation
@@ -45,59 +43,63 @@ entry_position = [0.0, 0.0, 0.0]  # cm, where the beam enters the first gas regi
 # Physics
 stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
 
-# Cases are named by the tritium fraction of the gas
+# Two differential-pumping stages in front of the target chamber (illustrative values)
+[upstream.stages]
+pressure       = [0.05, 0.5]   # torr, one per stage, in beam order
+length         = [50.0, 50.0]  # cm
+num_x_bins     = 10            # optional (default 10): internal bins per stage
+num_x_bins_out = 1             # optional (default 1): output bins per stage
+divergence     = 0.0           # optional (default 0): mrad
 
-[cases.T000pct]
-T_frac       = 0.0       # atom fraction of tritium in the gas
-voltage      = 280.0     # kV
-current      = 50.0      # mA
-pressure     = 38.0      # torr, target chamber
-temperature  = 1800.0    # degC
-length       = 137.0     # cm, target chamber
-start_radius = 0.2       # cm, beam radius at entry
-wall_radius  = 4.1783    # cm, target chamber wall
-divergence   = 36.0      # mrad
+# --- Gas mixtures ----------------------------------------------------------------------------
 
-[cases.T001pct]
-T_frac       = 0.01
-voltage      = 280.0
-current      = 50.0
-pressure     = 38.0
-temperature  = 1800.0
-length       = 137.0
-start_radius = 0.2
-wall_radius  = 4.1783
-divergence   = 36.0
+# Pure deuterium: DD neutrons only
+[cases.DD]
+T_frac = 0.0
 
-[cases.T050pct]
-T_frac       = 0.5
-voltage      = 280.0
-current      = 50.0
-pressure     = 38.0
-temperature  = 1800.0
-length       = 137.0
-start_radius = 0.2
-wall_radius  = 4.1783
-divergence   = 36.0
+# Pure tritium: DT neutrons only
+[cases.DT]
+T_frac = 1.0
 
-[cases.T090pct]
-T_frac       = 0.9
-voltage      = 280.0
-current      = 50.0
-pressure     = 38.0
-temperature  = 1800.0
-length       = 137.0
-start_radius = 0.2
-wall_radius  = 4.1783
-divergence   = 36.0
+# 50/50 D/T: everything from [defaults]. The DT50_ cases below change one thing each.
+[cases.DT50]
 
-[cases.T100pct]
-T_frac       = 1.0
-voltage      = 280.0
-current      = 50.0
-pressure     = 38.0
-temperature  = 1800.0
-length       = 137.0
-start_radius = 0.2
-wall_radius  = 4.1783
-divergence   = 36.0
+# --- Physics -------------------------------------------------------------------------------
+
+# ICRU 49 electronic stopping instead of SRIM
+[cases.DT50_icru49]
+stopping_power = "icru49"
+
+# A denser target: the beam stops about 117 cm in, so no beam power reaches the backstop
+[cases.DT50_beam_stops]
+pressure = 50.0  # torr
+
+# --- Calculated settings -------------------------------------------------------------------
+
+# Calculate the target chamber length that leaves the beam with 30 keV at the backstop
+[cases.DT50_find_length]
+pressure             = 38.0  # torr
+beam_energy_backstop = 30.0  # keV
+
+# Calculate the pressure instead, for the same backstop energy
+[cases.DT50_find_pressure]
+length               = 137.0  # cm
+beam_energy_backstop = 30.0   # keV
+
+# Calculate the beam current that gives a total neutron yield of 1e13 n/s
+[cases.DT50_find_current]
+yield_total = 1e13  # n/s
+
+# --- Geometry and MCNP output ----------------------------------------------------------------
+
+# Upstream pumping stages, with the beam travelling along +x from x = -100 cm
+[cases.DT50_upstream]
+upstream       = "stages"
+direction      = "+x"
+entry_position = [-100.0, 0.0, 0.0]  # cm
+
+# No divergence (a constant beam radius, so no scraping) and one output angle bin (an
+# isotropic source)
+[cases.DT50_isotropic]
+divergence     = 0.0    # mrad
+angle_step_out = 180.0  # deg

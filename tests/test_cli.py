@@ -8,7 +8,7 @@ import h5py
 import pytest
 from conftest import EXAMPLE_INPUT
 
-from shine_neutron_source import InputError, load_input, main
+from shine_neutron_source import InputError, ShineSource, load_input, main
 
 # Settings for a small, fast case; the tests below add cases and tables to these
 BASE = """
@@ -38,15 +38,68 @@ def write_input(tmp_path, text, name="input.toml"):
 # --- load_input ------------------------------------------------------------------------------
 
 
+EXAMPLE_CASES = [
+    "DD",
+    "DT",
+    "DT50",
+    "DT50_icru49",
+    "DT50_beam_stops",
+    "DT50_find_length",
+    "DT50_find_pressure",
+    "DT50_find_current",
+    "DT50_upstream",
+    "DT50_isotropic",
+]
+
+
 def test_example_input():
     cases = load_input(EXAMPLE_INPUT)
-    assert list(cases) == ["T000pct", "T001pct", "T050pct", "T090pct", "T100pct"]
-    dd = cases["T000pct"]
+    assert list(cases) == EXAMPLE_CASES
+    dd = cases["DD"]
     assert dd["direction"] == "-z"
     assert dd["source"]["T_frac"] == 0.0
     assert dd["source"]["stopping_power"] == "srim"
     assert dd["source"]["num_x_bins"] == [1370]
     assert dd["source"]["angle_step"] == 0.01
+
+
+@pytest.fixture(scope="module")
+def example_sources():
+    """Every example case, run on a coarse mesh (1 degree, 137 bins in the target chamber)."""
+    sources = {}
+    for name, settings in load_input(EXAMPLE_INPUT).items():
+        s = settings["source"]
+        regions = len(s["pressure"])
+        s = {
+            **s,
+            "angle_step": 1.0,
+            "num_x_bins": [10] * (regions - 1) + [137],
+            "num_x_bins_out": [1] * (regions - 1) + [137],
+        }
+        sources[name] = ShineSource(name=name, **s)
+    return sources
+
+
+def test_example_cases_show_their_features(example_sources):
+    """Each example case does what its comment in examples/generic.toml says."""
+    s = example_sources
+    assert s["DD"].yields["DT"] == 0 and s["DD"].yields["DD"] > 0
+    assert s["DT"].yields["DD"] == 0 and s["DT"].yields["DT"] > 0
+    assert s["DT50_icru49"].stopping_power == "icru49"
+    assert s["DT50_beam_stops"].beam_energy_grid[-1] == 0
+    assert s["DT50_beam_stops"].backstop_power == 0
+    assert s["DT50_find_length"].calculated == "length"
+    assert s["DT50_find_length"].beam_energy_grid[-1] == pytest.approx(30.0, rel=1e-6)
+    assert s["DT50_find_pressure"].calculated == "pressure"
+    assert s["DT50_find_pressure"].beam_energy_grid[-1] == pytest.approx(30.0, rel=1e-6)
+    assert s["DT50_find_current"].current_calculated
+    assert s["DT50_find_current"].yield_total == pytest.approx(1e13, rel=1e-9)
+    assert s["DT50_upstream"].num_regions == 3
+    assert s["DT50_isotropic"].wall_power == 0
+    assert s["DT50_isotropic"].num_angle_bins_out == 1
+    for name in ["DT50", "DT50_upstream", "DT50_isotropic"]:
+        assert s[name].calculated == "beam_energy_backstop"
+        assert not s[name].current_calculated
 
 
 def test_defaults_and_overrides(tmp_path):
