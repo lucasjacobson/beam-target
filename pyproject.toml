@@ -21,6 +21,10 @@ shine-neutron-source = "shine_neutron_source.cli:main"
 [tool.setuptools.package-data]
 shine_neutron_source = ["data/*"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
 [tool.ruff]
 line-length = 100
 src = ["src"]
