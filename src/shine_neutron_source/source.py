@@ -314,6 +314,19 @@ def get_code_version():
     return get_package_version()
 
 
+def _toml_value(value):
+    """Format a string, number or sequence of numbers as a TOML value. Floats are written to 7
+    significant figures and always read back as floats."""
+    if isinstance(value, str):
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    if isinstance(value, (int, np.integer)) and not isinstance(value, bool):
+        return str(int(value))
+    text = f"{float(value):.7g}"
+    return text if any(c in text for c in ".enai") else text + ".0"
+
+
 def _make_parent_dir(path):
     """Create the directory that will contain path, if it does not exist."""
     parent = os.path.dirname(path)
@@ -448,6 +461,8 @@ class ShineSource:
         self.calculate_ddxs()
         self.bin_neutrons()
 
+        # Recorded once, so every output of this case has the same creation time
+        self.created = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
         logger.debug(f"{self.name}: calculation took {time.time() - t0:.1f} s")
 
     def check_input(self):
@@ -855,9 +870,7 @@ class ShineSource:
         with h5py.File(path, "w") as hf:
             hf.attrs["name"] = self.name
             hf.attrs["code_version"] = get_code_version()
-            hf.attrs["created"] = datetime.datetime.now(datetime.timezone.utc).isoformat(
-                timespec="seconds"
-            )
+            hf.attrs["created"] = self.created
             inputs = hf.create_group("inputs")
             for key, value, units in self.get_inputs():
                 inputs.create_dataset(key, data=value)
@@ -866,7 +879,7 @@ class ShineSource:
                 hf.create_dataset(key, data=data, compression="gzip")
                 hf[key].attrs["units"] = units
 
-    def get_mcnp_sdef(self, direction="-z"):
+    def get_mcnp_sdef(self, direction="-z", run_info=None):
         """Return an MCNP SDEF source definition as a string.
 
         The source is a cylinder along the beam axis, starting at POS = 0 0 0 (see
@@ -879,8 +892,12 @@ class ShineSource:
         - d4: neutron energy, dependent on emission angle (via distributions 501, 502,
           ...) unless the source is isotropic.
 
+        The comment block at the top is the case summary (see get_summary), including the
+        direction.
+
         Args:
             direction: Beam direction, one of SDEF_DIRECTIONS ("-x", "+x", ..., "+z").
+            run_info: Optional extra entries for the summary's [run] section.
         """
         if direction not in SDEF_DIRECTIONS:
             raise ValueError(
@@ -893,7 +910,7 @@ class ShineSource:
         has_DT = self.T_frac > 0
         dashed_line = "c " + "-" * 78 + "\n"
 
-        s = self._sdef_header(dashed_line)
+        s = self._sdef_header(dashed_line, {**(run_info or {}), "sdef_direction": direction})
 
         # SDEF card
         s += "c\n"
@@ -990,55 +1007,16 @@ class ShineSource:
 
         return s
 
-    def _sdef_header(self, dashed_line):
-        """Return the comment block describing the case at the top of the SDEF card."""
+    def _sdef_header(self, dashed_line, run_info):
+        """Return the comment block at the top of the SDEF card: the case summary (see
+        get_summary) with each line as an MCNP comment."""
         s = dashed_line
-        s += "c     Source definition\n"
+        s += f"c     Source definition for {self.name}, made by shine-neutron-source\n"
+        s += "c     Case summary (TOML; the same as summary.toml written by write_text_files):\n"
         s += dashed_line
         s += "c\n"
-        # The target chamber is the last region
-        s += f"c     Tritium fraction   : {self.T_frac * 100:.12g}%\n"
-        s += f"c     Beam voltage       : {self.voltage:.12g} kV\n"
-        s += f"c     Beam current       : {self.current:.12g} mA\n"
-        s += f"c     Target pressure    : {self.pressure_list[-1]:.12g} torr\n"
-        s += f"c     Target temperature : {self.temperature_list[-1]:.12g} C\n"
-        s += f"c     Target length      : {self.length_list[-1]:.12g} cm\n"
-        s += f"c     Beam start_radius  : {self.start_radius:.12g} cm\n"
-        s += f"c     Beam max_radius    : {self.max_radius:.12g} cm\n"
-        s += f"c     Beam divergence    : {self.divergence_list[-1]:.12g} mrad\n"
-        s += f"c     Stopping power     : {self.stopping_power}\n"
-        s += "c\n"
-        s += dashed_line
-        s += "c\n"
-        row = "c     {:>2} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}\n"
-        s += row.format("#", "Pressure", "Temp", "Length", "Diverge", "Ints", "Ints", "E_Final")
-        s += row.format("", "[torr]", "[C]", "[cm]", "[mrad]", "output", "internal", "[keV]")
-        for i in range(self.num_regions):
-            E_final = self.EB_grid[np.sum(self.num_x_ints_list[: i + 1])]
-            s += (
-                f"c     {i + 1:2d} {self.pressure_list[i]:8.7g} {self.temperature_list[i]:8.7g}"
-                f" {self.length_list[i]:8.7g} {self.divergence_list[i]:8.7g}"
-                f" {self.num_x_ints_list_C[i]:8d} {self.num_x_ints_list[i]:8d} {E_final:8.7g}\n"
-            )
-        s += "c\n"
-        s += dashed_line
-        s += "c\n"
-        s += f"c     # of distance intervals                 : {self.num_x_ints_total_C:.12g}\n"
-        s += f"c     # of distance intervals (internal calc) : {self.num_x_ints_total:.12g}\n"
-        s += f"c     Angle interval                          : {self.angle_int_C:.12g} deg\n"
-        s += f"c     Angle interval (internal calc)          : {self.angle_int:.12g} deg\n"
-        s += f"c     Neutron energy interval                 : {self.EN_int:.12g} MeV\n"
-        s += "c\n"
-        s += dashed_line
-        s += "c\n"
-        for rxn in ["DD", "DT"]:
-            pct = self.nyield[rxn] / self.nyield_tot * 100
-            s += f"c     {rxn}    neutron yield : {self.nyield[rxn]:.5e} n/s ({pct:9.5f}%)\n"
-        s += f"c     Total neutron yield : {self.nyield_tot:.5e} n/s\n"
-        s += "c\n"
-        s += f"c     Beam energy at backstop : {self.EB_grid[-1]:.6f} keV\n"
-        s += "c\n"
-        s += f"c     Fraction of neutrons lost to scraping : {self.nscrape_tot * 100:.5f}%\n"
+        for line in self.get_summary(run_info, title=False).splitlines():
+            s += f"c {line}".rstrip() + "\n"
         s += "c\n"
         s += dashed_line
         return s
@@ -1064,14 +1042,191 @@ class ShineSource:
             sp = np.append(sp, np.append(0, spectrum[ind_min:ind_max]))
         return si, sp
 
-    def write_mcnp_sdef(self, path, direction="-z"):
+    def write_mcnp_sdef(self, path, direction="-z", run_info=None):
         """Write the MCNP SDEF card (see get_mcnp_sdef) to a text file at path.
 
         The file is ASCII with Unix (LF) line endings on every platform.
         """
         _make_parent_dir(path)
         with open(path, "w", encoding="ascii", newline="\n") as w:
-            w.write(self.get_mcnp_sdef(direction))
+            w.write(self.get_mcnp_sdef(direction, run_info))
+
+    def reactions_present(self):
+        """Return the reactions the gas can produce: "DD" if it contains deuterium, "DT" if it
+        contains tritium."""
+        return [rxn for rxn, frac in (("DD", 1 - self.T_frac), ("DT", self.T_frac)) if frac > 0]
+
+    def neutrons_by_angle_and_energy(self):
+        """Return the neutron source integrated over position, on one energy mesh for both
+        reactions.
+
+        Returns (EN_grid, neutrons): EN_grid [MeV] runs from the lowest to the highest neutron
+        energy of the reactions present, in steps of EN_int (the reactions' own meshes are
+        aligned with it), and neutrons[rxn] [n/s] has shape (num_a_ints_C, len(EN_grid) - 1) for
+        "DD" and "DT" (zero for a reaction the gas cannot produce).
+        """
+        present = self.reactions_present()
+        # Each reaction's mesh starts and ends on a multiple of EN_int: work in those indices
+        first = {rxn: int(round(self.EN_grid[rxn][0] / self.EN_int)) for rxn in present}
+        i_lo = min(first.values())
+        i_hi = max(int(round(self.EN_grid[rxn][-1] / self.EN_int)) for rxn in present)
+        EN_grid = np.arange(i_lo, i_hi + 1) * self.EN_int
+        neutrons = {}
+        for rxn in ("DD", "DT"):
+            neutrons[rxn] = np.zeros((self.num_a_ints_C, i_hi - i_lo))
+            if rxn in present:
+                by_angle = np.sum(self.neutrons[rxn], 0)
+                i = first[rxn] - i_lo
+                neutrons[rxn][:, i : i + by_angle.shape[1]] = by_angle
+        return EN_grid, neutrons
+
+    def get_results(self):
+        """Return the key results as a list of (name, value, units or description)."""
+        results = [
+            ("yield_total", self.nyield_tot, "n/s"),
+            ("yield_DD", self.nyield["DD"], "n/s"),
+            ("yield_DT", self.nyield["DT"], "n/s"),
+            ("fraction_DD", self.nyield["DD"] / self.nyield_tot, "share of the total yield"),
+            ("fraction_DT", self.nyield["DT"] / self.nyield_tot, "share of the total yield"),
+        ]
+        for rxn in self.reactions_present():
+            spectrum = np.sum(self.neutrons[rxn], (0, 1))
+            mean = np.sum(spectrum * self.EN_mids[rxn]) / np.sum(spectrum)
+            results.append((f"mean_neutron_energy_{rxn}", mean, "MeV, over all angles"))
+        region_ends = np.cumsum(self.num_x_ints_list)
+        results += [
+            ("beam_energy_region_end", self.EB_grid[region_ends], "keV, at the end of each region"),
+            ("beam_energy_backstop", self.EB_grid[-1], "keV"),
+            ("beam_radius_backstop", self.radius_grid[-1], "cm, capped at the wall radius"),
+            ("beam_current_backstop", self.current_grid[-1], "mA, after scraping"),
+            ("beam_power_entry", self.voltage * self.current / 1000, "kW"),
+            ("beam_power_backstop", self.EB_grid[-1] * self.current_grid[-1] / 1000, "kW"),
+            ("neutron_scrape_fraction", self.nscrape_tot, "fraction of neutrons lost to scraping"),
+        ]
+        return results
+
+    def get_summary(self, run_info=None, title=True):
+        """Return the key inputs and results as TOML text (readable with tomllib).
+
+        Sections: [run] (case name, code version, creation time and any run_info entries, such
+        as the input file and SDEF direction), [inputs] (the ShineSource arguments, see
+        get_inputs; lists have one value per gas region in beam order) and [results] (see
+        get_results). Units are given in comments. title adds a first comment line saying what
+        the file is.
+        """
+
+        def line(name, value, comment=""):
+            text = f"{name} = {_toml_value(value)}"
+            return f"{text:<40} # {comment}\n" if comment else text + "\n"
+
+        s = "# Neutron source summary (TOML; read it in Python with tomllib)\n\n" if title else ""
+        s += "[run]\n"
+        s += line("name", self.name)
+        s += line("code_version", get_code_version())
+        s += line("created", self.created, "UTC")
+        for name, value in (run_info or {}).items():
+            s += line(name, value)
+        s += "\n[inputs]\n"
+        for name, value, units in self.get_inputs():
+            s += line(name, value, units)
+        s += "\n[results]\n"
+        for name, value, units in self.get_results():
+            s += line(name, value, units)
+        return s
+
+    def write_text_files(self, directory, run_info=None):
+        """Write a summary and integrated neutron profiles as text files in directory.
+
+        - summary.toml: key inputs and results (see get_summary; run_info adds entries to
+          its [run] section).
+        - axial_profile.txt: neutrons per output position interval, integrated over angle and
+          energy, with the beam energy, radius and scraped fraction.
+        - energy_spectrum.txt: neutrons per energy bin, integrated over position and angle.
+        - angular_distribution.txt: neutrons per emission-angle bin (angle from the beam
+          direction), integrated over position and energy, also per steradian.
+
+        The profile files start with "#" comment lines describing the columns and can be read
+        with numpy.loadtxt; summary.toml can be read with tomllib. Each profile sums to the
+        neutron yields. All files are ASCII with Unix (LF) line endings.
+        """
+        os.makedirs(directory, exist_ok=True)
+        summary_path = os.path.join(directory, "summary.toml")
+        with open(summary_path, "w", encoding="ascii", newline="\n") as w:
+            w.write(self.get_summary(run_info))
+
+        def write_table(fname, title, columns, data):
+            # savetxt puts the comment character before each line; blank lines stay a bare "#"
+            header = f" {title}\n Case: {self.name}\n\n Columns:\n"
+            header += "".join(f"   {i + 1}  {c}\n" for i, c in enumerate(columns))
+            with open(os.path.join(directory, fname), "w", encoding="ascii", newline="\n") as w:
+                np.savetxt(w, np.column_stack(data), fmt="%13.6e", header=header, comments="#")
+
+        axial = {rxn: np.sum(self.neutrons[rxn], (1, 2)) for rxn in ("DD", "DT")}
+        write_table(
+            "axial_profile.txt",
+            "Neutron source along the beam, integrated over emission angle and neutron energy",
+            [
+                "start of position interval [cm]",
+                "end of position interval [cm]",
+                "beam energy at the interval centre [keV]",
+                "beam radius over the interval [cm] (RMS; capped at the wall radius)",
+                "fraction of the beam scraped off, averaged over the interval",
+                "DD neutrons [n/s]",
+                "DT neutrons [n/s]",
+                "total neutrons [n/s]",
+            ],
+            [
+                self.x_grid_C[:-1],
+                self.x_grid_C[1:],
+                (self.EB_grid_C[:-1] + self.EB_grid_C[1:]) / 2,
+                self.radius_mids_C,
+                self.scrape_mids_C,
+                axial["DD"],
+                axial["DT"],
+                axial["DD"] + axial["DT"],
+            ],
+        )
+
+        EN_grid, by_angle_energy = self.neutrons_by_angle_and_energy()
+        energy = {rxn: np.sum(by_angle_energy[rxn], 0) for rxn in ("DD", "DT")}
+        write_table(
+            "energy_spectrum.txt",
+            "Neutron energy spectrum, integrated over position and emission angle",
+            [
+                "start of energy bin [MeV]",
+                "end of energy bin [MeV]",
+                "DD neutrons [n/s]",
+                "DT neutrons [n/s]",
+                "total neutrons [n/s]",
+            ],
+            [EN_grid[:-1], EN_grid[1:], energy["DD"], energy["DT"], energy["DD"] + energy["DT"]],
+        )
+
+        angular = {rxn: np.sum(self.neutrons[rxn], (0, 2)) for rxn in ("DD", "DT")}
+        total = angular["DD"] + angular["DT"]
+        write_table(
+            "angular_distribution.txt",
+            "Neutron angular distribution (angle from the beam direction), integrated over "
+            "position and neutron energy",
+            [
+                "start of angle bin [deg]",
+                "end of angle bin [deg]",
+                "solid angle of the bin [sr]",
+                "DD neutrons [n/s]",
+                "DT neutrons [n/s]",
+                "total neutrons [n/s]",
+                "total neutrons per steradian [n/s/sr]",
+            ],
+            [
+                self.angle_grid_C[:-1],
+                self.angle_grid_C[1:],
+                self.angle_areas_C,
+                angular["DD"],
+                angular["DT"],
+                total,
+                total / self.angle_areas_C,
+            ],
+        )
 
     def make_plots(self, directory):
         """Write plots of the beam and neutron source to directory as PNG files.
@@ -1172,18 +1327,11 @@ class ShineSource:
         Writes one plot each for DD and DT (when present) and one for the total. The axis
         ranges follow the neutron energies, so the plots suit any beam energy.
         """
-        present = [rxn for rxn, frac in (("DD", 1 - self.T_frac), ("DT", self.T_frac)) if frac > 0]
+        present = self.reactions_present()
         spectra = {rxn: np.sum(self.neutrons[rxn], 0) / self.EN_int for rxn in present}
-
-        # Energy mesh for the total spectrum: from 0 to the highest neutron energy, aligned with
-        # the reactions' meshes (which start and end on multiples of EN_int)
-        num_EN_ints_tot = max(int(round(self.EN_grid[rxn][-1] / self.EN_int)) for rxn in present)
-        EN_grid_tot = np.arange(num_EN_ints_tot + 1) * self.EN_int
+        EN_grid_tot, on_common_grid = self.neutrons_by_angle_and_energy()
         EN_mids_tot = (EN_grid_tot[:-1] + EN_grid_tot[1:]) / 2
-        spectrum_tot = np.zeros((self.num_a_ints_C, num_EN_ints_tot))
-        for rxn in present:
-            i = int(round(self.EN_grid[rxn][0] / self.EN_int))
-            spectrum_tot[:, i : i + spectra[rxn].shape[1]] += spectra[rxn]
+        spectrum_tot = (on_common_grid["DD"] + on_common_grid["DT"]) / self.EN_int
 
         cvals = np.linspace(0, 0.95, self.num_a_ints_C)
         colors = [plt.cm.nipy_spectral(x) for x in cvals]

@@ -13,7 +13,6 @@ import logging
 import multiprocessing as mp
 import os
 import re
-import shutil
 import time
 import tomllib
 
@@ -206,10 +205,13 @@ def setup_logging(verbose=False):
         package_logger.addHandler(handler)
 
 
-def run_case(name, settings, output_dir="output"):
+def run_case(name, settings, output_dir="output", input_file=None):
     """Calculate one case from load_input() and write its outputs to <output_dir>/<name>/.
 
-    Writes source.h5, source.sdef and plots/*.png, and returns the ShineSource.
+    Writes source.h5, source.sdef, plots/*.png, summary.toml and the integrated profiles
+    axial_profile.txt, energy_spectrum.txt and angular_distribution.txt (see
+    ShineSource.write_text_files), and returns the ShineSource. input_file, if given, is
+    recorded in the summary and the SDEF header.
     """
     t0 = time.time()
     s = settings["source"]
@@ -220,8 +222,10 @@ def run_case(name, settings, output_dir="output"):
     source = ShineSource(name=name, **s)
     case_dir = os.path.join(output_dir, name)
     source.write_hdf5(os.path.join(case_dir, "source.h5"))
-    source.write_mcnp_sdef(os.path.join(case_dir, "source.sdef"), settings["direction"])
+    run_info = {} if input_file is None else {"input_file": str(input_file)}
+    source.write_mcnp_sdef(os.path.join(case_dir, "source.sdef"), settings["direction"], run_info)
     source.make_plots(os.path.join(case_dir, "plots"))
+    source.write_text_files(case_dir, {**run_info, "sdef_direction": settings["direction"]})
     logger.info(
         f"{name}: {source.nyield_tot:.3e} n/s in {time.time() - t0:.1f} s "
         f"-> {os.path.join(case_dir, '')}"  # Trailing separator: a directory
@@ -240,8 +244,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="shine-neutron-source",
         description="Calculate neutron source terms for the cases in a TOML input file. "
-        "Each case is written to <output-dir>/<case>/: source.h5, source.sdef, plots/ and "
-        "a copy of the input file. Memory use is roughly 2.5 GB per case at 1370 position "
+        "Each case is written to <output-dir>/<case>/: source.h5, source.sdef, plots/, "
+        "summary.toml, axial_profile.txt, energy_spectrum.txt and angular_distribution.txt. "
+        "Memory use is roughly 2.5 GB per case at 1370 position "
         "intervals and a 0.01 degree angle interval, and scales with both.",
     )
     parser.add_argument("input", help="TOML input file (see examples/generic.toml)")
@@ -287,18 +292,13 @@ def main(argv=None):
 
     setup_logging(args.verbose)
     t0 = time.time()
-    for name in cases:
-        case_dir = os.path.join(args.output_dir, name)
-        os.makedirs(case_dir, exist_ok=True)
-        shutil.copyfile(args.input, os.path.join(case_dir, "input.toml"))
-
     jobs = min(args.jobs, len(cases))
     logger.info(
         f"Running {len(cases)} case(s) from {args.input} with {jobs} process(es); "
         f"results in {os.path.join(args.output_dir, '')}"  # Trailing separator: a directory
     )
     if jobs > 1:
-        work = [(name, s, args.output_dir) for name, s in cases.items()]
+        work = [(name, s, args.output_dir, args.input) for name, s in cases.items()]
         # Each worker sets up logging; close() and join() let workers exit normally (the
         # context manager alone would terminate them, which can lose their last output)
         with mp.Pool(jobs, initializer=setup_logging, initargs=(args.verbose,)) as pool:
@@ -307,5 +307,5 @@ def main(argv=None):
             pool.join()
     else:
         for name, s in cases.items():
-            run_case(name, s, args.output_dir)
+            run_case(name, s, args.output_dir, args.input)
     logger.info(f"Done: {len(cases)} case(s) in {time.time() - t0:.1f} s")

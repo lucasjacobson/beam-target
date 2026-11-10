@@ -1,6 +1,7 @@
 """Input files (load_input) and the command-line interface (main)."""
 
 import os
+import tomllib
 
 import h5py
 import pytest
@@ -148,10 +149,24 @@ def test_main_runs_cases(tmp_path):
     for case in ("mix", "pureD"):
         case_dir = out / case
         assert (case_dir / "source.sdef").is_file()
-        assert (case_dir / "input.toml").read_bytes() == path.read_bytes()
+        for fname in [
+            "summary.toml",
+            "axial_profile.txt",
+            "energy_spectrum.txt",
+            "angular_distribution.txt",
+        ]:
+            assert (case_dir / fname).is_file()
+        assert not (case_dir / "input.toml").exists()  # The summary records the inputs instead
         assert len(list((case_dir / "plots").glob("*.png"))) in (8, 9)
+        with open(case_dir / "summary.toml", "rb") as f:
+            run = tomllib.load(f)["run"]
+        assert run["name"] == case
+        assert run["input_file"] == str(path)
+        assert run["sdef_direction"] == "-z"
+        assert "c input_file = " in (case_dir / "source.sdef").read_text()
         with h5py.File(case_dir / "source.h5") as f:
             assert f.attrs["name"] == case
+            assert f.attrs["created"] == run["created"]  # One creation time for every output
 
 
 def test_main_selected_case_in_parallel(tmp_path):

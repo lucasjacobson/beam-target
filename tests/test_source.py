@@ -1,5 +1,7 @@
 """Whole calculations with ShineSource: physics checks, input checks and outputs."""
 
+import tomllib
+
 import h5py
 import numpy as np
 import pytest
@@ -202,8 +204,17 @@ def test_sdef_file(mixed_source, tmp_path):
     text = raw.decode()
     for card in ["sdef  par = n", "si1", "sp1", "si2", "sp2", "ds3 S", "ds4 S", "si501", "sp501"]:
         assert card in text
-    assert "Stopping power     : srim" in text
     assert text == mixed_source.get_mcnp_sdef()
+    assert max(len(line) for line in text.splitlines()) <= 128  # MCNP's line-length limit
+
+    # The comment block at the top is the case summary as TOML, plus the SDEF direction
+    dashed = "c " + "-" * 78 + "\n"
+    block = text.split(dashed)[2]
+    header = tomllib.loads("\n".join(line[2:] for line in block.splitlines()))
+    summary = tomllib.loads(mixed_source.get_summary({"sdef_direction": "-z"}))
+    assert header == summary
+    assert header["run"]["sdef_direction"] == "-z"
+    assert header["inputs"]["stopping_power"] == "srim"
 
 
 @pytest.mark.parametrize("direction", ["-x", "+x", "-y", "+y", "-z", "+z"])
@@ -241,6 +252,88 @@ def test_hdf5_file(mixed_source, tmp_path):
                 len(f[f"EN_grid_{rxn}"]) - 1,
             )
             assert neutrons[()].sum() == pytest.approx(mixed_source.nyield[rxn], rel=1e-12)
+
+
+def test_text_files(mixed_source, tmp_path):
+    s = mixed_source
+    s.write_text_files(tmp_path)
+    for fname in [
+        "summary.toml",
+        "axial_profile.txt",
+        "energy_spectrum.txt",
+        "angular_distribution.txt",
+    ]:
+        raw = (tmp_path / fname).read_bytes()
+        assert b"\r" not in raw  # Unix line endings
+        raw.decode("ascii")
+        assert not any(line.endswith(b" ") for line in raw.splitlines())
+
+    # Each profile sums to the yields (values are written to 7 significant figures)
+    def check_sums(table, dd_col, dt_col, total_col):
+        assert table[:, dd_col].sum() == pytest.approx(s.nyield["DD"], rel=1e-6)
+        assert table[:, dt_col].sum() == pytest.approx(s.nyield["DT"], rel=1e-6)
+        np.testing.assert_allclose(
+            table[:, total_col], table[:, dd_col] + table[:, dt_col], rtol=1e-6
+        )
+
+    axial = np.loadtxt(tmp_path / "axial_profile.txt")
+    np.testing.assert_allclose(axial[:, 0], s.x_grid_C[:-1], atol=1e-9)
+    np.testing.assert_allclose(axial[:, 1], s.x_grid_C[1:], rtol=1e-6)
+    assert np.all(np.diff(axial[:, 2]) < 0)  # The beam slows down along the target
+    np.testing.assert_allclose(axial[:, 3], s.radius_mids_C, rtol=1e-6)
+    assert np.all(np.diff(axial[:, 3]) >= 0) and axial[-1, 3] <= s.max_radius * (1 + 1e-6)
+    np.testing.assert_allclose(axial[:, 4], s.scrape_mids_C, rtol=1e-6, atol=1e-12)
+    assert np.all(np.diff(axial[:, 4]) >= 0) and 0 < axial[-1, 4] < 1  # Scraping grows
+    check_sums(axial, 5, 6, 7)
+
+    energy = np.loadtxt(tmp_path / "energy_spectrum.txt")
+    np.testing.assert_allclose(energy[:, 1] - energy[:, 0], s.EN_int, rtol=1e-4)
+    np.testing.assert_allclose(energy[1:, 0], energy[:-1, 1], rtol=1e-6)  # Contiguous bins
+    assert energy[0, 0] > 1.5 and energy[-1, 1] < 16  # From the DD peak to the DT peak
+    assert energy[0, 2] > 0 and energy[-1, 3] > 0  # Starts and ends on actual neutrons
+    check_sums(energy, 2, 3, 4)
+
+    angular = np.loadtxt(tmp_path / "angular_distribution.txt")
+    assert angular[0, 0] == 0 and angular[-1, 1] == 180
+    assert angular[:, 2].sum() == pytest.approx(4 * np.pi, rel=1e-6)
+    check_sums(angular, 3, 4, 5)
+    np.testing.assert_allclose(angular[:, 6], angular[:, 5] / angular[:, 2], rtol=1e-5)
+
+    with open(tmp_path / "summary.toml", "rb") as f:
+        summary = tomllib.load(f)  # The summary is valid TOML
+    assert summary["run"]["name"] == "test"
+    assert summary["run"]["code_version"]
+    for name, value, _ in s.get_inputs():  # Every input, with the right type
+        expected = value.tolist() if isinstance(value, np.ndarray) else value
+        if isinstance(expected, str):
+            assert summary["inputs"][name] == expected
+        else:
+            assert summary["inputs"][name] == pytest.approx(expected, rel=1e-6)
+        assert type(summary["inputs"][name]) is type(expected)
+    results = summary["results"]
+    assert results["yield_total"] == pytest.approx(s.nyield_tot, rel=1e-6)
+    assert results["yield_DD"] + results["yield_DT"] == pytest.approx(s.nyield_tot, rel=1e-6)
+    assert results["fraction_DD"] + results["fraction_DT"] == pytest.approx(1, rel=1e-6)
+    assert 2.0 < results["mean_neutron_energy_DD"] < 3.0
+    assert 13.5 < results["mean_neutron_energy_DT"] < 14.8
+    assert results["beam_energy_backstop"] == pytest.approx(s.EB_grid[-1], rel=1e-6)
+    assert results["beam_energy_region_end"] == pytest.approx([s.EB_grid[-1]], rel=1e-6)
+    assert results["beam_power_entry"] == pytest.approx(280 * 10 / 1000)  # kV x mA -> kW
+    assert results["beam_current_backstop"] < 10  # Part of the beam is scraped off
+    assert results["neutron_scrape_fraction"] == pytest.approx(s.nscrape_tot, rel=1e-6)
+
+
+def test_text_files_pure_deuterium(tmp_path):
+    """With no tritium, the DT columns are all zero, the spectrum covers DD energies only and
+    the summary gives no mean DT neutron energy."""
+    make_source(T_frac=0.0).write_text_files(tmp_path)
+    energy = np.loadtxt(tmp_path / "energy_spectrum.txt")
+    assert np.all(energy[:, 3] == 0)
+    assert energy[-1, 1] < 4  # DD neutrons only
+    assert np.all(np.loadtxt(tmp_path / "axial_profile.txt")[:, 6] == 0)
+    with open(tmp_path / "summary.toml", "rb") as f:
+        results = tomllib.load(f)["results"]
+    assert results["yield_DT"] == 0 and "mean_neutron_energy_DT" not in results
 
 
 @pytest.mark.parametrize("T_frac, num_plots", [(0.0, 8), (0.5, 9)])
