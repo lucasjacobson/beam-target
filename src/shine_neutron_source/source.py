@@ -482,6 +482,7 @@ class ShineSource:
 
         self.calculate_beam_energy()
         self.calculate_scraping()
+        self.calculate_beam_power()
         self.calculate_ddxs()
         self.bin_neutrons()
 
@@ -721,6 +722,34 @@ class ShineSource:
         self.radius_mids_out = np.sqrt(condense(rsq_mids))
         self.scrape_mids_out = condense(self.scrape_mids)
         self.current_mids_out = condense(self.current_mids)
+
+    def calculate_beam_power(self):
+        """Work out where the beam power goes: into the gas, onto the wall or to the backstop.
+
+        Beam power is beam energy times current (keV x mA = W). Along each bin, the beam
+        still in it deposits the energy it loses in the gas (current x energy loss), and the
+        beam scraped off hits the wall carrying its energy there (energy x current lost). Both
+        use the bin averages of the other quantity, which makes the three parts add up to the
+        entry power exactly. The power reaching the backstop is the remaining current times
+        the final beam energy.
+
+        Sets self.gas_power_mids and self.wall_power_mids [kW] per bin on the internal and
+        output meshes (output bins are sums), and the totals self.gas_power,
+        self.wall_power and self.backstop_power [kW].
+        """
+        beam_energy_mids = (self.beam_energy_grid[:-1] + self.beam_energy_grid[1:]) / 2
+        self.gas_power_mids = self.current_mids * -np.diff(self.beam_energy_grid) / 1000
+        self.wall_power_mids = beam_energy_mids * -np.diff(self.current_grid) / 1000
+        self.gas_power_mids_out = np.add.reduceat(self.gas_power_mids, self.out_grid_inds[:-1])
+        self.wall_power_mids_out = np.add.reduceat(self.wall_power_mids, self.out_grid_inds[:-1])
+        self.gas_power = np.sum(self.gas_power_mids)
+        self.wall_power = np.sum(self.wall_power_mids)
+        self.backstop_power = self.beam_energy_grid[-1] * self.current_grid[-1] / 1000
+        logger.debug(
+            f"{self.name}: beam power {self.voltage * self.current / 1000:.4g} kW: "
+            f"{self.gas_power:.4g} kW into the gas, {self.wall_power:.4g} kW onto the wall, "
+            f"{self.backstop_power:.4g} kW to the backstop"
+        )
 
     def calculate_ddxs(self):
         """Calculate lab-frame cross sections and neutron energies.
@@ -1218,7 +1247,9 @@ class ShineSource:
             ("beam_radius_backstop", self.radius_grid[-1], "cm, beam edge; capped at the wall"),
             ("beam_current_backstop", self.current_grid[-1], "mA, after scraping"),
             ("beam_power_entry", self.voltage * self.current / 1000, "kW"),
-            ("beam_power_backstop", self.beam_energy_grid[-1] * self.current_grid[-1] / 1000, "kW"),
+            ("beam_power_gas", self.gas_power, "kW, deposited in the gas"),
+            ("beam_power_wall", self.wall_power, "kW, carried onto the wall by scraping"),
+            ("beam_power_backstop", self.backstop_power, "kW"),
             ("neutron_scrape_fraction", self.neutron_scrape_fraction, "neutrons lost to scraping"),
         ]
         return results
@@ -1260,7 +1291,8 @@ class ShineSource:
         - summary.toml: key inputs and results (see get_summary; run_info adds entries to
           its [run] section).
         - axial_profile.txt: neutrons per output position bin, integrated over angle and
-          energy, with the beam energy, radius and scraped fraction.
+          energy, with the beam energy, radius and scraped fraction, and the beam power
+          deposited in the gas and carried onto the wall in each bin.
         - energy_spectrum.txt: neutrons per energy bin, integrated over position and angle.
         - angular_distribution.txt: neutrons per emission-angle bin (angle from the beam
           direction), integrated over position and energy, also per steradian.
@@ -1294,6 +1326,8 @@ class ShineSource:
                 "DD neutrons [n/s]",
                 "DT neutrons [n/s]",
                 "total neutrons [n/s]",
+                "beam power deposited in the gas over the bin [kW]",
+                "beam power carried onto the wall by scraping over the bin [kW]",
             ],
             [
                 self.x_grid_out[:-1],
@@ -1304,6 +1338,8 @@ class ShineSource:
                 axial["DD"],
                 axial["DT"],
                 axial["DD"] + axial["DT"],
+                self.gas_power_mids_out,
+                self.wall_power_mids_out,
             ],
         )
 
