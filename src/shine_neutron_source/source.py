@@ -67,7 +67,7 @@ STOPPING_POWERS = {
 }
 
 # Decimal places for the beam radii in the SDEF card [cm]
-SDEF_RADIUS_DECIMALS = 4
+SDEF_RADIUS_DECIMALS = 5
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
 HDF5_FORMAT_VERSION = 2
