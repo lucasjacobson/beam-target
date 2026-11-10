@@ -32,6 +32,7 @@ Naming conventions used throughout:
 import datetime
 import importlib.metadata
 import os
+import re
 import subprocess
 import textwrap
 import time
@@ -48,6 +49,13 @@ from matplotlib import ticker as mticker
 PACKAGE_NAME = "shine-neutron-source"
 CODE_DIR = os.path.dirname(os.path.realpath(__file__))
 DEFAULT_DATA_DIR = os.path.join(CODE_DIR, "data")
+# DROSG-2000 cross-section file for each reaction (in data/)
+DROSG_FILES = {"DD": "d2hags.koe", "DT": "d3hags.koe"}
+
+# Highest allowed beam voltage [kV]. The DROSG Legendre tables in data/ end at 40 MeV; the
+# rows above that are not angular distributions (see data/README.md).
+MAX_VOLTAGE = 40000.0
+
 # Repository root when running from a source checkout (src/shine_neutron_source/ -> root)
 REPO_DIR = os.path.normcase(os.path.dirname(os.path.dirname(CODE_DIR)))
 
@@ -101,6 +109,70 @@ def get_atom_density(pressure, temperature):
     mdens = P_Pa / (kB * T_K) / 1e6  # Molecule density [1/cm^3]
     adens = mdens * 2  # Atom density [1/cm^3] (D2, DT and T2 are diatomic)
     return adens
+
+
+_FORTRAN_EXPONENT = re.compile(r"^([+-]?(?:\d+\.?\d*|\.\d+))([+-]\d+)$")
+
+
+def _fortran_float(field):
+    """Convert one Fortran F-format field read with BLANK='NULL' to a float.
+
+    Spaces anywhere in the field are ignored, a blank field is 0, and an exponent may be
+    written without the "e" (8.619-4 = 8.619e-4).
+    """
+    field = field.replace(" ", "")
+    if not field:
+        return 0.0
+    m = _FORTRAN_EXPONENT.match(field)
+    if m:
+        return float(f"{m.group(1)}e{m.group(2)}")
+    return float(field)
+
+
+def read_drosg_koe(fname):
+    """Read the Legendre table of a DROSG-2000 cross-section file (*.KOE).
+
+    Follows how DROSG-2000 itself reads these files (FORMAT(10f8.0) with BLANK='NULL' in
+    LEGINT.f95): every line is ten 8-character fields, spaces inside a field are ignored and
+    blank fields are zero. The first line holds EMIN, EMAX, EMINL and EMAXL [MeV]; EMAXL is the
+    highest energy of the Legendre table. Each record is then two lines (20 values): incident
+    deuteron energy [MeV], the centre-of-mass differential cross section at 0 degrees [mb/sr]
+    and 18 Legendre coefficients, normalised to sum to 1. Reading stops at the record at
+    EMAXL; the records above it are single-angle data, not Legendre coefficients, and are not
+    used (see data/README.md).
+
+    Returns (E [MeV], total [mb/sr], coeffs) as arrays; coeffs has 18 columns. Raises
+    ValueError if the energies do not increase, a record's coefficients do not sum to 1 within
+    0.001 (the tolerance DROSG-2000 uses) or the file ends before EMAXL.
+    """
+    width, per_line = 8, 10
+    with open(fname, "r", encoding="ascii") as f:
+        lines = [line.rstrip("\r\n") for line in f]
+
+    def fields(line):
+        line = line.ljust(width * per_line)
+        return [_fortran_float(line[i * width : (i + 1) * width]) for i in range(per_line)]
+
+    E_maxl = fields(lines[0])[3]
+    records = []
+    for i in range(1, len(lines), 2):
+        values = fields(lines[i]) + fields(lines[i + 1] if i + 1 < len(lines) else "")
+        energy, total, coeffs = values[0], values[1], values[2:]
+        if records and energy <= records[-1][0]:
+            raise ValueError(f"{fname}: energy {energy} MeV (line {i + 1}) does not increase")
+        if abs(sum(coeffs) - 1) > 1e-3:
+            raise ValueError(
+                f"{fname}: Legendre coefficients at {energy} MeV (line {i + 1}) sum to "
+                f"{sum(coeffs):.5f}, not 1"
+            )
+        records.append([energy, total] + coeffs)
+        if energy >= E_maxl:
+            break
+    else:
+        raise ValueError(f"{fname}: no record at EMAXL = {E_maxl} MeV")
+
+    data = np.array(records)
+    return data[:, 0], data[:, 1], data[:, 2:]
 
 
 def get_package_version():
@@ -178,7 +250,8 @@ class ShineSource:
     Args:
         name: Case name, used in output file names and titles.
         T_frac: Atom fraction of tritium in the gas (0 = pure D, 1 = pure T).
-        voltage: Beam voltage [kV]. The beam starts with this energy in keV.
+        voltage: Beam voltage [kV]. The beam starts with this energy in keV. At most
+            MAX_VOLTAGE (40 MeV), the upper limit of the Legendre cross-section data.
         current: Beam current [mA].
         pressure_list: Gas pressure in each region [torr].
         temperature_list: Gas temperature in each region [C].
@@ -194,7 +267,7 @@ class ShineSource:
         angle_int_C: Emission angle interval of the output mesh [deg]. Must divide 180
             and be a multiple of angle_int. 180 gives an isotropic source.
         EN_int: Neutron energy interval of the output mesh [MeV].
-        data_dir: Directory holding SP_DT.txt, xs_DD.csv and xs_DT.csv. Defaults to the
+        data_dir: Directory holding SP_DT.txt, d2hags.koe and d3hags.koe. Defaults to the
             data directory next to this file.
         verbose: Print progress and summary values.
     """
@@ -295,7 +368,11 @@ class ShineSource:
                 f"{attr} has {len(getattr(self, attr))} entries, expected {self.num_regions}",
             )
         require(0 <= self.T_frac <= 1, "T_frac must be between 0 and 1")
-        require(0 < self.voltage <= 100000, "voltage must be between 0 and 100000 kV")
+        require(
+            0 < self.voltage <= MAX_VOLTAGE,
+            f"voltage must be between 0 and {MAX_VOLTAGE:g} kV (the upper limit of the "
+            "Legendre cross-section data, see data/README.md)",
+        )
         require(self.current > 0, "current must be positive")
         require(np.all(self.pressure_list > 0), "pressures must be positive")
         require(np.all(self.temperature_list > -273.15), "temperatures must be above 0 K")
@@ -386,24 +463,21 @@ class ShineSource:
         self.sp_data = {"DT": {"E": np.array(E_vals), "dEdx": np.array(dEdx_vals)}}
 
     def read_cross_sections(self):
-        """Read the DD and DT cross sections from xs_DD.csv and xs_DT.csv.
+        """Read the DD and DT cross sections from the DROSG-2000 files (see read_drosg_koe).
 
-        Each row gives the deuteron energy [MeV], the centre-of-mass differential cross
-        section at 0 degrees [mb/sr] and Legendre coefficients C1, C2, ... of the angular
-        distribution, normalised so that sum(C_l) = 1:
+        The centre-of-mass differential cross section is
 
-            dsigma/dOmega_cm(E, mu) = Total(E) * sum_l C_(l+1)(E) * P_l(mu)
+            dsigma/dOmega_cm(E, mu) = total(E) * sum_l coeffs[l](E) * P_l(mu)
 
         Stores self.xs_data[rxn] with "E" [keV], "total" [b/sr] and "coeffs".
         """
         self.xs_data = {}
         for rxn in REACTIONS:
-            fname = os.path.join(self.data_dir, f"xs_{rxn}.csv")
-            data = np.loadtxt(fname, delimiter=",", skiprows=1, ndmin=2)
+            E, total, coeffs = read_drosg_koe(os.path.join(self.data_dir, DROSG_FILES[rxn]))
             self.xs_data[rxn] = {
-                "E": data[:, 0] * 1000,  # MeV -> keV
-                "total": data[:, 1] / 1000,  # mb/sr -> b/sr
-                "coeffs": data[:, 2:],
+                "E": E * 1000,  # MeV -> keV
+                "total": total / 1000,  # mb/sr -> b/sr
+                "coeffs": coeffs,
             }
 
     def calculate_energy_grid(self):
