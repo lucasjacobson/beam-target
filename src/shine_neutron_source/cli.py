@@ -222,7 +222,10 @@ def run_case(name, settings, output_dir="output"):
     source.write_hdf5(os.path.join(case_dir, "source.h5"))
     source.write_mcnp_sdef(os.path.join(case_dir, "source.sdef"), settings["direction"])
     source.make_plots(os.path.join(case_dir, "plots"))
-    logger.info(f"{name}: {source.nyield_tot:.3e} n/s in {time.time() - t0:.1f} s -> {case_dir}")
+    logger.info(
+        f"{name}: {source.nyield_tot:.3e} n/s in {time.time() - t0:.1f} s "
+        f"-> {os.path.join(case_dir, '')}"  # Trailing separator: a directory
+    )
     return source
 
 
@@ -292,7 +295,7 @@ def main(argv=None):
     jobs = min(args.jobs, len(cases))
     logger.info(
         f"Running {len(cases)} case(s) from {args.input} with {jobs} process(es); "
-        f"results in {args.output_dir}"
+        f"results in {os.path.join(args.output_dir, '')}"  # Trailing separator: a directory
     )
     if jobs > 1:
         work = [(name, s, args.output_dir) for name, s in cases.items()]
