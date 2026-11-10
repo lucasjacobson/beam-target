@@ -115,7 +115,7 @@ def _save_figure(fname):
     plt.savefig(fname)
 
 
-class SHINE_Source:
+class ShineSource:
     """Neutron source term for a deuteron beam in a D/T gas target.
 
     The whole calculation runs when the object is created; afterwards use write_hdf5(),

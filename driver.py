@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from shine_neutron_source import SHINE_Source
+from shine_neutron_source import ShineSource
 
 # Mesh resolution used for every case. Memory use scales with
 # (total internal position intervals) x (180 / ANGLE_INT). At these settings the peak is
@@ -79,7 +79,7 @@ def run_case(name, case, verbose=False):
         num_x_ints_list = [NUM_X_INTS]
         num_x_ints_list_C = [NUM_X_INTS_C]
 
-    source = SHINE_Source(
+    source = ShineSource(
         name=name,
         T_frac=case.T_frac,
         voltage=case.voltage,
