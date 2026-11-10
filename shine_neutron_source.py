@@ -355,7 +355,7 @@ class SHINE_Source:
             cosine_cms_mids = np.cos(lab_mids + np.arcsin(gamma[:, None] * np.sin(lab_mids)))
 
             # Pre-calculate Legendre polynomials
-            self.num_leg = 7
+            self.num_leg = self.xs_data[rxn]["coeffs"].shape[1]
             legendre_ = [legendre(x) for x in range(self.num_leg)]
 
             # Calculate double-differential cross sections [b/sr]
