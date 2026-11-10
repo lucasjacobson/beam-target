@@ -15,7 +15,8 @@
 # [defaults] and a case together give too many, the ones the case sets itself are used.
 #
 # A case can put gas regions in front of the target chamber (for example differential-
-# pumping stages) by naming an [upstream.<name>] table; see [upstream.stages] below.
+# pumping stages) by naming an [upstream.<name>] table; see [upstream.stages] below. If
+# [defaults] names one, a case can remove it with upstream = false.
 
 [defaults]
 # Beam and target

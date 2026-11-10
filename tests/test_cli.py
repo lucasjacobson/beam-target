@@ -126,6 +126,38 @@ stopping_power = "icru49"
     assert cases["b"]["source"]["stopping_power"] == "icru49"
 
 
+def test_upstream_false_overrides_defaults(tmp_path):
+    """upstream = false in a case removes the upstream stages set in [defaults]."""
+    path = write_input(
+        tmp_path,
+        BASE
+        + """upstream = "stages"
+
+[upstream.stages]
+pressure = [1e-3]
+length = [10.0]
+
+[cases.with_stages]
+pressure = 5.0
+
+[cases.without]
+pressure = 5.0
+upstream = false
+""",
+    )
+    cases = load_input(path)
+    assert cases["with_stages"]["source"]["pressure"] == [1e-3, 5.0]
+    assert cases["without"]["source"]["pressure"] == [5.0]
+    assert cases["without"]["source"]["length"] == [50.0]
+
+
+@pytest.mark.parametrize("value", ["true", "3"])
+def test_upstream_invalid_value(tmp_path, value):
+    path = write_input(tmp_path, BASE + f"\n[cases.a]\npressure = 5.0\nupstream = {value}\n")
+    with pytest.raises(InputError, match="upstream must be the name of"):
+        load_input(path)
+
+
 def test_upstream_stages(tmp_path):
     path = write_input(
         tmp_path,

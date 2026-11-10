@@ -54,7 +54,9 @@ BEAM_SETTINGS = {
 # Optional case settings and their defaults
 OPTIONAL_CASE_SETTINGS = {
     "direction": "-z",  # MCNP SDEF beam direction, see SDEF_DIRECTIONS
-    "upstream": None,  # Name of an [upstream.<name>] table to put before the target chamber
+    # Name of an [upstream.<name>] table to put before the target chamber; false for none (to
+    # override one set in [defaults])
+    "upstream": None,
     "stopping_power": "srim",  # Stopping-power set, see STOPPING_POWERS
     "entry_position": [0.0, 0.0, 0.0],  # cm, where the beam enters (MCNP coordinates)
 }
@@ -227,7 +229,12 @@ def load_input(path):
 
         # Gas regions: upstream stages (if any), then the target chamber
         up = {key: [] for key in UPSTREAM_SETTINGS}
-        if s["upstream"] is not None:
+        if s["upstream"] is not None and s["upstream"] is not False:
+            if not isinstance(s["upstream"], str):
+                raise InputError(
+                    f"{where}: upstream must be the name of an [upstream.<name>] table, or "
+                    f"false for none; got {s['upstream']!r}"
+                )
             if s["upstream"] not in upstreams:
                 raise InputError(f"{where}: no [upstream.{s['upstream']}] table")
             up = upstreams[s["upstream"]]
