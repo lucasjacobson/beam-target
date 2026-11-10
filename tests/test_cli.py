@@ -1,6 +1,7 @@
 """Input files (load_input) and the command-line interface (main)."""
 
 import os
+import re
 import tomllib
 
 import h5py
@@ -168,7 +169,7 @@ def test_main_runs_cases(tmp_path):
         assert run["input_file"] == str(path)
         assert run["sdef_direction"] == "-z"
         assert run["sdef_entry_position"] == [0.0, 0.0, 0.0]  # Default
-        assert "c input_file = " in (case_dir / "source.sdef").read_text()
+        assert re.search(r"^c input_file +=", (case_dir / "source.sdef").read_text(), re.M)
         with h5py.File(case_dir / "source.h5") as f:
             assert f.attrs["name"] == case
             assert f.attrs["created"] == run["created"]  # One creation time for every output

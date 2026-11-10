@@ -62,6 +62,9 @@ STOPPING_POWERS = {
     "icru49": "ICRU 49 electronic (protons in H2 gas, same velocity) + SRIM nuclear",
 }
 
+# Decimal places for the beam radii in the SDEF card [cm]
+SDEF_RADIUS_DECIMALS = 4
+
 # Version of the HDF5 output layout; increase it whenever the layout changes
 HDF5_FORMAT_VERSION = 1
 
@@ -345,13 +348,26 @@ def _is_multiple(a, b, rtol=1e-9):
 
 
 def _format_values(values, fmt, per_line, indent="\n       "):
-    """Format values as an MCNP data list, wrapping after every per_line entries."""
+    """Format values as an MCNP data list, wrapping after every per_line entries. fmt is a
+    format specification or a function that returns the text for one value."""
     s = ""
     for i, x in enumerate(values):
         if i > 0 and i % per_line == 0:
             s += indent
-        s += " " + format(x, fmt)
+        s += " " + (fmt(x) if callable(fmt) else format(x, fmt))
     return s
+
+
+def _clean_float_text(x):
+    """Return a float as Python stores it (shortest exact text), without floating-point
+    artefacts such as 131.90200000000002 from adding up lengths."""
+    return repr(float(f"{x:.12g}"))
+
+
+def _cosine_text(x):
+    """Return a cosine with 15 decimal places in a fixed width of 18 characters, so columns line
+    up; values within 1e-12 of zero (such as cos(90 deg), 6.1e-17 in floating point) are 0."""
+    return f"{0.0 if abs(x) < 1e-12 else float(x):18.15f}"
 
 
 def _save_figure(fname):
@@ -978,6 +994,12 @@ class ShineSource:
         else:
             s += "c     - Neutron energy depends on emission angle but not on position along the\n"
             s += "c       beam: the drop in neutron energy as the beam slows is averaged out.\n"
+            s += "c       This is a limitation of MCNP: an SDEF distribution can depend on only\n"
+            s += "c       one other variable, so energy depends on direction (ERG = FDIR) and\n"
+            s += "c       cannot also depend on position along the beam.\n"
+            s += "c     - The angular distribution is also averaged over position along the\n"
+            s += "c       beam, again because of MCNP: making direction depend on position\n"
+            s += "c       (DIR = FEXT) is not accepted together with ERG = FDIR.\n"
         s += "c\n"
         s += dashed_line
 
@@ -1004,14 +1026,12 @@ class ShineSource:
             nvals = nvals[::-1]
             Lvals = Lvals[::-1]
         si1 = "0"
-        x = 0.0
-        for n, L in zip(nvals, Lvals):
-            x += L
+        for n, x in zip(nvals, np.cumsum(Lvals)):  # x: position of each region's far end
             if n == 2:
                 si1 += " i"
             elif n > 2:
                 si1 += f" {n - 1}i"
-            si1 += f" {x}"
+            si1 += f" {_clean_float_text(x)}"
         si1 = textwrap.fill(si1, width=72).replace("\n", "\n        ")
         s += "c\n"
         s += "  sc1   Extent distribution\n"
@@ -1025,12 +1045,13 @@ class ShineSource:
             dir_vals = np.sum(self.neutrons["DD"], (0, 2)) + np.sum(self.neutrons["DT"], (0, 2))
             s += "c\n"
             s += "  sc2   Angular distribution\n"
-            s += "  si2  " + _format_values(self.cosine_grid_C[::-1], "11.8f", 6) + "\n"
+            # Three cosines per line keeps the lines within 80 characters
+            s += "  si2  " + _format_values(self.cosine_grid_C[::-1], _cosine_text, 3) + "\n"
             s += "  sp2  " + _format_values(np.append(0, dir_vals[::-1]), "11.5e", 6) + "\n"
             s += "c\n"
             s += dashed_line
 
-        # Radial distribution: uniform in area out to the RMS beam radius of each interval
+        # Radial distribution: uniform in area out to the beam edge radius of each interval
         s += "c\n"
         s += "  sc3   Radial distribution\n"
         if divergent:
@@ -1039,12 +1060,12 @@ class ShineSource:
             s += "  ds3 S" + _format_values(101 + np.arange(len(rmids)), "3d", 18) + "\n"
             s += "c\n"
             for i, (r, scraped) in enumerate(zip(rmids, smids)):
-                s += f"  si{101 + i:<3d} 0 {r:10.8f}"
+                s += f"  si{101 + i:<3d} 0 {r:.{SDEF_RADIUS_DECIMALS}f}"
                 if scraped > 0:
-                    s += f"  $ ({scraped * 100:8.5f}% scraped)"
+                    s += f"  $ ({scraped * 100:.2f}% scraped)"
                 s += "\n"
         else:
-            s += f"  si3   0 {self.start_radius}\n"
+            s += f"  si3   0 {self.start_radius:.{SDEF_RADIUS_DECIMALS}f}\n"
         s += "c\n"
         s += dashed_line
 
@@ -1062,12 +1083,14 @@ class ShineSource:
             s += "  ds4 S" + _format_values(sids, "3d", 18) + "\n"
             s += "c\n"
             for i, sid in enumerate(sids):
-                # Distribution i covers angle bin i counted from 180 degrees, matching si2
-                spectra = [np.sum(self.neutrons[rxn][:, -i - 1, :], 0) for rxn in ["DD", "DT"]]
+                # Distribution i covers angle bin i counted from 180 degrees, matching si2; k is
+                # that bin's index in angle_grid_C, which runs from 0 degrees
+                k = self.num_a_ints_C - 1 - i
+                spectra = [np.sum(self.neutrons[rxn][:, k, :], 0) for rxn in ["DD", "DT"]]
                 si, sp = self._sdef_energy_bins(spectra, has_DD, has_DT, trim=True)
                 s += (
                     f"  sc{sid:<3d} Energy distribution "
-                    f"({self.angle_grid_C[i]:.12g} - {self.angle_grid_C[i + 1]:.12g} degrees)\n"
+                    f"({self.angle_grid_C[k]:.12g} - {self.angle_grid_C[k + 1]:.12g} degrees)\n"
                 )
                 s += f"  si{sid:<3d}{si}\n"
                 s += f"  sp{sid:<3d}" + _format_values(sp, ".5e", 6) + "\n"
@@ -1170,7 +1193,7 @@ class ShineSource:
             ("beam_current_backstop", self.current_grid[-1], "mA, after scraping"),
             ("beam_power_entry", self.voltage * self.current / 1000, "kW"),
             ("beam_power_backstop", self.EB_grid[-1] * self.current_grid[-1] / 1000, "kW"),
-            ("neutron_scrape_fraction", self.nscrape_tot, "fraction of neutrons lost to scraping"),
+            ("neutron_scrape_fraction", self.nscrape_tot, "neutrons lost to scraping"),
         ]
         return results
 
@@ -1181,26 +1204,28 @@ class ShineSource:
         as the input file and SDEF direction), [inputs] (the ShineSource arguments, see
         get_inputs; lists have one value per gas region in beam order) and [results] (see
         get_results). Units are given in comments. title adds a first comment line saying what
-        the file is.
+        the file is. The "=" signs are aligned across all sections, and so are the comments
+        (except after values too long for the comment column).
         """
-
-        def line(name, value, comment=""):
-            text = f"{name} = {_toml_value(value)}"
-            return f"{text:<40} # {comment}\n" if comment else text + "\n"
+        sections = {
+            "run": [
+                ("name", self.name, ""),
+                ("code_version", get_code_version(), ""),
+                ("created", self.created, ""),  # ISO 8601 with "+00:00": UTC
+            ]
+            + [(name, value, "") for name, value in (run_info or {}).items()],
+            "inputs": self.get_inputs(),
+            "results": self.get_results(),
+        }
+        key_width = max(len(name) for entries in sections.values() for name, _, _ in entries)
+        comment_column = key_width + 19  # Room for " = " and a 16-character value
 
         s = "# Neutron source summary (TOML; read it in Python with tomllib)\n\n" if title else ""
-        s += "[run]\n"
-        s += line("name", self.name)
-        s += line("code_version", get_code_version())
-        s += line("created", self.created, "UTC")
-        for name, value in (run_info or {}).items():
-            s += line(name, value)
-        s += "\n[inputs]\n"
-        for name, value, units in self.get_inputs():
-            s += line(name, value, units)
-        s += "\n[results]\n"
-        for name, value, units in self.get_results():
-            s += line(name, value, units)
+        for i, (section, entries) in enumerate(sections.items()):
+            s += ("\n" if i else "") + f"[{section}]\n"
+            for name, value, comment in entries:
+                text = f"{name:<{key_width}} = {_toml_value(value)}"
+                s += f"{text:<{comment_column}} # {comment}\n" if comment else text + "\n"
         return s
 
     def write_text_files(self, directory, run_info=None):

@@ -1,5 +1,6 @@
 """Whole calculations with ShineSource: physics checks, input checks and outputs."""
 
+import re
 import tomllib
 
 import h5py
@@ -7,7 +8,7 @@ import numpy as np
 import pytest
 from conftest import make_source
 
-from shine_neutron_source.source import HDF5_FORMAT_VERSION, MAX_VOLTAGE
+from shine_neutron_source.source import HDF5_FORMAT_VERSION, MAX_VOLTAGE, SDEF_RADIUS_DECIMALS
 
 # --- Physics checks ------------------------------------------------------------------------
 
@@ -269,6 +270,84 @@ def test_isotropic_source_sdef():
     """angle_int_C = 180 gives an isotropic source: no direction distribution."""
     text = make_source(angle_int_C=180.0).get_mcnp_sdef()
     assert "dir = d2" not in text and "si2" not in text
+
+
+def _sdef_entries(text, card):
+    """Return the entries of an SDEF data card (e.g. "si2"), including continuation lines."""
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"  {card} "))
+    entries = lines[start].split()[1:]
+    for line in lines[start + 1 :]:
+        if not line.startswith("        "):
+            break
+        entries += line.split()
+    return entries
+
+
+def test_sdef_energy_labels_match_angles(mixed_source):
+    """Each energy distribution's comment names the angle bin its data are for: si2 runs from
+    180 to 0 degrees, so distribution 501 is 170-180 degrees and has the lowest energies."""
+    text = mixed_source.get_mcnp_sdef()
+    num = mixed_source.num_a_ints_C
+    assert "sc501 Energy distribution (170 - 180 degrees)" in text
+    assert f"sc{500 + num} Energy distribution (0 - 10 degrees)" in text
+    # Highest DT neutron energy in each distribution rises from backward to forward bins
+    top = [float(_sdef_entries(text, f"si{500 + i}")[-1]) for i in range(1, num + 1)]
+    assert all(b > a for a, b in zip(top, top[1:]))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {},
+        dict(angle_int_C=180.0),  # Isotropic
+        dict(T_frac=0.0),
+        dict(
+            pressure_list=[1e-6, 1e-4, 1e-3, 1e-2, 0.1, 5.0],
+            temperature_list=[25.0] * 6,
+            length_list=[12.345, 23.456, 34.567, 45.678, 56.789, 50.0],
+            divergence_list=[0.0] * 5 + [30.0],
+            num_x_ints_list=[10] * 5 + [40],
+            num_x_ints_list_C=[1] * 5 + [10],
+        ),
+    ],
+    ids=["mixed", "isotropic", "pure D", "six regions"],
+)
+def test_sdef_data_lines_within_80_columns(overrides):
+    """No input line extends past column 80, apart from comment lines ("c") and "$" comments."""
+    for line in make_source(**overrides).get_mcnp_sdef().splitlines():
+        if line == "c" or line.startswith("c "):
+            continue
+        assert len(line.split("$")[0].rstrip()) <= 80, line
+
+
+def test_sdef_number_formats(mixed_source):
+    text = mixed_source.get_mcnp_sdef()
+    # Cosines with 15 decimal places (cos 90 degrees written as 0), increasing for MCNP
+    entries = _sdef_entries(text, "si2")
+    assert all(re.fullmatch(r"-?\d\.\d{15}", v) for v in entries)
+    cosines = [float(v) for v in entries]
+    np.testing.assert_allclose(cosines, mixed_source.cosine_grid_C[::-1], rtol=0, atol=5e-16)
+    assert all(b > a for a, b in zip(cosines, cosines[1:]))
+    # Radii to SDEF_RADIUS_DECIMALS decimal places; scraped percentages to 2
+    radii = re.findall(r"^  si1\d\d +0 (\S+)", text, re.M)
+    assert radii and all(re.fullmatch(rf"\d+\.\d{{{SDEF_RADIUS_DECIMALS}}}", r) for r in radii)
+    scraped = re.findall(r"\$ \((\S+)% scraped\)", text)
+    assert scraped and all(re.fullmatch(r"\d+\.\d{2}", p) for p in scraped)
+
+
+def test_sdef_extent_without_float_artefacts():
+    """Region boundaries are written as stored, without artefacts from adding lengths
+    (0.1 + 0.2 is 0.30000000000000004 in floating point)."""
+    source = make_source(
+        pressure_list=[5.0, 5.0],
+        temperature_list=[25.0, 25.0],
+        length_list=[0.1, 0.2],
+        divergence_list=[30.0, 30.0],
+        num_x_ints_list=[2, 4],
+        num_x_ints_list_C=[1, 2],
+    )
+    assert _sdef_entries(source.get_mcnp_sdef("+z"), "si1") == ["0", "0.1", "i", "0.3"]
 
 
 def test_hdf5_file(mixed_source, tmp_path):
