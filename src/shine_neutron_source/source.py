@@ -9,7 +9,8 @@ divergence. The calculation:
    strikes the target wall (beam scraping).
 3. Evaluates the D(d,n)3He and T(d,n)4He double-differential cross sections at each
    position from tabulated Legendre data, transformed from the centre-of-mass frame to
-   the lab frame, and the neutron energy at each emission angle from two-body kinematics.
+   the lab frame, and the neutron energy at each emission angle, using relativistic
+   two-body kinematics.
 4. Tallies neutrons on a fine internal (position, angle) mesh and condenses them onto a
    coarser output (position, angle, energy) mesh.
 
@@ -112,6 +113,45 @@ SDEF_DIRECTIONS = {
     "-z": ("0 0 1", "0 0 -1", True),
     "+z": ("0 0 1", "0 0 1", False),
 }
+
+
+def two_body_kinematics(T1, cos_lab, m1, m2, m3, m4):
+    """Relativistic kinematics of the reaction 1 + 2 -> 3 + 4 with particle 2 at rest.
+
+    Args:
+        T1: Kinetic energy of the beam particle 1 in the lab [MeV].
+        cos_lab: Cosine of the lab emission angle of particle 3 (scalar or array).
+        m1, m2, m3, m4: Rest-mass energies [MeV].
+
+    Returns (T3, cos_cm, jacobian), each shaped like cos_lab:
+
+    - T3: kinetic energy of particle 3 in the lab [MeV].
+    - cos_cm: cosine of its emission angle in the centre-of-mass (CM) frame.
+    - jacobian: dOmega_cm / dOmega_lab = d(cos_cm) / d(cos_lab), which converts a CM
+      differential cross section to the lab frame.
+
+    The CM frame moves with velocity beta (units of c) and Lorentz factor gamma, and particle 3
+    has a fixed CM energy E3_cm. Its lab momentum p3 at each lab angle follows from
+    E3_cm = gamma (E3 - beta p3 cos_lab). This assumes particle 3 moves faster in the CM frame
+    than the CM frame moves in the lab, so each lab angle has one CM angle, which holds for
+    neutrons from these exothermic reactions.
+    """
+    E1 = T1 + m1
+    p1 = np.sqrt(E1**2 - m1**2)
+    E_tot = E1 + m2
+    sqrt_s = np.sqrt(m1**2 + m2**2 + 2 * E1 * m2)  # Total energy in the CM frame
+    beta, gamma = p1 / E_tot, E_tot / sqrt_s
+    E3_cm = (sqrt_s**2 + m3**2 - m4**2) / (2 * sqrt_s)
+    p3_cm = np.sqrt(E3_cm**2 - m3**2)
+
+    a = E3_cm / gamma
+    bc = beta * cos_lab
+    p3 = (a * bc + np.sqrt(a**2 - m3**2 * (1 - bc**2))) / (1 - bc**2)
+    E3 = np.sqrt(p3**2 + m3**2)
+    cos_cm = gamma * (p3 * cos_lab - beta * E3) / p3_cm
+    dp3_dcos = beta * p3 / (p3 / E3 - bc)
+    jacobian = gamma / p3_cm * (p3 + dp3_dcos * (cos_lab - beta * p3 / E3))
+    return E3 - m3, cos_cm, jacobian
 
 
 def get_atom_density(pressure, temperature):
@@ -638,28 +678,27 @@ class ShineSource:
 
         For each reaction, sets self.xs[rxn], the double-differential cross section in the
         lab frame [b/sr], and self.EN[rxn], the neutron energy [MeV], on the internal
-        (position, angle) mesh. Both use the beam energy at the interval midpoint.
+        (position, angle) mesh. Both use the beam energy at the interval midpoint and
+        relativistic kinematics (see two_body_kinematics).
         """
         self.xs = {}
         self.EN = {}
 
-        for rxn, (M1, M2, M3, M4, Q) in REACTIONS.items():
-            # gamma = (neutron speed of the CM frame) / (neutron speed in the CM frame).
-            # Converts lab angles to CM angles: theta_cm = theta_lab + asin(gamma sin theta_lab)
-            term1 = M1 * M3 * self.EB_mids / 1000
-            term2 = M4 * (M1 + M2) * (Q + self.EB_mids / 1000 * M2 / (M1 + M2))
-            gamma = np.sqrt(term1 / term2)
-            lab_mids = np.radians(self.angle_mids[None, :])
-            cosine_cms_mids = np.cos(lab_mids + np.arcsin(gamma[:, None] * np.sin(lab_mids)))
-
+        for rxn, (M1, M2, M3, M4, _Q) in REACTIONS.items():
             # Legendre polynomials for every coefficient in the data file
             num_leg = self.xs_data[rxn]["coeffs"].shape[1]
             legendre_ = [legendre(x) for x in range(num_leg)]
 
             # Double-differential cross sections [b/sr]: the CM angular distribution times
-            # the CM-to-lab solid angle factor
+            # the CM-to-lab solid angle factor; and neutron energies [MeV]. Both come from
+            # relativistic two-body kinematics at each lab angle.
             self.xs[rxn] = np.zeros((self.num_x_ints_total, self.num_a_ints))
+            self.EN[rxn] = np.zeros((self.num_x_ints_total, self.num_a_ints))
             for i, E in enumerate(self.EB_mids):
+                EN, mu_cm, jacobian = two_body_kinematics(
+                    E / 1000, self.cosine_mids, M1, M2, M3, M4
+                )
+                self.EN[rxn][i, :] = EN
                 total = np.interp(
                     E, self.xs_data[rxn]["E"], self.xs_data[rxn]["total"], left=0, right=np.nan
                 )
@@ -673,20 +712,8 @@ class ShineSource:
                         left=0,
                         right=np.nan,
                     )
-                    L_vals[:, j] = legendre_[j](cosine_cms_mids[i, :])
-                # Jacobian dOmega_cm / dOmega_lab, evaluated at the CM angle
-                mu_cm = cosine_cms_mids[i, :]
-                factors = (1 + 2 * gamma[i] * mu_cm + gamma[i] ** 2) ** 1.5 / (1 + gamma[i] * mu_cm)
-                self.xs[rxn][i, :] = total * np.sum(coeffs[None, :] * L_vals, 1) * factors
-
-            # Neutron energy from non-relativistic two-body kinematics [MeV]
-            self.EN[rxn] = np.zeros((self.num_x_ints_total, self.num_a_ints))
-            for i, E_D in enumerate(self.EB_mids / 1000):
-                term1 = M1 * M3 * E_D
-                term2 = (M3 + M4) * (M4 * Q + (M4 - M1) * E_D)
-                term3 = np.sqrt(term1) * self.cosine_mids
-                term4 = np.sqrt(term1 * self.cosine_mids**2 + term2)
-                self.EN[rxn][i, :] = ((term3 + term4) / (M3 + M4)) ** 2
+                    L_vals[:, j] = legendre_[j](mu_cm)
+                self.xs[rxn][i, :] = total * np.sum(coeffs[None, :] * L_vals, 1) * jacobian
 
     def bin_neutrons(self):
         """Tally neutrons onto the output (position, angle, energy) mesh.
