@@ -130,7 +130,7 @@ Electronic stopping per atom, deuterons in hydrogen gas:
 
 SRIM is 2–3.5 % lower than ICRU 49 where the beam enters the target. For the generic cases in
 `examples/generic.toml`, `"icru49"` gives neutron yields 1.4 % (pure tritium) to 2.2 % (pure deuterium) lower than
-`"srim"`, and a beam energy at the backstop of about 7.6–7.7 keV instead of 9.9–10 keV. The choice of
+`"srim"`, and a beam energy at the backstop of about 9.2–9.3 keV instead of 11.7–11.8 keV. The choice of
 stopping powers is therefore a systematic uncertainty of about 2 % on the yields.
 
 ![Stopping power of deuterons in tritium gas, SRIM vs ICRU 49](../../../docs/figures/stopping_power.png)
