@@ -7,7 +7,7 @@ import multiprocessing as mp
 from functools import partial
 import numpy as np
 
-from shine_source_gen import SHINE_Source
+from shine_neutron_source import SHINE_Source
 
 class Case():
     def __init__(self, T_frac, voltage, current, pressure, temperature, length,
