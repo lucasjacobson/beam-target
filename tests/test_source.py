@@ -59,6 +59,39 @@ def test_beam_slows_down(mixed_source):
     assert 150 < EB[-1] < 250  # A thin target: the beam passes through
 
 
+@pytest.mark.parametrize("stopping_power", ["srim", "icru49"])
+@pytest.mark.parametrize("T_frac", [0.0, 1.0])
+def test_beam_stops_inside_target(T_frac, stopping_power):
+    """When the beam stops well before the end of the target, everything beyond the stopping
+    point is exactly zero: the beam energy, the cross sections and the neutrons. There must be
+    no low-level tail of neutrons all the way to the backstop."""
+    source = make_source(
+        T_frac=T_frac,
+        stopping_power=stopping_power,
+        pressure_list=[40.0],
+        length_list=[300.0],
+        num_x_ints_list=[600],
+        num_x_ints_list_C=[60],
+        max_radius=10.0,
+    )
+    EB = source.EB_grid
+    assert EB[-1] == 0, f"The beam never stops: it reaches the backstop with {EB[-1]} keV"
+    i_stop = np.flatnonzero(EB > 0)[-1]  # Last grid point the beam reaches with energy
+    x_stop = source.x_grid[i_stop + 1]
+    assert 15 < x_stop < 30  # Stops within the first tenth of the 300 cm target
+
+    rxn = "DT" if T_frac else "DD"
+    assert np.all(EB[i_stop + 1 :] == 0)
+    assert np.all(source.EB_mids[i_stop + 1 :] == 0)
+    assert np.all(source.xs[rxn][i_stop + 1 :] == 0)
+    neutrons_per_interval = source.neutrons[rxn].sum(axis=(1, 2))
+    beyond = source.x_grid_C[:-1] >= x_stop  # Output intervals entirely past the stop
+    assert beyond.sum() > 50
+    assert np.all(neutrons_per_interval[beyond] == 0)
+    assert source.nyield[rxn] > 0
+    assert source.EB_grid_C[-1] == 0  # Beam energy at the backstop
+
+
 def test_neutron_energies(mixed_source):
     """Neutron energies lie in the expected bands for a 280 keV beam."""
     for rxn, lo, hi in [("DD", 1.9, 3.3), ("DT", 12.9, 15.5)]:
