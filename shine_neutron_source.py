@@ -14,7 +14,8 @@ divergence. The calculation:
 4. Tallies neutrons on a fine internal (position, angle) mesh and condenses them onto a
    coarser output (position, angle, energy) mesh.
 
-The result can be written as an HDF5 file, as an MCNP SDEF source card, and as plots.
+The result can be written as an HDF5 file, as an MCNP SDEF source card, and as plots. The
+caller chooses every output path.
 
 Naming conventions used throughout:
 
@@ -26,7 +27,9 @@ Naming conventions used throughout:
 - ``EB`` is beam (deuteron) energy in keV; ``EN`` is neutron energy in MeV.
 """
 
+import datetime
 import os
+import subprocess
 import textwrap
 import time
 
@@ -39,7 +42,8 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt  # Must follow matplotlib.use
 from matplotlib import ticker as mticker
 
-DEFAULT_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+CODE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_DATA_DIR = os.path.join(CODE_DIR, "data")
 
 # Physical constants
 NA = 6.02214076e23  # Avogadro constant [1/mol]
@@ -91,6 +95,34 @@ def get_atom_density(pressure, temperature):
     mdens = P_Pa / (kB * T_K) / 1e6  # Molecule density [1/cm^3]
     adens = mdens * 2  # Atom density [1/cm^3] (D2, DT and T2 are diatomic)
     return adens
+
+
+def get_code_version():
+    """Return the git commit of this code, or "unknown" if it is not in a git repository.
+
+    "-dirty" is appended if tracked files (code or data) have uncommitted changes.
+    """
+    try:
+        git = ["git", "-C", CODE_DIR]
+        commit = subprocess.run(
+            git + ["rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        changes = subprocess.run(
+            git + ["status", "--porcelain", "--untracked-files=no"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return commit + ("-dirty" if changes else "")
+
+
+def _make_parent_dir(path):
+    """Create the directory that will contain path, if it does not exist."""
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
 
 
 def _is_multiple(a, b, rtol=1e-9):
@@ -558,10 +590,33 @@ class ShineSource:
             print(f"  {self.name:<16} : Total neutron yield = {self.nyield_tot:.5e} n/s")
             print(f"  {self.name:<16} : Scrape fraction     = {self.nscrape_tot * 100:.5f}%")
 
-    def write_hdf5(self, output_dir="hdf5"):
-        """Write the source on the output mesh to <output_dir>/<name>.h5.
+    def get_inputs(self):
+        """Return the input parameters as a list of (name, value, units)."""
+        return [
+            ("T_frac", self.T_frac, "fraction"),
+            ("voltage", self.voltage, "kV"),
+            ("current", self.current, "mA"),
+            ("pressure_list", self.pressure_list, "torr"),
+            ("temperature_list", self.temperature_list, "C"),
+            ("length_list", self.length_list, "cm"),
+            ("start_radius", self.start_radius, "cm"),
+            ("max_radius", self.max_radius, "cm"),
+            ("divergence_list", self.divergence_list, "mrad"),
+            ("num_x_ints_list", self.num_x_ints_list, ""),
+            ("num_x_ints_list_C", self.num_x_ints_list_C, ""),
+            ("angle_int", self.angle_int, "deg"),
+            ("angle_int_C", self.angle_int_C, "deg"),
+            ("EN_int", self.EN_int, "MeV"),
+        ]
 
-        Datasets (each has a "units" attribute):
+    def write_hdf5(self, path):
+        """Write the source on the output mesh to an HDF5 file at path.
+
+        File attributes record how the file was made: name (case name), code_version
+        (see get_code_version) and created (UTC time). The inputs group holds every input
+        parameter (see the class docstring), one dataset each.
+
+        Result datasets (each has a "units" attribute):
 
         - x_grid, EB_grid, radius_grid, scrape_grid, current_grid: position mesh and the
           beam energy, radius, scrape fraction and current at each position grid point.
@@ -571,8 +626,7 @@ class ShineSource:
           (position, angle, energy) cell, with shape
           (len(x_grid) - 1, len(angle_grid) - 1, len(EN_grid_<rxn>) - 1).
         """
-        os.makedirs(output_dir, exist_ok=True)
-        fname = os.path.join(output_dir, f"{self.name}.h5")
+        _make_parent_dir(path)
         datasets = [
             ("x_grid", self.x_grid_C, "cm"),
             ("EB_grid", self.EB_grid_C, "keV"),
@@ -585,7 +639,16 @@ class ShineSource:
             ("neutrons_DD", self.neutrons["DD"], "n/s"),
             ("neutrons_DT", self.neutrons["DT"], "n/s"),
         ]
-        with h5py.File(fname, "w") as hf:
+        with h5py.File(path, "w") as hf:
+            hf.attrs["name"] = self.name
+            hf.attrs["code_version"] = get_code_version()
+            hf.attrs["created"] = datetime.datetime.now(datetime.timezone.utc).isoformat(
+                timespec="seconds"
+            )
+            inputs = hf.create_group("inputs")
+            for key, value, units in self.get_inputs():
+                inputs.create_dataset(key, data=value)
+                inputs[key].attrs["units"] = units
             for key, data, units in datasets:
                 hf.create_dataset(key, data=data, compression="gzip")
                 hf[key].attrs["units"] = units
@@ -787,22 +850,24 @@ class ShineSource:
             sp = np.append(sp, np.append(0, spectrum[ind_min:ind_max]))
         return si, sp
 
-    def write_mcnp_sdef(self, direction="-z", output_dir="mcnp_sdef"):
-        """Write the MCNP SDEF card to <output_dir>/<name>_source.txt."""
-        os.makedirs(output_dir, exist_ok=True)
-        fname = os.path.join(output_dir, f"{self.name}_source.txt")
-        with open(fname, "w") as w:
+    def write_mcnp_sdef(self, path, direction="-z"):
+        """Write the MCNP SDEF card (see get_mcnp_sdef) to a text file at path."""
+        _make_parent_dir(path)
+        with open(path, "w") as w:
             w.write(self.get_mcnp_sdef(direction))
 
-    def make_plots(self, output_dir="images"):
-        """Write plots of the beam and neutron source to output_dir as PNG files."""
-        os.makedirs(output_dir, exist_ok=True)
-        self.plot_beam(output_dir)
-        self.plot_neutron_position(output_dir)
-        self.plot_neutron_angle(output_dir)
-        self.plot_neutron_energy(output_dir)
+    def make_plots(self, directory):
+        """Write plots of the beam and neutron source to directory as PNG files.
 
-    def plot_beam(self, output_dir="images"):
+        File names do not include the case name, so use a separate directory per case.
+        """
+        os.makedirs(directory, exist_ok=True)
+        self.plot_beam(directory)
+        self.plot_neutron_position(directory)
+        self.plot_neutron_angle(directory)
+        self.plot_neutron_energy(directory)
+
+    def plot_beam(self, directory):
         """Plot beam energy, current and power against position."""
         xvals = np.array(self.x_grid_C)
         yvals_erg = np.array(self.EB_grid_C)
@@ -836,10 +901,10 @@ class ShineSource:
             ax.grid()
             if len(lines) > 1:
                 ax.legend(loc="lower left")
-            _save_figure(os.path.join(output_dir, f"{self.name}_beam_{quantity}.png"))
+            _save_figure(os.path.join(directory, f"beam_{quantity}.png"))
             plt.close()
 
-    def plot_neutron_position(self, output_dir="images"):
+    def plot_neutron_position(self, directory):
         """Plot the neutron source per unit length against position (linear and log)."""
         xvals = np.array(self.x_grid_C)
         xvals = np.append(xvals, xvals[-1])
@@ -857,13 +922,13 @@ class ShineSource:
         ax.set_title(f"SHINE neutron source position distribution ({self.name})")
         ax.grid()
         ax.legend()
-        _save_figure(os.path.join(output_dir, f"{self.name}_neutron_position.png"))
+        _save_figure(os.path.join(directory, "neutron_position.png"))
 
         ax.set_yscale("log")
-        _save_figure(os.path.join(output_dir, f"{self.name}_neutron_position_log.png"))
+        _save_figure(os.path.join(directory, "neutron_position_log.png"))
         plt.close()
 
-    def plot_neutron_angle(self, output_dir="images"):
+    def plot_neutron_angle(self, directory):
         """Polar plot of the neutron source per unit solid angle, normalised to its mean."""
         # Mirror 0-180 degrees onto 180-360 degrees for a full polar plot
         xvals = self.angle_grid_C * np.pi / 180
@@ -881,10 +946,10 @@ class ShineSource:
         ax.plot(xvals, yvals)
         ax.set_rlabel_position(270)
         ax.set_title(f"SHINE neutron source angular distribution ({self.name})")
-        _save_figure(os.path.join(output_dir, f"{self.name}_neutron_angle.png"))
+        _save_figure(os.path.join(directory, "neutron_angle.png"))
         plt.close()
 
-    def plot_neutron_energy(self, output_dir="images"):
+    def plot_neutron_energy(self, directory):
         """Plot the neutron energy spectrum stacked by emission angle.
 
         Writes one plot each for DD and DT (when present) and one for the total. The axis
@@ -947,5 +1012,5 @@ class ShineSource:
             ax.set_title(f"SHINE {case} neutron source energy distribution ({self.name})")
             ax.grid()
             ax.legend(loc=lloc)
-            _save_figure(os.path.join(output_dir, f"{self.name}_neutron_energy_{case}.png"))
+            _save_figure(os.path.join(directory, f"neutron_energy_{case}.png"))
             plt.close()

@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """Generate neutron source terms for a set of SHINE beam-target cases.
 
-For each case in CASES this writes:
+For each case in CASES this writes, under the output directory (default: output):
 
-- hdf5/<case>.h5: the full source distribution
-- mcnp_sdef/<case>_source.txt: an MCNP SDEF source card
-- images/<case>_*.png: plots of the beam and neutron source
+- <case>/source.h5: the full source distribution, with the inputs and code version
+- <case>/source.sdef: an MCNP SDEF source card
+- <case>/plots/*.png: plots of the beam and neutron source
 
-Output directories are created in the current working directory.
-
-Usage: python driver.py [-j JOBS] [-v]
+Usage: python driver.py [-o OUTPUT_DIR] [-j JOBS] [-v]
 """
 
 import argparse
 import multiprocessing as mp
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -63,8 +62,9 @@ CASES = {  #          T_Frac Voltage Current   Pressure  Temp    Length    Radiu
 # fmt: on
 
 
-def run_case(name, case, verbose=False):
-    """Calculate the source for one case, write its outputs and return the source."""
+def run_case(name, case, output_dir="output", verbose=False):
+    """Calculate the source for one case, write its outputs to <output_dir>/<name>/ and
+    return the source."""
     if case.include_upstream:
         num_upstream = len(UPSTREAM_PRESSURES)
         pressure_list = UPSTREAM_PRESSURES + [case.pressure]
@@ -97,21 +97,27 @@ def run_case(name, case, verbose=False):
         EN_int=EN_INT,
         verbose=verbose,
     )
-    source.write_hdf5()
-    source.write_mcnp_sdef()
-    source.make_plots()
+    case_dir = os.path.join(output_dir, name)
+    source.write_hdf5(os.path.join(case_dir, "source.h5"))
+    source.write_mcnp_sdef(os.path.join(case_dir, "source.sdef"))
+    source.make_plots(os.path.join(case_dir, "plots"))
     return source
 
 
 def _run_case_in_worker(args):
     """Run a case in a worker process. Returns nothing, so the large source object is not
     copied back to the parent process."""
-    name, case, verbose = args
-    run_case(name, case, verbose)
+    run_case(*args)
 
 
 def get_args():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        default="output",
+        help="directory to write results to, one subdirectory per case (default: output)",
+    )
     parser.add_argument(
         "-j",
         "--jobs",
@@ -127,12 +133,12 @@ def main():
     args = get_args()
     jobs = min(args.jobs, len(CASES))
     if jobs > 1:
-        work = [(name, case, args.verbose) for name, case in CASES.items()]
+        work = [(name, case, args.output_dir, args.verbose) for name, case in CASES.items()]
         with mp.Pool(processes=jobs) as pool:
             pool.map(_run_case_in_worker, work)
     else:
         for name, case in CASES.items():
-            run_case(name, case, args.verbose)
+            run_case(name, case, args.output_dir, args.verbose)
 
 
 if __name__ == "__main__":
