@@ -32,6 +32,7 @@ Naming conventions used throughout:
 
 import datetime
 import importlib.metadata
+import logging
 import os
 import re
 import subprocess
@@ -48,6 +49,7 @@ from matplotlib import pyplot as plt  # Must follow matplotlib.use
 from matplotlib import ticker as mticker
 
 PACKAGE_NAME = "shine-neutron-source"
+logger = logging.getLogger(__name__)
 CODE_DIR = os.path.dirname(os.path.realpath(__file__))
 DEFAULT_DATA_DIR = os.path.join(CODE_DIR, "data")
 # DROSG-2000 cross-section file for each reaction (in data/)
@@ -346,7 +348,8 @@ class ShineSource:
     """Neutron source term for a deuteron beam in a D/T gas target.
 
     The whole calculation runs when the object is created; afterwards use write_hdf5(),
-    write_mcnp_sdef() and make_plots() to write the results.
+    write_mcnp_sdef() and make_plots() to write the results. Summary values are logged at
+    DEBUG level to the "shine_neutron_source" logger (silent unless logging is configured).
 
     Arguments with a ``_list`` name take one value per gas region, in the order the beam
     passes through them; a scalar is treated as a single region. The last region is the
@@ -374,7 +377,6 @@ class ShineSource:
         EN_int: Neutron energy interval of the output mesh [MeV].
         data_dir: Directory holding the data files (see data/README.md). Defaults to the
             data directory next to this file.
-        verbose: Print progress and summary values.
         stopping_power: Stopping-power set, one of STOPPING_POWERS: "srim" (default) or
             "icru49". See read_stopping_power.
     """
@@ -397,7 +399,6 @@ class ShineSource:
         angle_int_C,
         EN_int,
         data_dir=None,
-        verbose=False,
         stopping_power="srim",
     ):
         t0 = time.time()
@@ -419,7 +420,6 @@ class ShineSource:
         self.angle_int_C = float(angle_int_C)
         self.EN_int = float(EN_int)
         self.data_dir = DEFAULT_DATA_DIR if data_dir is None else str(data_dir)
-        self.verbose = bool(verbose)
         self.stopping_power = str(stopping_power)
 
         self.num_regions = len(self.pressure_list)
@@ -446,8 +446,7 @@ class ShineSource:
         self.calculate_ddxs()
         self.bin_neutrons()
 
-        if self.verbose:
-            print(f"  {self.name:<16} : Finished running in {time.time() - t0:.2f} seconds")
+        logger.debug(f"{self.name}: calculation took {time.time() - t0:.1f} s")
 
     def check_input(self):
         """Raise ValueError if any input parameter is inconsistent or out of range."""
@@ -630,8 +629,9 @@ class ShineSource:
         self.EB_mids = (self.EB_grid[:-1] + self.EB_grid[1:]) / 2
         self.EB_grid_C = np.array(self.EB_grid[self.inds_C])
 
-        if self.verbose:
-            print(f"  {self.name:<16} : End beam energy     = {self.EB_grid[-1]:.9f} keV")
+        logger.debug(
+            f"{self.name}: beam energy at the end of the target = {self.EB_grid[-1]:.3f} keV"
+        )
 
     def calculate_scraping(self, use_atan=False):
         """Grow the beam radius with divergence and work out how much is scraped.
@@ -772,8 +772,7 @@ class ShineSource:
             np.add.at(self.neutrons[rxn], (iC_all, jC_all, kC_all), vals_scr)
 
             self.nyield[rxn] = np.sum(self.neutrons[rxn])
-            if self.verbose:
-                print(f"  {self.name:<16} : {rxn} neutron yield    = {self.nyield[rxn]:.5e} n/s")
+            logger.debug(f"{self.name}: {rxn} neutron yield = {self.nyield[rxn]:.4e} n/s")
 
             if np.sum(vals_tot) == 0:
                 self.nscrape[rxn] = 0.0
@@ -784,9 +783,10 @@ class ShineSource:
         self.nscrape_tot = (
             self.nyield["DD"] * self.nscrape["DD"] + self.nyield["DT"] * self.nscrape["DT"]
         ) / self.nyield_tot
-        if self.verbose:
-            print(f"  {self.name:<16} : Total neutron yield = {self.nyield_tot:.5e} n/s")
-            print(f"  {self.name:<16} : Scrape fraction     = {self.nscrape_tot * 100:.5f}%")
+        logger.debug(
+            f"{self.name}: total neutron yield = {self.nyield_tot:.4e} n/s, "
+            f"{self.nscrape_tot * 100:.3f} % lost to beam scraping"
+        )
 
     def get_inputs(self):
         """Return the input parameters as a list of (name, value, units)."""

@@ -164,6 +164,27 @@ def test_main_list(tmp_path, capsys):
     assert capsys.readouterr().out.split() == ["mix", "pureD"]
 
 
+def test_main_default_messages(tmp_path, caplog):
+    """By default: a start line, one line per case and a closing line; no details."""
+    main([str(write_input(tmp_path, TWO_CASES)), "-o", str(tmp_path / "out"), "-j", "1"])
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages[0].startswith("Running 2 case(s)")
+    assert [m.split(":")[0] for m in messages[1:3]] == ["mix", "pureD"]
+    assert all(" n/s in " in m for m in messages[1:3])
+    assert messages[3].startswith("Done: 2 case(s)")
+    assert len(messages) == 4
+
+
+def test_main_verbose_messages(tmp_path, caplog):
+    """With -v: also each case's settings and detailed results."""
+    main([str(write_input(tmp_path, TWO_CASES)), "-o", str(tmp_path / "out"), "-j", "1", "-v"])
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "mix: starting: T_frac 0.5, 280 kV, 10 mA, 1 gas region(s), stopping power srim" in text
+    for detail in ["beam energy at the end of the target", "DT neutron yield", "total neutron"]:
+        assert f"mix: {detail}" in text
+    assert "% lost to beam scraping" in text
+
+
 @pytest.mark.parametrize(
     "args, message",
     [(["-c", "nope"], "no case(s) named nope"), (["--list"], "missing pressure")],

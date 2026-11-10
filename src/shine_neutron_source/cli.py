@@ -9,13 +9,17 @@ See load_input for the file format and examples/generic.toml for an example.
 """
 
 import argparse
+import logging
 import multiprocessing as mp
 import os
 import re
 import shutil
+import time
 import tomllib
 
 from .source import SDEF_DIRECTIONS, STOPPING_POWERS, ShineSource
+
+logger = logging.getLogger(__name__)
 
 # Case settings: name -> required type. Every case needs all of them, either directly or
 # from [defaults].
@@ -190,16 +194,35 @@ def load_input(path):
     return resolved
 
 
-def run_case(name, settings, output_dir="output", verbose=False):
+def setup_logging(verbose=False):
+    """Show this package's log messages on stderr: progress and one line per case, plus each
+    case's settings and detailed results if verbose. Safe to call more than once."""
+    package_logger = logging.getLogger("shine_neutron_source")
+    package_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    if not any(getattr(h, "_shine_cli", False) for h in package_logger.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        handler._shine_cli = True
+        package_logger.addHandler(handler)
+
+
+def run_case(name, settings, output_dir="output"):
     """Calculate one case from load_input() and write its outputs to <output_dir>/<name>/.
 
     Writes source.h5, source.sdef and plots/*.png, and returns the ShineSource.
     """
-    source = ShineSource(name=name, verbose=verbose, **settings["source"])
+    t0 = time.time()
+    s = settings["source"]
+    logger.debug(
+        f"{name}: starting: T_frac {s['T_frac']:g}, {s['voltage']:g} kV, {s['current']:g} mA, "
+        f"{len(s['pressure_list'])} gas region(s), stopping power {s['stopping_power']}"
+    )
+    source = ShineSource(name=name, **s)
     case_dir = os.path.join(output_dir, name)
     source.write_hdf5(os.path.join(case_dir, "source.h5"))
     source.write_mcnp_sdef(os.path.join(case_dir, "source.sdef"), settings["direction"])
     source.make_plots(os.path.join(case_dir, "plots"))
+    logger.info(f"{name}: {source.nyield_tot:.3e} n/s in {time.time() - t0:.1f} s -> {case_dir}")
     return source
 
 
@@ -237,7 +260,12 @@ def main(argv=None):
         default=mp.cpu_count(),
         help="number of cases to run in parallel (default: number of CPUs)",
     )
-    parser.add_argument("-v", "--verbose", action="store_true", help="verbose output")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="also show each case's settings and detailed results",
+    )
     parser.add_argument("--list", action="store_true", help="list the cases and exit")
     args = parser.parse_args(argv)
 
@@ -254,16 +282,27 @@ def main(argv=None):
             parser.exit(2, f"error: no case(s) named {', '.join(unknown)} in {args.input}\n")
         cases = {name: cases[name] for name in args.cases}
 
+    setup_logging(args.verbose)
+    t0 = time.time()
     for name in cases:
         case_dir = os.path.join(args.output_dir, name)
         os.makedirs(case_dir, exist_ok=True)
         shutil.copyfile(args.input, os.path.join(case_dir, "input.toml"))
 
     jobs = min(args.jobs, len(cases))
+    logger.info(
+        f"Running {len(cases)} case(s) from {args.input} with {jobs} process(es); "
+        f"results in {args.output_dir}"
+    )
     if jobs > 1:
-        work = [(name, s, args.output_dir, args.verbose) for name, s in cases.items()]
-        with mp.Pool(processes=jobs) as pool:
+        work = [(name, s, args.output_dir) for name, s in cases.items()]
+        # Each worker sets up logging; close() and join() let workers exit normally (the
+        # context manager alone would terminate them, which can lose their last output)
+        with mp.Pool(jobs, initializer=setup_logging, initargs=(args.verbose,)) as pool:
             pool.map(_run_case_in_worker, work)
+            pool.close()
+            pool.join()
     else:
         for name, s in cases.items():
-            run_case(name, s, args.output_dir, args.verbose)
+            run_case(name, s, args.output_dir)
+    logger.info(f"Done: {len(cases)} case(s) in {time.time() - t0:.1f} s")
