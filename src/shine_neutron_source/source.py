@@ -67,19 +67,23 @@ MAX_VOLTAGE = 40000.0
 # Repository root when running from a source checkout (src/shine_neutron_source/ -> root)
 REPO_DIR = os.path.normcase(os.path.dirname(os.path.dirname(CODE_DIR)))
 
-# Physical constants
+# Physical constants (exact SI values)
 NA = 6.02214076e23  # Avogadro constant [1/mol]
 ee = 1.602176634e-19  # Elementary charge [C]
 kB = 1.380649e-23  # Boltzmann constant [J/K]
-A_H_ICRU49 = 1.00794  # Atomic weight of hydrogen used by ICRU Report 49 [g/mol]
 
-# Atomic masses of the hydrogen isotopes [amu]
-HYDROGEN_ATOM_MASSES = {"H": 1.00782503207, "D": 2.0141017778, "T": 3.0160492777}
+# Atomic masses (neutral atoms, including electrons) of the hydrogen isotopes [u], from NIST
+# Atomic Weights and Isotopic Compositions (AME2020). Used to convert SRIM's per-mass stopping
+# of the neutral target gas to stopping per atom.
+HYDROGEN_ATOM_MASSES = {"H": 1.00782503223, "D": 2.01410177812, "T": 3.0160492779}
+# Atomic weight of hydrogen that ICRU Report 49 used for its per-mass stopping [g/mol]
+A_H_ICRU49 = 1.00794
 
-# Nuclear rest-mass energies [MeV]
-M_P = 938.27208816  # Proton (H-1)
+# Nuclear (bare-nucleus) rest-mass energies [MeV], CODATA 2022. Used for the beam ion and the
+# reaction kinematics, which involve bare nuclei; electron binding energies are negligible.
+M_P = 938.27208943  # Proton (H-1)
 M_N = 939.56542194  # Neutron (n-1)
-M_D = 1875.612945  # Deuteron (H-2)
+M_D = 1875.61294500  # Deuteron (H-2)
 M_H = 2808.39161112  # Helion (He-3)
 M_T = 2808.92113668  # Triton (H-3)
 M_A = 3727.3794118  # Alpha (He-4)
