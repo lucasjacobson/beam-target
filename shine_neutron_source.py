@@ -13,25 +13,17 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 from matplotlib import ticker as mticker
 
-try:
-    profile  # noqa: F821 (injected by kernprof when line profiling)
-except NameError:
-
-    def profile(func):
-        return func
-
-
 # Physical constants
 NA = 6.02214076e23  # Avogadro constant [1/mol]
 ee = 1.602176634e-19  # Elementary charge [C]
 kB = 1.380649e-23  # Boltzmann constant [J/K]
 mD = 2.0141017778  # Mass of deuterium atom [amu]
 mT = 3.0160492777  # Mass of tritium atom [amu]
-M_N = 939.56542194  # Mass-energy of neutron  (n-1)
+M_N = 939.56542194  # Mass-energy of neutron (n-1)
 M_D = 1875.612945  # Mass-energy of deuteron (H-2)
-M_H = 2808.39161112  # Mass-energy of helion   (He-3)
-M_T = 2808.92113668  # Mass-energy of triton   (H-3)
-M_A = 3727.3794118  # Mass-energy of alpha    (He-4)
+M_H = 2808.39161112  # Mass-energy of helion (He-3)
+M_T = 2808.92113668  # Mass-energy of triton (H-3)
+M_A = 3727.3794118  # Mass-energy of alpha (He-4)
 
 # Calculate reaction Q values
 Q_DD = (M_D + M_D) - (M_N + M_H)  #  3.26885694 MeV
@@ -49,7 +41,6 @@ def get_atom_density(pressure, temperature):
     return adens
 
 
-@profile
 class SHINE_Source:
     def __init__(
         self,
