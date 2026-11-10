@@ -1,11 +1,32 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shine-neutron-source"
+version = "0.1.0"
+description = "Beam-target fusion neutron source terms for Monte Carlo transport codes"
+requires-python = ">=3.11"
+authors = [{ name = "Lucas Jacobson" }]
+dependencies = ["numpy", "scipy", "h5py", "matplotlib"]
+
+[project.optional-dependencies]
+dev = ["ruff", "pytest"]
+
+[project.scripts]
+shine-neutron-source = "shine_neutron_source.cli:main"
+
+[tool.setuptools.package-data]
+shine_neutron_source = ["data/*"]
+
 [tool.ruff]
 line-length = 100
+src = ["src"]
 
 [tool.ruff.lint]
 # pycodestyle errors/warnings (PEP 8), pyflakes, import sorting
 select = ["E", "W", "F", "I"]
 
 [tool.ruff.lint.pycodestyle]
-# The formatter wraps code at 100; allow up to 120 for lines it can't break
-# (long comments, the `# fmt: off` case table in driver.py)
+# The formatter wraps code at 100; allow up to 120 for lines it can't break (long comments)
 max-line-length = 120

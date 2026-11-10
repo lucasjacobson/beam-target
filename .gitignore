@@ -1,4 +1,8 @@
 __pycache__
 output
+# Build and install artefacts
+build/
+dist/
+*.egg-info/
 # Private input files (e.g. real machine cases): name them *.local.toml
 *.local.toml
