@@ -25,9 +25,8 @@ def stopping_per_atom(stopping_power):
         "plot", 1.0, 280.0, 1.0, 10.0, 20.0, 1.0, 0.2, 4.0, 0.0, 2, 1, 90.0, 90.0, 0.5,
         stopping_power=stopping_power,
     )  # fmt: skip
-    return source.stopping_data["E"], source.stopping_data[
-        "eps"
-    ] * 1e18  # keV cm^2 -> eV/(1e15 atoms/cm^2)
+    E, eps = source.stopping_per_region[0]
+    return E, eps * 1e18  # keV cm^2 -> eV/(1e15 atoms/cm^2)
 
 
 E_srim, S_srim = stopping_per_atom("srim")

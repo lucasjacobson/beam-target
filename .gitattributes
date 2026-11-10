@@ -1,3 +1,2 @@
 # Nuclear data files are kept byte-for-byte as distributed (CRLF line endings)
 src/shine_neutron_source/data/*.koe -text
-src/shine_neutron_source/data/srim_*.txt -text

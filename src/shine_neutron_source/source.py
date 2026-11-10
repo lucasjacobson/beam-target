@@ -59,12 +59,15 @@ DEFAULT_DATA_DIR = os.path.join(CODE_DIR, "data")
 DROSG_FILES = {"DD": "d2hags.koe", "DT": "d3hags.koe"}
 
 # Stopping-power data files (in data/) and the available stopping-power sets
-SRIM_FILES = {"D": "srim_deuteron_in_D_gas.txt", "T": "srim_deuteron_in_T_gas.txt"}
+SRIM_STOPPING_FILE = "srim_stopping.h5"
 PSTAR_FILE = "pstar_hydrogen.txt"
 STOPPING_POWERS = {
-    "srim": "SRIM-2012.01, deuterons in hydrogen-isotope gas",
-    "icru49": "ICRU 49 electronic (protons in H2 gas, same velocity) + SRIM nuclear",
+    "srim": "SRIM-2012.01, per atom, mixed over each region's composition",
+    "icru49": "as srim, but ICRU 49 electronic stopping for hydrogen isotopes (gas only)",
 }
+BEAM_PARTICLE = "d"  # Beam particle group in SRIM_STOPPING_FILE
+PHASES = ("gas", "solid")
+HYDROGEN_ISOTOPES = ("H", "D", "T")
 
 # Decimal places for the beam radii in the SDEF card [cm]
 SDEF_RADIUS_DECIMALS = 5
@@ -91,10 +94,6 @@ NA = 6.02214076e23  # Avogadro constant [1/mol]
 ee = 1.602176634e-19  # Elementary charge [C]
 kB = 1.380649e-23  # Boltzmann constant [J/K]
 
-# Atomic masses (neutral atoms, including electrons) of the hydrogen isotopes [u], from NIST
-# Atomic Weights and Isotopic Compositions (AME2020). Used to convert SRIM's per-mass stopping
-# of the neutral target gas to stopping per atom.
-HYDROGEN_ATOM_MASSES = {"H": 1.00782503223, "D": 2.01410177812, "T": 3.0160492779}
 # Atomic weight of hydrogen that ICRU Report 49 used for its per-mass stopping [g/mol]
 A_H_ICRU49 = 1.00794
 
@@ -176,16 +175,131 @@ def two_body_kinematics(T1, cos_lab, m1, m2, m3, m4):
     return E3 - m3, cos_cm, jacobian
 
 
-def get_atom_density(pressure, temperature):
-    """Return the atom density [1/cm^3] of a diatomic ideal gas.
+def get_molecule_density(pressure, temperature):
+    """Return the molecule density [1/cm^3] of an ideal gas.
 
     pressure is in torr and temperature in degrees C. Works element-wise on arrays.
     """
     P_Pa = pressure * 101325 / 760  # Pressure [Pa]
     T_K = temperature + 273.15  # Temperature [K]
-    mdens = P_Pa / (kB * T_K) / 1e6  # Molecule density [1/cm^3]
-    adens = mdens * 2  # Atom density [1/cm^3] (D2, DT and T2 are diatomic)
-    return adens
+    return P_Pa / (kB * T_K) / 1e6
+
+
+def get_atom_density(pressure, temperature):
+    """Return the atom density [1/cm^3] of a diatomic ideal gas such as D2, DT or T2.
+
+    pressure is in torr and temperature in degrees C. Works element-wise on arrays.
+    """
+    return get_molecule_density(pressure, temperature) * 2
+
+
+_FORMULA_TOKEN = re.compile(r"(\d+[A-Z][a-z]?|[A-Z][a-z]?)(\d+(?:\.\d*)?|\.\d+)?")
+
+
+def parse_formula(formula):
+    """Return {atom: count} for a chemical formula such as "D2", "TiD1.5", "CD4" or "Ar".
+
+    Atoms are element symbols, or the isotopes D, T and 3He (written with its mass number
+    first, so that "He3" still means three helium atoms). Counts may be decimal and default
+    to 1. Raises ValueError for anything else.
+    """
+    counts = {}
+    pos = 0
+    while pos < len(formula):
+        m = _FORMULA_TOKEN.match(formula, pos)
+        if not m:
+            raise ValueError(f"cannot read the chemical formula {formula!r}")
+        symbol = m.group(1)
+        if symbol[0].isdigit():  # Isotope written as mass number + symbol: 3He -> He3
+            mass_number = symbol.rstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+            symbol = symbol[len(mass_number) :] + mass_number
+        counts[symbol] = counts.get(symbol, 0.0) + float(m.group(2) or 1)
+        pos = m.end()
+    if not counts:
+        raise ValueError("empty chemical formula")
+    return counts
+
+
+class Material:
+    """A target material: its composition, phase and (for a solid) density.
+
+    Args:
+        name: Name, used in messages and outputs.
+        composition: {formula: amount}. Each formula is an atom (such as "Ti", "D" or "3He")
+            or a molecule (such as "D2" or "CD4"); see parse_formula. Amounts are relative: atom
+            ratios, or for a gas the mole fractions of its molecules. They need not sum to 1.
+        phase: "gas" or "solid", which selects SRIM's gas- or solid-phase stopping.
+        density: Mass density of a solid [g/cm^3]. A gas has none: its density comes from the
+            pressure and temperature of the region it fills.
+
+    Attributes: atom_fractions ({atom: fraction of all atoms}) and atoms_per_unit (atoms per
+    molecule for a gas, averaged over the mixture; atoms per formula unit for a solid).
+    """
+
+    def __init__(self, name, composition, phase="solid", density=None):
+        self.name = str(name)
+        self.phase = str(phase)
+        self.composition = {str(k): float(v) for k, v in dict(composition).items()}
+        self.density = None if density is None else float(density)
+        where = f"material {self.name}"
+        if self.phase not in PHASES:
+            raise ValueError(f"{where}: phase must be one of {', '.join(PHASES)}")
+        if not self.composition:
+            raise ValueError(f"{where}: empty composition")
+        if any(not (v >= 0) for v in self.composition.values()):
+            raise ValueError(f"{where}: composition amounts must not be negative")
+        total = sum(self.composition.values())
+        if not total > 0:
+            raise ValueError(f"{where}: composition amounts must not all be zero")
+        if self.phase == "solid" and not (self.density is not None and self.density > 0):
+            raise ValueError(f"{where}: a solid needs a positive density (g/cm3)")
+        if self.phase == "gas" and self.density is not None:
+            raise ValueError(
+                f"{where}: a gas takes its density from the region's pressure and temperature, "
+                "so it cannot have a density"
+            )
+        counts = {}
+        for formula, amount in self.composition.items():
+            try:
+                atoms = parse_formula(formula)
+            except ValueError as e:
+                raise ValueError(f"{where}: {e}") from None
+            for atom, n in atoms.items():
+                counts[atom] = counts.get(atom, 0.0) + amount * n
+        atoms_total = sum(counts.values())
+        self.atoms_per_unit = atoms_total / total
+        self.atom_fractions = {atom: n / atoms_total for atom, n in counts.items() if n > 0}
+
+    def __repr__(self):
+        return f"Material({self.name!r}, {self.composition!r}, {self.phase!r}, {self.density!r})"
+
+
+def dt_gas(T_frac):
+    """Return the D/T gas used for regions without a material: D2 and T2 molecules with
+    T_frac of the atoms tritium. (DT molecules would give the same atoms.)"""
+    return Material("D/T gas", {"D2": 1 - T_frac, "T2": T_frac}, phase="gas")
+
+
+@functools.lru_cache(maxsize=4)
+def read_srim_h5(fname, particle=BEAM_PARTICLE):
+    """Read the stopping of one beam particle in every target from SRIM_STOPPING_FILE.
+
+    Returns (E [keV], masses, stopping): masses maps each target name (element symbols, plus
+    D, T and He3) to its atomic mass [u]; stopping maps each phase ("gas", "solid") to
+    {target: (electronic, nuclear)} stopping per target atom [keV cm^2]. The arrays are shared
+    between calls (the result is cached), so do not modify them.
+    """
+    to_per_atom = 1e-18  # eV/(1e15 atoms/cm^2) -> keV cm^2 per atom
+    with h5py.File(fname, "r") as f:
+        E = f["energy"][()]
+        names = [n.decode() for n in f["targets"][()]]
+        masses = dict(zip(names, f["target_mass"][()]))
+        stopping = {}
+        for phase in PHASES:
+            elec = f[particle][phase]["electronic"][()] * to_per_atom
+            nuc = f[particle][phase]["nuclear"][()] * to_per_atom
+            stopping[phase] = {name: (elec[i], nuc[i]) for i, name in enumerate(names)}
+    return E, masses, stopping
 
 
 def slow_down(E0, stopping_E, stopping_eps, atom_density, dx):
@@ -274,47 +388,6 @@ def read_drosg_koe(fname):
 
     data = np.array(records)
     return data[:, 0], data[:, 1], data[:, 2:]
-
-
-def read_srim_stopping(fname):
-    """Read a SRIM stopping-power table (SRIM's "Stopping Units = MeV/(mg/cm2)" output).
-
-    The per-mass values are converted to stopping per target atom, so the result does not
-    depend on which hydrogen isotope the SRIM target was. The isotope is identified from the
-    header line "Density = <rho> g/cm3 = <n> atoms/cm3" and its exact atomic mass is used (the
-    header values are rounded to 5 significant figures, too coarse to use directly).
-
-    Returns (E [keV], S_elec, S_nuc [keV cm^2 per atom], isotope) where isotope is "H", "D"
-    or "T". Raises ValueError if the target is not a hydrogen isotope.
-    """
-    with open(fname, "r", encoding="ascii") as f:
-        lines = f.read().splitlines()
-    m = re.search(r"Density\s*=\s*(\S+)\s*g/cm3\s*=\s*(\S+)\s*atoms/cm3", "\n".join(lines[:20]))
-    if not m:
-        raise ValueError(f"{fname}: no 'Density = ... g/cm3 = ... atoms/cm3' header line")
-    header_amu = float(m.group(1)) / float(m.group(2)) * NA  # Target atom mass [amu]
-    isotope = min(HYDROGEN_ATOM_MASSES, key=lambda k: abs(HYDROGEN_ATOM_MASSES[k] - header_amu))
-    if abs(HYDROGEN_ATOM_MASSES[isotope] / header_amu - 1) > 1e-3:
-        raise ValueError(
-            f"{fname}: target atom mass {header_amu:.4f} amu is not a hydrogen isotope"
-        )
-    atom_mass = HYDROGEN_ATOM_MASSES[isotope] / NA  # [g]
-
-    # The data table sits between the first two lines that start with "-"
-    unit_conv = {"eV": 1e-3, "keV": 1.0, "MeV": 1e3}  # To keV
-    rows = []
-    in_data = False
-    for line in lines:
-        if line.startswith("-"):
-            in_data = not in_data
-            continue
-        if in_data:
-            tokens = line.split()
-            E = float(f"{float(tokens[0]) * unit_conv[tokens[1]]:.5g}")  # [keV], 5 sig. figs
-            rows.append([E, float(tokens[2]), float(tokens[3])])
-    data = np.array(rows)
-    to_per_atom = 1e6 * atom_mass  # MeV/(mg/cm^2) -> keV cm^2/g -> keV cm^2 per atom
-    return data[:, 0], data[:, 1] * to_per_atom, data[:, 2] * to_per_atom, isotope
 
 
 def read_pstar(fname):
@@ -552,6 +625,7 @@ class ShineSource:
 
         self.num_regions = len(self.pressure)
         self.check_input()
+        self.materials = [dt_gas(self.T_frac)] * self.num_regions
         self.num_x_bins = self.num_x_bins.astype(int)
         self.num_x_bins_out = self.num_x_bins_out.astype(int)
 
@@ -672,7 +746,7 @@ class ShineSource:
         """
         target = self.beam_energy_backstop
         last = self.num_regions - 1
-        atom_density = get_atom_density(self.pressure, self.temperature)  # NaN for an unknown
+        atom_density = self._atom_densities(self.pressure, self.temperature)  # NaN if unknown
         E_in = self._slow_down_regions(self.voltage, range(last), atom_density, self.length)[-1]
         if not E_in > target:
             raise ValueError(
@@ -687,7 +761,7 @@ class ShineSource:
                 pressure[last] = value
             else:
                 length[last] = value
-            density = get_atom_density(pressure, self.temperature)
+            density = self._atom_densities(pressure, self.temperature)
             return self._slow_down_regions(E_in, [last], density, length)[-1]
 
         # Bracket the value (torr or cm), then bisect
@@ -720,20 +794,21 @@ class ShineSource:
     def setup_regions(self):
         """Set the target properties of each region and spread them over the position mesh.
 
-        Every region is described by its total atom density [1/cm^3], the atom fractions of
-        deuterium and tritium (the reaction targets) and the stopping power per atom averaged
-        over its composition (see read_stopping_power), so the energy loss per unit length is
-        the atom density times that stopping. Each region is D/T gas, with atom density from
-        its pressure and temperature (get_atom_density) and T_frac of its atoms tritium.
+        Every region is filled with a Material (self.materials) and described by its total
+        atom density [1/cm^3], the atom fractions of deuterium and tritium (the reaction
+        targets) and the stopping power per atom averaged over its composition (see
+        read_stopping_power), so the energy loss per unit length is the atom density times
+        that stopping. Regions without a material of their own hold D/T gas (dt_gas) with
+        T_frac of its atoms tritium.
 
         Sets self.atom_density_per_region, self.atom_fractions_per_region (isotope -> array),
         self.target_density_per_region and self.target_density_mids (reaction -> density of
         its target atoms [1/cm^3], per region and per internal bin) and self.divergence_mids.
         """
-        self.atom_density_per_region = get_atom_density(self.pressure, self.temperature)
+        self.atom_density_per_region = self._atom_densities(self.pressure, self.temperature)
         self.atom_fractions_per_region = {
-            "D": np.full(self.num_regions, 1 - self.T_frac),
-            "T": np.full(self.num_regions, self.T_frac),
+            isotope: np.array([m.atom_fractions.get(isotope, 0.0) for m in self.materials])
+            for isotope in REACTION_TARGETS.values()
         }
         self.target_density_per_region = {
             rxn: self.atom_density_per_region * self.atom_fractions_per_region[isotope]
@@ -744,6 +819,21 @@ class ShineSource:
             for rxn, density in self.target_density_per_region.items()
         }
         self.divergence_mids = np.repeat(self.divergence, self.num_x_bins)
+
+    def _atom_densities(self, pressure, temperature):
+        """Return the atom density [1/cm^3] of each region for the given pressures [torr] and
+        temperatures [degC]: from the ideal gas law for a gas, from the density for a solid."""
+        densities = np.zeros(self.num_regions)
+        for r, material in enumerate(self.materials):
+            if material.phase == "gas":
+                molecules = get_molecule_density(pressure[r], temperature[r])
+                densities[r] = molecules * material.atoms_per_unit
+            else:
+                mean_mass = sum(
+                    f * self.srim_masses[atom] for atom, f in material.atom_fractions.items()
+                )
+                densities[r] = material.density * NA / mean_mass
+        return densities
 
     def _slow_down_regions(self, E0, regions, atom_density, length):
         """Return the beam energy [keV] at each internal grid point through the given regions
@@ -802,53 +892,60 @@ class ShineSource:
         self.out_grid_inds = np.append(0, np.cumsum(self.x_ratio_out))
 
     def read_stopping_power(self):
-        """Read the stopping power of deuterons in the gas, per atom.
+        """Read the stopping power of deuterons in each region's material, per atom.
 
-        Stores self.stopping_data with "E" (deuteron energy [keV]) and "eps" (electronic +
-        nuclear stopping per gas atom [keV cm^2]), and self.stopping_per_region, an (E, eps)
-        pair for each region (all the same gas for now); the energy loss per unit length is eps
-        times the atom density. The D/T mixture is handled per atom (Bragg additivity): the stopping is
-        (1 - T_frac) times that in deuterium plus T_frac times that in tritium.
+        Stores self.stopping_per_region, an (E, eps) pair for each region: deuteron energy
+        [keV] and electronic + nuclear stopping per atom [keV cm^2], averaged over the
+        material's atoms (Bragg additivity), so the energy loss per unit length is eps times
+        the atom density. Also stores self.srim_masses (target -> atomic mass [u]).
 
-        - "srim": electronic and nuclear stopping from the SRIM tables for deuterons in D and
-          T gas (SRIM_FILES).
-        - "icru49": electronic stopping from ICRU Report 49 for protons in hydrogen gas
-          (PSTAR_FILE), taken at the proton energy with the same velocity
-          (E_p = E_d * M_H1 / M_H2), plus the mixed SRIM nuclear stopping, because the ICRU 49
-          nuclear stopping is for protons. Electronic stopping does not depend on the
-          hydrogen isotope. The table covers deuteron energies from about 2 keV upwards;
-          below that the beam is treated as stopped.
+        - "srim": SRIM-2012.01 stopping for deuterons in each element (SRIM_STOPPING_FILE),
+          in the material's phase (gas or solid).
+        - "icru49": as "srim", but the electronic stopping of hydrogen isotopes comes from ICRU
+          Report 49 for protons in hydrogen gas (PSTAR_FILE), taken at the proton energy with
+          the same velocity (E_p = E_d * M_H1 / M_H2); electronic stopping does not depend on
+          the hydrogen isotope. Only for gas materials, since the data are for hydrogen gas.
+          The table covers deuteron energies from about 2 keV upwards; below that the beam is
+          treated as stopped.
 
-        Raises ValueError if a SRIM file's target is not the expected isotope, or if the two
-        SRIM files have different energy grids or electronic stopping per atom that differs
-        by more than 1% (it should be the same for D and T).
+        Raises ValueError if a material contains an atom with no stopping data, or if
+        "icru49" is used with a solid.
         """
-        tables = {}
-        for isotope, fname in SRIM_FILES.items():
-            path = os.path.join(self.data_dir, fname)
-            *table, found = read_srim_stopping(path)
-            if found != isotope:
-                raise ValueError(f"{path}: SRIM target is {found}, expected {isotope}")
-            tables[isotope] = table
-        (E, S_elec_D, S_nuc_D), (E_T, S_elec_T, S_nuc_T) = tables["D"], tables["T"]
-        if not np.array_equal(E, E_T):
-            raise ValueError("The SRIM tables for D and T have different energy grids")
-        if np.max(np.abs(S_elec_D / S_elec_T - 1)) > 0.01:
-            raise ValueError("The SRIM tables for D and T disagree on electronic stopping")
-        f_D, f_T = 1 - self.T_frac, self.T_frac
-        S_elec = f_D * S_elec_D + f_T * S_elec_T
-        S_nuc = f_D * S_nuc_D + f_T * S_nuc_T
-
+        path = os.path.join(self.data_dir, SRIM_STOPPING_FILE)
+        E, self.srim_masses, srim = read_srim_h5(path)
         if self.stopping_power == "icru49":
             E_p, P_elec, _ = read_pstar(os.path.join(self.data_dir, PSTAR_FILE))
             E_d = E_p * 1000 * M_H2 / M_H1  # Deuteron energy at the same velocity [keV]
             P_elec = P_elec * 1000 * A_H_ICRU49 / NA  # MeV cm^2/g -> keV cm^2 per atom
             keep = (E >= E_d[0]) & (E <= E_d[-1])
             # Log-log interpolation of the ICRU 49 values onto the SRIM energy grid
-            S_elec = np.exp(np.interp(np.log(E[keep]), np.log(E_d), np.log(P_elec)))
-            E, S_nuc = E[keep], S_nuc[keep]
-        self.stopping_data = {"E": E, "eps": S_elec + S_nuc}
-        self.stopping_per_region = [(E, S_elec + S_nuc)] * self.num_regions
+            icru_elec = np.exp(np.interp(np.log(E[keep]), np.log(E_d), np.log(P_elec)))
+        else:
+            keep = np.ones(len(E), dtype=bool)
+
+        cache = {}
+        self.stopping_per_region = []
+        for material in self.materials:
+            if id(material) not in cache:
+                if self.stopping_power == "icru49" and material.phase != "gas":
+                    raise ValueError(
+                        f"{self.name}: stopping_power icru49 is for hydrogen gas only, but "
+                        f"material {material.name} is a {material.phase}"
+                    )
+                eps = np.zeros(int(np.sum(keep)))
+                for atom, fraction in material.atom_fractions.items():
+                    if atom not in srim[material.phase]:
+                        raise ValueError(
+                            f"{self.name}: material {material.name}: no stopping data for "
+                            f"{atom!r} (elements H-U, and the isotopes D, T and 3He)"
+                        )
+                    elec, nuc = srim[material.phase][atom]
+                    elec = elec[keep]
+                    if self.stopping_power == "icru49" and atom in HYDROGEN_ISOTOPES:
+                        elec = icru_elec
+                    eps += fraction * (elec + nuc[keep])
+                cache[id(material)] = (E[keep], eps)
+            self.stopping_per_region.append(cache[id(material)])
 
     def read_cross_sections(self):
         """Read the DD and DT cross sections from the DROSG-2000 files (see read_drosg_koe).

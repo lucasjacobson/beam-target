@@ -1,6 +1,5 @@
 """Reading the nuclear data files: DROSG-2000, SRIM and PSTAR."""
 
-import re
 import shutil
 
 import h5py
@@ -10,14 +9,12 @@ from conftest import data_path
 
 from shine_neutron_source.source import (
     DROSG_FILES,
-    HYDROGEN_ATOM_MASSES,
-    NA,
     PSTAR_FILE,
-    SRIM_FILES,
+    SRIM_STOPPING_FILE,
     _fortran_float,
     read_drosg_koe,
     read_pstar,
-    read_srim_stopping,
+    read_srim_h5,
 )
 
 # --- DROSG-2000 cross sections ---------------------------------------------------------------
@@ -97,59 +94,6 @@ def test_drosg_damaged_file_rejected(tmp_path, damage, message):
         read_drosg_koe(_damaged_copy(tmp_path, damage))
 
 
-# --- SRIM stopping powers --------------------------------------------------------------------
-
-
-def _srim_footer_per_atom(path):
-    """Total stopping per atom [keV cm^2] using only the file's own footer conversion factor."""
-    text = open(path).read()
-    factor = float(re.search(r"^\s*(\S+)\s+eV/\(1E15 atoms/cm2\)", text, re.M).group(1))
-    rows, inside = [], False
-    for line in text.splitlines():
-        if line.startswith("-"):
-            inside = not inside
-        elif inside:
-            k = line.split()
-            rows.append(float(k[2]) + float(k[3]))
-    return np.array(rows) * factor * 1e-18  # eV/(1e15 atoms/cm^2) -> keV cm^2
-
-
-@pytest.mark.parametrize("isotope", ["D", "T"])
-def test_srim_isotope_and_per_atom_conversion(isotope):
-    path = data_path(SRIM_FILES[isotope])
-    E, S_elec, S_nuc, found = read_srim_stopping(path)
-    assert found == isotope
-    assert E[0] == pytest.approx(1.1e-3) and E[-1] == pytest.approx(1e5)  # 1.1 eV - 100 MeV
-    # Per-mass -> per-atom conversion agrees with SRIM's own factor (5 significant figures)
-    np.testing.assert_allclose(S_elec + S_nuc, _srim_footer_per_atom(path), rtol=5e-5)
-
-
-def test_srim_tables_consistent():
-    E_D, Se_D, Sn_D, _ = read_srim_stopping(data_path(SRIM_FILES["D"]))
-    E_T, Se_T, Sn_T, _ = read_srim_stopping(data_path(SRIM_FILES["T"]))
-    np.testing.assert_array_equal(E_D, E_T)
-    # Electronic stopping per atom does not depend on the isotope (4-figure rounding only)
-    np.testing.assert_allclose(Se_D, Se_T, rtol=1e-3)
-    # Nuclear stopping per atom is higher in deuterium (about 1.45x at 10-300 keV)
-    sel = (E_D >= 10) & (E_D <= 300)
-    assert np.all((Sn_D[sel] / Sn_T[sel] > 1.4) & (Sn_D[sel] / Sn_T[sel] < 1.5))
-
-
-def test_srim_non_hydrogen_target_rejected(tmp_path):
-    text = open(data_path(SRIM_FILES["T"]), newline="").read()
-    path = tmp_path / "heavy.txt"
-    path.write_text(text.replace("2.5526E-06 g/cm3", "1.6855E-05 g/cm3"), newline="")
-    with pytest.raises(ValueError, match="not a hydrogen isotope"):
-        read_srim_stopping(path)
-
-
-def test_hydrogen_atom_masses():
-    # Masses of neutral atoms (including the electron), close to nuclear mass + electron mass
-    assert HYDROGEN_ATOM_MASSES["D"] == pytest.approx(2.013553212544 + 5.485799e-4, rel=1e-8)
-    assert HYDROGEN_ATOM_MASSES["T"] == pytest.approx(3.01550071597 + 5.485799e-4, rel=1e-8)
-    assert NA == 6.02214076e23
-
-
 # --- PSTAR (ICRU 49) ---------------------------------------------------------------------------
 
 
@@ -167,8 +111,8 @@ def test_pstar_table():
 
 
 def test_data_files_unchanged_line_endings():
-    """The DROSG and SRIM files are kept byte-for-byte as distributed (CRLF)."""
-    for fname in list(DROSG_FILES.values()) + list(SRIM_FILES.values()):
+    """The DROSG files are kept byte-for-byte as distributed (CRLF)."""
+    for fname in DROSG_FILES.values():
         raw = open(data_path(fname), "rb").read()
         assert raw.count(b"\r\n") == raw.count(b"\n"), fname
 
@@ -187,7 +131,7 @@ def test_copy_of_data_dir_is_usable(tmp_path):
 
 @pytest.fixture(scope="module")
 def srim_h5():
-    with h5py.File(data_path("srim_stopping.h5"), "r") as f:
+    with h5py.File(data_path(SRIM_STOPPING_FILE), "r") as f:
         yield f
 
 
@@ -209,17 +153,26 @@ def test_srim_h5_layout(srim_h5):
                 assert np.all(data[:, :-1].max(axis=1) > 0)
 
 
-@pytest.mark.parametrize("isotope", ["D", "T"])
-def test_srim_h5_matches_text_tables(srim_h5, isotope):
-    """The deuteron tables in D and T gas agree with the text files the code uses now, apart from
-    the rounding of SRIM's 4-figure output in the two unit systems."""
-    E, S_elec, S_nuc, _ = read_srim_stopping(data_path(SRIM_FILES[isotope]))
-    i = [t.decode() for t in srim_h5["targets"][()]].index(isotope)
-    to_per_atom = 1e-18  # eV/(1e15 atoms/cm2) -> keV cm2 per atom
-    np.testing.assert_allclose(srim_h5["energy"][()], E, rtol=1e-4)
-    gas = srim_h5["d"]["gas"]
-    np.testing.assert_allclose(gas["electronic"][i] * to_per_atom, S_elec, rtol=1e-3)
-    np.testing.assert_allclose(gas["nuclear"][i] * to_per_atom, S_nuc, rtol=1e-3)
+def test_read_srim_h5(srim_h5):
+    """read_srim_h5 returns stopping per atom in keV cm^2 and the targets' masses."""
+    E, masses, stopping = read_srim_h5(data_path(SRIM_STOPPING_FILE))
+    np.testing.assert_array_equal(E, srim_h5["energy"][()])
+    i = [t.decode() for t in srim_h5["targets"][()]].index("Ti")
+    elec, nuc = stopping["solid"]["Ti"]
+    np.testing.assert_array_equal(elec, srim_h5["d/solid/electronic"][i] * 1e-18)
+    np.testing.assert_array_equal(nuc, srim_h5["d/solid/nuclear"][i] * 1e-18)
+    assert masses["D"] == pytest.approx(2.01410177812) and masses["T"] == pytest.approx(3.0160493)
+    assert masses["Ti"] == pytest.approx(47.9, rel=1e-3)
+
+
+def test_srim_hydrogen_isotopes(srim_h5):
+    """Deuterons in D and T gas: the same electronic stopping per atom (one electron each, up to
+    SRIM's 4-figure rounding), and nuclear stopping about 1.45 times higher in deuterium."""
+    E, _, stopping = read_srim_h5(data_path(SRIM_STOPPING_FILE))
+    (Se_D, Sn_D), (Se_T, Sn_T) = stopping["gas"]["D"], stopping["gas"]["T"]
+    np.testing.assert_allclose(Se_D, Se_T, rtol=1e-3)
+    sel = (E >= 10) & (E <= 300)
+    assert np.all((Sn_D[sel] / Sn_T[sel] > 1.4) & (Sn_D[sel] / Sn_T[sel] < 1.5))
 
 
 def test_srim_h5_phases_differ(srim_h5):
