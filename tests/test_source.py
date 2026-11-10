@@ -18,24 +18,24 @@ def test_lab_cross_section_integrates_to_total(rxn):
     """At every position, the lab-frame cross section summed over all emission angles equals
     the total cross section 4 pi sigma_0 C_0 from the data (the CM-to-lab conversion conserves
     reactions)."""
-    source = make_source(angle_int=0.25)
+    source = make_source(angle_step=0.25)
     xs = source.xs_data[rxn]
     total = (
         4
         * np.pi
-        * np.interp(source.EB_mids, xs["E"], xs["total"])
-        * np.interp(source.EB_mids, xs["E"], xs["coeffs"][:, 0])
+        * np.interp(source.beam_energy_mids, xs["E"], xs["total"])
+        * np.interp(source.beam_energy_mids, xs["E"], xs["coeffs"][:, 0])
     )
-    lab = np.sum(source.xs[rxn] * source.angle_areas[None, :], axis=1)
+    lab = np.sum(source.ddxs[rxn] * source.solid_angles[None, :], axis=1)
     np.testing.assert_allclose(lab, total, rtol=1e-4)
 
 
 def test_yields_add_up(mixed_source):
     s = mixed_source
-    assert s.nyield["DD"] == pytest.approx(s.neutrons["DD"].sum(), rel=1e-12)
-    assert s.nyield["DT"] == pytest.approx(s.neutrons["DT"].sum(), rel=1e-12)
-    assert s.nyield_tot == s.nyield["DD"] + s.nyield["DT"]
-    assert 0 < s.nscrape_tot < 1
+    assert s.yields["DD"] == pytest.approx(s.neutrons["DD"].sum(), rel=1e-12)
+    assert s.yields["DT"] == pytest.approx(s.neutrons["DT"].sum(), rel=1e-12)
+    assert s.yield_total == s.yields["DD"] + s.yields["DT"]
+    assert 0 < s.neutron_scrape_fraction < 1
     for rxn in ("DD", "DT"):
         assert np.all(s.neutrons[rxn] >= 0)
 
@@ -43,20 +43,20 @@ def test_yields_add_up(mixed_source):
 @pytest.mark.parametrize("T_frac, absent", [(0.0, "DT"), (1.0, "DD")])
 def test_pure_gases(T_frac, absent):
     source = make_source(T_frac=T_frac)
-    assert source.nyield[absent] == 0
-    assert source.nyield_tot > 0
+    assert source.yields[absent] == 0
+    assert source.yield_total > 0
 
 
 def test_yield_scales_with_tritium_fraction():
     """At fixed atom density, the DT yield is proportional to T_frac (stopping hardly depends on
     the mix), and the DD yield to 1 - T_frac."""
     pure_D, pure_T, mix = make_source(T_frac=0.0), make_source(T_frac=1.0), make_source(T_frac=0.5)
-    assert mix.nyield["DT"] / pure_T.nyield["DT"] == pytest.approx(0.5, rel=2e-3)
-    assert mix.nyield["DD"] / pure_D.nyield["DD"] == pytest.approx(0.5, rel=2e-3)
+    assert mix.yields["DT"] / pure_T.yields["DT"] == pytest.approx(0.5, rel=2e-3)
+    assert mix.yields["DD"] / pure_D.yields["DD"] == pytest.approx(0.5, rel=2e-3)
 
 
 def test_beam_slows_down(mixed_source):
-    EB = mixed_source.EB_grid
+    EB = mixed_source.beam_energy_grid
     assert EB[0] == 280.0
     assert np.all(np.diff(EB) < 0)
     assert 150 < EB[-1] < 250  # A thin target: the beam passes through
@@ -71,13 +71,13 @@ def test_beam_stops_inside_target(T_frac, stopping_power):
     source = make_source(
         T_frac=T_frac,
         stopping_power=stopping_power,
-        pressure_list=[40.0],
-        length_list=[300.0],
-        num_x_ints_list=[600],
-        num_x_ints_list_C=[60],
-        max_radius=10.0,
+        pressure=[40.0],
+        length=[300.0],
+        num_x_bins=[600],
+        num_x_bins_out=[60],
+        wall_radius=10.0,
     )
-    EB = source.EB_grid
+    EB = source.beam_energy_grid
     assert EB[-1] == 0, f"The beam never stops: it reaches the backstop with {EB[-1]} keV"
     i_stop = np.flatnonzero(EB > 0)[-1]  # Last grid point the beam reaches with energy
     x_stop = source.x_grid[i_stop + 1]
@@ -85,22 +85,22 @@ def test_beam_stops_inside_target(T_frac, stopping_power):
 
     rxn = "DT" if T_frac else "DD"
     assert np.all(EB[i_stop + 1 :] == 0)
-    assert np.all(source.EB_mids[i_stop + 1 :] == 0)
-    assert np.all(source.xs[rxn][i_stop + 1 :] == 0)
-    neutrons_per_interval = source.neutrons[rxn].sum(axis=(1, 2))
-    beyond = source.x_grid_C[:-1] >= x_stop  # Output intervals entirely past the stop
+    assert np.all(source.beam_energy_mids[i_stop + 1 :] == 0)
+    assert np.all(source.ddxs[rxn][i_stop + 1 :] == 0)
+    neutrons_per_bin = source.neutrons[rxn].sum(axis=(1, 2))
+    beyond = source.x_grid_out[:-1] >= x_stop  # Output bins entirely past the stop
     assert beyond.sum() > 50
-    assert np.all(neutrons_per_interval[beyond] == 0)
-    assert source.nyield[rxn] > 0
-    assert source.EB_grid_C[-1] == 0  # Beam energy at the backstop
+    assert np.all(neutrons_per_bin[beyond] == 0)
+    assert source.yields[rxn] > 0
+    assert source.beam_energy_grid_out[-1] == 0  # Beam energy at the backstop
 
 
 def test_neutron_energies(mixed_source):
     """Neutron energies lie in the expected bands for a 280 keV beam."""
     for rxn, lo, hi in [("DD", 1.9, 3.3), ("DT", 12.9, 15.5)]:
-        EN = mixed_source.EN[rxn]
-        assert lo < EN.min() and EN.max() < hi
-        assert np.all(np.diff(EN, axis=1) < 0)  # Faster forward than backward
+        neutron_energy = mixed_source.neutron_energy[rxn]
+        assert lo < neutron_energy.min() and neutron_energy.max() < hi
+        assert np.all(np.diff(neutron_energy, axis=1) < 0)  # Faster forward than backward
 
 
 # Reference results for SMALL_CASE: (DD yield [n/s], DT yield [n/s], beam energy at the end
@@ -120,10 +120,10 @@ REFERENCE = {
 def test_reference_results(T_frac, stopping_power):
     source = make_source(T_frac=T_frac, stopping_power=stopping_power)
     yield_DD, yield_DT, E_end, scrape = REFERENCE[(T_frac, stopping_power)]
-    assert source.nyield["DD"] == pytest.approx(yield_DD, rel=1e-9)
-    assert source.nyield["DT"] == pytest.approx(yield_DT, rel=1e-9)
-    assert source.EB_grid[-1] == pytest.approx(E_end, rel=1e-9)
-    assert source.nscrape_tot == pytest.approx(scrape, rel=1e-8)
+    assert source.yields["DD"] == pytest.approx(yield_DD, rel=1e-9)
+    assert source.yields["DT"] == pytest.approx(yield_DT, rel=1e-9)
+    assert source.beam_energy_grid[-1] == pytest.approx(E_end, rel=1e-9)
+    assert source.neutron_scrape_fraction == pytest.approx(scrape, rel=1e-8)
 
 
 # --- Input checks ------------------------------------------------------------------------------
@@ -135,17 +135,17 @@ def test_reference_results(T_frac, stopping_power):
         (dict(voltage=MAX_VOLTAGE + 0.1), "voltage must be between"),
         (dict(T_frac=1.5), "T_frac must be between 0 and 1"),
         (dict(current=0.0), "current must be positive"),
-        (dict(pressure_list=[float("nan")]), "pressures must be positive"),
-        (dict(temperature_list=[25.0, 25.0]), "temperature_list has 2 entries"),
-        (dict(angle_int_C=7.0), "angle_int_C must divide 180"),
-        (dict(angle_int=4.0), "multiple of angle_int"),
-        (dict(num_x_ints_list_C=[7]), "must divide num_x_ints_list"),
-        (dict(divergence_list=[-1.0]), "divergences must not be negative"),
-        (dict(angle_int=200.0, angle_int_C=200.0), "angle_int_C must divide 180"),
-        (dict(num_x_ints_list=[0], num_x_ints_list_C=[1]), "num_x_ints_list must be positive"),
-        (dict(num_x_ints_list=[2.5], num_x_ints_list_C=[1]), "must be whole numbers"),
-        (dict(num_x_ints_list_C=[float("nan")]), "must be whole numbers"),
-        (dict(max_radius=0.1), "must not be smaller than start_radius"),
+        (dict(pressure=[float("nan")]), "pressures must be positive"),
+        (dict(temperature=[25.0, 25.0]), "temperature has 2 entries"),
+        (dict(angle_step_out=7.0), "angle_step_out must divide 180"),
+        (dict(angle_step=4.0), "multiple of angle_step"),
+        (dict(num_x_bins_out=[7]), "must divide num_x_bins"),
+        (dict(divergence=[-1.0]), "divergences must not be negative"),
+        (dict(angle_step=200.0, angle_step_out=200.0), "angle_step_out must divide 180"),
+        (dict(num_x_bins=[0], num_x_bins_out=[1]), "num_x_bins must be positive"),
+        (dict(num_x_bins=[2.5], num_x_bins_out=[1]), "must be whole numbers"),
+        (dict(num_x_bins_out=[float("nan")]), "must be whole numbers"),
+        (dict(wall_radius=0.1), "must not be smaller than start_radius"),
     ],
 )
 def test_invalid_inputs_rejected(overrides, message):
@@ -155,20 +155,22 @@ def test_invalid_inputs_rejected(overrides, message):
 
 def test_voltage_limit_accepted():
     """The highest allowed voltage (the top of the cross-section tables) is accepted."""
-    assert make_source(voltage=MAX_VOLTAGE, num_x_ints_list=[2], num_x_ints_list_C=[1])
+    assert make_source(voltage=MAX_VOLTAGE, num_x_bins=[2], num_x_bins_out=[1])
 
 
 @pytest.mark.parametrize(
     "overrides",
     [
-        dict(angle_int=0.1, angle_int_C=0.3),  # 0.3 / 0.1 = 2.9999999999999996 in floating point
-        dict(angle_int=0.01, angle_int_C=3.0, num_x_ints_list=[4], num_x_ints_list_C=[2]),
-        dict(num_x_ints_list=[40.0], num_x_ints_list_C=[10.0]),  # Whole numbers given as floats
-        dict(max_radius=0.2, divergence_list=[0.0]),  # Wall exactly at the beam radius
+        dict(
+            angle_step=0.1, angle_step_out=0.3
+        ),  # 0.3 / 0.1 = 2.9999999999999996 in floating point
+        dict(angle_step=0.01, angle_step_out=3.0, num_x_bins=[4], num_x_bins_out=[2]),
+        dict(num_x_bins=[40.0], num_x_bins_out=[10.0]),  # Whole numbers given as floats
+        dict(wall_radius=0.2, divergence=[0.0]),  # Wall exactly at the beam radius
     ],
 )
 def test_valid_edge_inputs_accepted(overrides):
-    assert make_source(**overrides).nyield_tot > 0
+    assert make_source(**overrides).yield_total > 0
 
 
 @pytest.mark.parametrize("overrides", [dict(voltage=1.0), dict(voltage=5.0, T_frac=1.0)])
@@ -181,16 +183,16 @@ def test_no_neutrons_rejected(overrides):
 def test_multiple_regions():
     """Upstream regions before the target chamber: the beam passes through all of them."""
     source = make_source(
-        pressure_list=[1e-3, 5.0],
-        temperature_list=[25.0, 25.0],
-        length_list=[20.0, 50.0],
-        divergence_list=[0.0, 30.0],
-        num_x_ints_list=[4, 40],
-        num_x_ints_list_C=[1, 10],
+        pressure=[1e-3, 5.0],
+        temperature=[25.0, 25.0],
+        length=[20.0, 50.0],
+        divergence=[0.0, 30.0],
+        num_x_bins=[4, 40],
+        num_x_bins_out=[1, 10],
     )
-    assert len(source.x_grid_C) == 12
-    assert source.x_grid_C[-1] == pytest.approx(70.0)
-    assert source.EB_grid[4] < 280.0  # Energy lost in the upstream region
+    assert len(source.x_grid_out) == 12
+    assert source.x_grid_out[-1] == pytest.approx(70.0)
+    assert source.beam_energy_grid[4] < 280.0  # Energy lost in the upstream region
 
 
 # --- Outputs ---------------------------------------------------------------------------------
@@ -267,8 +269,8 @@ def test_sdef_invalid_direction(mixed_source):
 
 
 def test_isotropic_source_sdef():
-    """angle_int_C = 180 gives an isotropic source: no direction distribution."""
-    text = make_source(angle_int_C=180.0).get_mcnp_sdef()
+    """angle_step_out = 180 gives an isotropic source: no direction distribution."""
+    text = make_source(angle_step_out=180.0).get_mcnp_sdef()
     assert "dir = d2" not in text and "si2" not in text
 
 
@@ -288,7 +290,7 @@ def test_sdef_energy_labels_match_angles(mixed_source):
     """Each energy distribution's comment names the angle bin its data are for: si2 runs from
     180 to 0 degrees, so distribution 501 is 170-180 degrees and has the lowest energies."""
     text = mixed_source.get_mcnp_sdef()
-    num = mixed_source.num_a_ints_C
+    num = mixed_source.num_angle_bins_out
     assert "sc501 Energy distribution (170 - 180 degrees)" in text
     assert f"sc{500 + num} Energy distribution (0 - 10 degrees)" in text
     # Highest DT neutron energy in each distribution rises from backward to forward bins
@@ -300,15 +302,15 @@ def test_sdef_energy_labels_match_angles(mixed_source):
     "overrides",
     [
         {},
-        dict(angle_int_C=180.0),  # Isotropic
+        dict(angle_step_out=180.0),  # Isotropic
         dict(T_frac=0.0),
         dict(
-            pressure_list=[1e-6, 1e-4, 1e-3, 1e-2, 0.1, 5.0],
-            temperature_list=[25.0] * 6,
-            length_list=[12.345, 23.456, 34.567, 45.678, 56.789, 50.0],
-            divergence_list=[0.0] * 5 + [30.0],
-            num_x_ints_list=[10] * 5 + [40],
-            num_x_ints_list_C=[1] * 5 + [10],
+            pressure=[1e-6, 1e-4, 1e-3, 1e-2, 0.1, 5.0],
+            temperature=[25.0] * 6,
+            length=[12.345, 23.456, 34.567, 45.678, 56.789, 50.0],
+            divergence=[0.0] * 5 + [30.0],
+            num_x_bins=[10] * 5 + [40],
+            num_x_bins_out=[1] * 5 + [10],
         ),
     ],
     ids=["mixed", "isotropic", "pure D", "six regions"],
@@ -327,7 +329,7 @@ def test_sdef_number_formats(mixed_source):
     entries = _sdef_entries(text, "si2")
     assert all(re.fullmatch(r"-?\d\.\d{15}", v) for v in entries)
     cosines = [float(v) for v in entries]
-    np.testing.assert_allclose(cosines, mixed_source.cosine_grid_C[::-1], rtol=0, atol=5e-16)
+    np.testing.assert_allclose(cosines, mixed_source.cosine_grid_out[::-1], rtol=0, atol=5e-16)
     assert all(b > a for a, b in zip(cosines, cosines[1:]))
     # Radii to SDEF_RADIUS_DECIMALS decimal places; scraped percentages to 2
     radii = re.findall(r"^  si1\d\d +0 (\S+)", text, re.M)
@@ -340,12 +342,12 @@ def test_sdef_extent_without_float_artefacts():
     """Region boundaries are written as stored, without artefacts from adding lengths
     (0.1 + 0.2 is 0.30000000000000004 in floating point)."""
     source = make_source(
-        pressure_list=[5.0, 5.0],
-        temperature_list=[25.0, 25.0],
-        length_list=[0.1, 0.2],
-        divergence_list=[30.0, 30.0],
-        num_x_ints_list=[2, 4],
-        num_x_ints_list_C=[1, 2],
+        pressure=[5.0, 5.0],
+        temperature=[25.0, 25.0],
+        length=[0.1, 0.2],
+        divergence=[30.0, 30.0],
+        num_x_bins=[2, 4],
+        num_x_bins_out=[1, 2],
     )
     assert _sdef_entries(source.get_mcnp_sdef("+z"), "si1") == ["0", "0.1", "i", "0.3"]
 
@@ -370,10 +372,10 @@ def test_hdf5_file(mixed_source, tmp_path):
         for key in f:
             if not isinstance(f[key], h5py.Group):
                 assert f[key].attrs["description"] and "units" in f[key].attrs
-        # Per-interval beam values, as used in the SDEF card and the axial profile
-        np.testing.assert_allclose(f["radius_mids"][()], s.radius_mids_C)
-        np.testing.assert_allclose(f["scrape_mids"][()], s.scrape_mids_C)
-        assert len(f["EB_mids"]) == len(f["current_mids"]) == len(f["x_grid"]) - 1
+        # Per-bin beam values, as used in the SDEF card and the axial profile
+        np.testing.assert_allclose(f["radius_mids"][()], s.radius_mids_out)
+        np.testing.assert_allclose(f["scrape_mids"][()], s.scrape_mids_out)
+        assert len(f["beam_energy_mids"]) == len(f["current_mids"]) == len(f["x_grid"]) - 1
         for rxn in ("DD", "DT"):
             neutrons = f[f"neutrons_{rxn}"]
             assert list(neutrons.attrs["dimensions"]) == ["position", "angle", "energy"]
@@ -381,9 +383,9 @@ def test_hdf5_file(mixed_source, tmp_path):
             assert neutrons.shape == (
                 len(f["x_grid"]) - 1,
                 len(f["angle_grid"]) - 1,
-                len(f[f"EN_grid_{rxn}"]) - 1,
+                len(f[f"neutron_energy_grid_{rxn}"]) - 1,
             )
-            assert neutrons[()].sum() == pytest.approx(mixed_source.nyield[rxn], rel=1e-12)
+            assert neutrons[()].sum() == pytest.approx(mixed_source.yields[rxn], rel=1e-12)
 
 
 def test_text_files(mixed_source, tmp_path):
@@ -402,24 +404,24 @@ def test_text_files(mixed_source, tmp_path):
 
     # Each profile sums to the yields (values are written to 7 significant figures)
     def check_sums(table, dd_col, dt_col, total_col):
-        assert table[:, dd_col].sum() == pytest.approx(s.nyield["DD"], rel=1e-6)
-        assert table[:, dt_col].sum() == pytest.approx(s.nyield["DT"], rel=1e-6)
+        assert table[:, dd_col].sum() == pytest.approx(s.yields["DD"], rel=1e-6)
+        assert table[:, dt_col].sum() == pytest.approx(s.yields["DT"], rel=1e-6)
         np.testing.assert_allclose(
             table[:, total_col], table[:, dd_col] + table[:, dt_col], rtol=1e-6
         )
 
     axial = np.loadtxt(tmp_path / "axial_profile.txt")
-    np.testing.assert_allclose(axial[:, 0], s.x_grid_C[:-1], atol=1e-9)
-    np.testing.assert_allclose(axial[:, 1], s.x_grid_C[1:], rtol=1e-6)
+    np.testing.assert_allclose(axial[:, 0], s.x_grid_out[:-1], atol=1e-9)
+    np.testing.assert_allclose(axial[:, 1], s.x_grid_out[1:], rtol=1e-6)
     assert np.all(np.diff(axial[:, 2]) < 0)  # The beam slows down along the target
-    np.testing.assert_allclose(axial[:, 3], s.radius_mids_C, rtol=1e-6)
-    assert np.all(np.diff(axial[:, 3]) >= 0) and axial[-1, 3] <= s.max_radius * (1 + 1e-6)
-    np.testing.assert_allclose(axial[:, 4], s.scrape_mids_C, rtol=1e-6, atol=1e-12)
+    np.testing.assert_allclose(axial[:, 3], s.radius_mids_out, rtol=1e-6)
+    assert np.all(np.diff(axial[:, 3]) >= 0) and axial[-1, 3] <= s.wall_radius * (1 + 1e-6)
+    np.testing.assert_allclose(axial[:, 4], s.scrape_mids_out, rtol=1e-6, atol=1e-12)
     assert np.all(np.diff(axial[:, 4]) >= 0) and 0 < axial[-1, 4] < 1  # Scraping grows
     check_sums(axial, 5, 6, 7)
 
     energy = np.loadtxt(tmp_path / "energy_spectrum.txt")
-    np.testing.assert_allclose(energy[:, 1] - energy[:, 0], s.EN_int, rtol=1e-4)
+    np.testing.assert_allclose(energy[:, 1] - energy[:, 0], s.energy_bin_width, rtol=1e-4)
     np.testing.assert_allclose(energy[1:, 0], energy[:-1, 1], rtol=1e-6)  # Contiguous bins
     assert energy[0, 0] > 1.5 and energy[-1, 1] < 16  # From the DD peak to the DT peak
     assert energy[0, 2] > 0 and energy[-1, 3] > 0  # Starts and ends on actual neutrons
@@ -443,16 +445,16 @@ def test_text_files(mixed_source, tmp_path):
             assert summary["inputs"][name] == pytest.approx(expected, rel=1e-6)
         assert type(summary["inputs"][name]) is type(expected)
     results = summary["results"]
-    assert results["yield_total"] == pytest.approx(s.nyield_tot, rel=1e-6)
-    assert results["yield_DD"] + results["yield_DT"] == pytest.approx(s.nyield_tot, rel=1e-6)
+    assert results["yield_total"] == pytest.approx(s.yield_total, rel=1e-6)
+    assert results["yield_DD"] + results["yield_DT"] == pytest.approx(s.yield_total, rel=1e-6)
     assert results["fraction_DD"] + results["fraction_DT"] == pytest.approx(1, rel=1e-6)
     assert 2.0 < results["mean_neutron_energy_DD"] < 3.0
     assert 13.5 < results["mean_neutron_energy_DT"] < 14.8
-    assert results["beam_energy_backstop"] == pytest.approx(s.EB_grid[-1], rel=1e-6)
-    assert results["beam_energy_region_end"] == pytest.approx([s.EB_grid[-1]], rel=1e-6)
+    assert results["beam_energy_backstop"] == pytest.approx(s.beam_energy_grid[-1], rel=1e-6)
+    assert results["beam_energy_region_end"] == pytest.approx([s.beam_energy_grid[-1]], rel=1e-6)
     assert results["beam_power_entry"] == pytest.approx(280 * 10 / 1000)  # kV x mA -> kW
     assert results["beam_current_backstop"] < 10  # Part of the beam is scraped off
-    assert results["neutron_scrape_fraction"] == pytest.approx(s.nscrape_tot, rel=1e-6)
+    assert results["neutron_scrape_fraction"] == pytest.approx(s.neutron_scrape_fraction, rel=1e-6)
 
 
 def test_text_files_pure_deuterium(tmp_path):
@@ -478,9 +480,9 @@ def test_plots(tmp_path, T_frac, num_plots):
     "overrides",
     [
         dict(voltage=1000.0),  # DT neutrons above 16 MeV
-        dict(voltage=MAX_VOLTAGE, num_x_ints_list=[4], num_x_ints_list_C=[2]),
-        dict(EN_int=5.0),  # Energy bins coarser than the spectra
-        dict(EN_int=0.03),  # Bins that do not divide 16 MeV
+        dict(voltage=MAX_VOLTAGE, num_x_bins=[4], num_x_bins_out=[2]),
+        dict(energy_bin_width=5.0),  # Energy bins coarser than the spectra
+        dict(energy_bin_width=0.03),  # Bins that do not divide 16 MeV
     ],
 )
 def test_plots_and_sdef_at_any_energy(tmp_path, overrides):

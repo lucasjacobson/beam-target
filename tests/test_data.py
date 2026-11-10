@@ -178,4 +178,4 @@ def test_copy_of_data_dir_is_usable(tmp_path):
 
     data_dir = tmp_path / "data"
     shutil.copytree(data_path(""), data_dir)
-    assert make_source(data_dir=str(data_dir)).nyield_tot == make_source().nyield_tot
+    assert make_source(data_dir=str(data_dir)).yield_total == make_source().yield_total

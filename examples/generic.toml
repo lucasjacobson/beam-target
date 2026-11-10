@@ -9,23 +9,23 @@
 # pumping stages) by naming an [upstream.<name>] table:
 #
 #   [upstream.example]
-#   pressure     = [1e-3, 1e-2]  # torr, one per stage, in beam order
-#   length       = [50.0, 50.0]  # cm
-#   num_x_ints   = 10            # optional (default 10): internal intervals per stage
-#   num_x_ints_C = 1             # optional (default 1): output intervals per stage
-#   divergence   = 0.0           # optional (default 0): mrad
+#   pressure       = [1e-3, 1e-2]  # torr, one per stage, in beam order
+#   length         = [50.0, 50.0]  # cm
+#   num_x_bins     = 10            # optional (default 10): internal bins per stage
+#   num_x_bins_out = 1             # optional (default 1): output bins per stage
+#   divergence     = 0.0           # optional (default 0): mrad
 #
 #   [cases.with_upstream]
-#   upstream     = "example"
+#   upstream = "example"
 #   ...
 
 [defaults]
 # Mesh. Memory use is roughly 2.5 GB per case at these settings.
-num_x_ints   = 1370  # position intervals in the target chamber, internal calculation
-num_x_ints_C = 137   # position intervals in the target chamber, output
-angle_int    = 0.01  # deg, internal calculation
-angle_int_C  = 3.0   # deg, output (180 gives an isotropic source)
-EN_int       = 0.01  # MeV, output neutron energy interval
+num_x_bins       = 1370  # position bins in the target chamber, internal calculation
+num_x_bins_out   = 137   # position bins in the target chamber, output
+angle_step       = 0.01  # deg, internal calculation
+angle_step_out   = 3.0   # deg, output (180 gives an isotropic source)
+energy_bin_width = 0.01  # MeV, width of the output neutron energy bins
 
 # MCNP SDEF card: where the source goes in the MCNP geometry
 direction      = "-z"             # beam direction: -x, +x, -y, +y, -z or +z
@@ -41,10 +41,10 @@ T_frac       = 0.0       # atom fraction of tritium in the gas
 voltage      = 280.0     # kV
 current      = 50.0      # mA
 pressure     = 38.0      # torr, target chamber
-temperature  = 1800.0    # C
+temperature  = 1800.0    # degC
 length       = 137.0     # cm, target chamber
 start_radius = 0.2       # cm, beam radius at entry
-max_radius   = 4.1783    # cm, target chamber wall
+wall_radius  = 4.1783    # cm, target chamber wall
 divergence   = 36.0      # mrad
 
 [cases.T001pct]
@@ -55,7 +55,7 @@ pressure     = 38.0
 temperature  = 1800.0
 length       = 137.0
 start_radius = 0.2
-max_radius   = 4.1783
+wall_radius  = 4.1783
 divergence   = 36.0
 
 [cases.T050pct]
@@ -66,7 +66,7 @@ pressure     = 38.0
 temperature  = 1800.0
 length       = 137.0
 start_radius = 0.2
-max_radius   = 4.1783
+wall_radius  = 4.1783
 divergence   = 36.0
 
 [cases.T090pct]
@@ -77,7 +77,7 @@ pressure     = 38.0
 temperature  = 1800.0
 length       = 137.0
 start_radius = 0.2
-max_radius   = 4.1783
+wall_radius  = 4.1783
 divergence   = 36.0
 
 [cases.T100pct]
@@ -88,5 +88,5 @@ pressure     = 38.0
 temperature  = 1800.0
 length       = 137.0
 start_radius = 0.2
-max_radius   = 4.1783
+wall_radius  = 4.1783
 divergence   = 36.0

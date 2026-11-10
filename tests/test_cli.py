@@ -13,18 +13,18 @@ from shine_neutron_source import InputError, load_input, main
 # Settings for a small, fast case; the tests below add cases and tables to these
 BASE = """
 [defaults]
-num_x_ints = 20
-num_x_ints_C = 10
-angle_int = 1.0
-angle_int_C = 10.0
-EN_int = 0.01
+num_x_bins = 20
+num_x_bins_out = 10
+angle_step = 1.0
+angle_step_out = 10.0
+energy_bin_width = 0.01
 T_frac = 0.5
 voltage = 280.0
 current = 10.0
 temperature = 25.0
 length = 50.0
 start_radius = 0.2
-max_radius = 1.0
+wall_radius = 1.0
 divergence = 30.0
 """
 
@@ -45,8 +45,8 @@ def test_example_input():
     assert dd["direction"] == "-z"
     assert dd["source"]["T_frac"] == 0.0
     assert dd["source"]["stopping_power"] == "srim"
-    assert dd["source"]["num_x_ints_list"] == [1370]
-    assert dd["source"]["angle_int"] == 0.01
+    assert dd["source"]["num_x_bins"] == [1370]
+    assert dd["source"]["angle_step"] == 0.01
 
 
 def test_defaults_and_overrides(tmp_path):
@@ -81,7 +81,7 @@ def test_upstream_stages(tmp_path):
 [upstream.stages]
 pressure = [1e-3, 1e-2]
 length = [10.0, 20.0]
-num_x_ints = [4, 6]
+num_x_bins = [4, 6]
 
 [cases.a]
 pressure = 5.0
@@ -89,12 +89,12 @@ upstream = "stages"
 """,
     )
     source = load_input(path)["a"]["source"]
-    assert source["pressure_list"] == [1e-3, 1e-2, 5.0]
-    assert source["length_list"] == [10.0, 20.0, 50.0]
-    assert source["num_x_ints_list"] == [4, 6, 20]
-    assert source["num_x_ints_list_C"] == [1, 1, 10]  # Default: 1 per stage
-    assert source["divergence_list"] == [0.0, 0.0, 30.0]  # Default: 0 per stage
-    assert source["temperature_list"] == [25.0, 25.0, 25.0]
+    assert source["pressure"] == [1e-3, 1e-2, 5.0]
+    assert source["length"] == [10.0, 20.0, 50.0]
+    assert source["num_x_bins"] == [4, 6, 20]
+    assert source["num_x_bins_out"] == [1, 1, 10]  # Default: 1 per stage
+    assert source["divergence"] == [0.0, 0.0, 30.0]  # Default: 0 per stage
+    assert source["temperature"] == [25.0, 25.0, 25.0]
 
 
 @pytest.mark.parametrize(
@@ -103,7 +103,7 @@ upstream = "stages"
         ("[cases.a]\n", "missing pressure"),
         ("[cases.a]\npressure = 5.0\nvoltge = 3\n", "unknown setting"),
         ('[cases.a]\npressure = "high"\n', "pressure must be float"),
-        ("[cases.a]\npressure = 5.0\nnum_x_ints = 2.5\n", "num_x_ints must be int"),
+        ("[cases.a]\npressure = 5.0\nnum_x_bins = 2.5\n", "num_x_bins must be int"),
         ('[cases.a]\npressure = 5.0\nupstream = "nope"\n', r"no \[upstream.nope\] table"),
         (
             "[upstream.u]\npressure = [1e-3, 1e-2]\nlength = [10.0]\n[cases.a]\npressure = 5.0\n"

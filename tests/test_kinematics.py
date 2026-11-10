@@ -4,11 +4,11 @@ import numpy as np
 import pytest
 
 from shine_neutron_source.source import (
-    M_A,
-    M_D,
-    M_H,
-    M_N,
-    M_T,
+    M_H2,
+    M_H3,
+    M_HE3,
+    M_HE4,
+    M_N1,
     Q_DD,
     Q_DT,
     REACTIONS,
@@ -97,7 +97,7 @@ def test_forward_neutrons_are_faster():
 
 def test_masses_are_nuclear():
     """Kinematics use bare-nucleus masses (CODATA 2022 mass-energies, MeV)."""
-    assert (M_N, M_D, M_H, M_T, M_A) == (
+    assert (M_N1, M_H2, M_HE3, M_H3, M_HE4) == (
         939.56542194,
         1875.61294500,
         2808.39161112,

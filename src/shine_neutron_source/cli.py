@@ -27,16 +27,16 @@ CASE_SETTINGS = {
     "voltage": float,  # Beam voltage [kV]
     "current": float,  # Beam current [mA]
     "pressure": float,  # Target chamber pressure [torr]
-    "temperature": float,  # Gas temperature [C], used in every region
+    "temperature": float,  # Gas temperature [degC], used in every region
     "length": float,  # Target chamber length [cm]
     "start_radius": float,  # Beam radius where it enters the first region [cm]
-    "max_radius": float,  # Target chamber wall radius [cm]
+    "wall_radius": float,  # Target chamber wall radius [cm]
     "divergence": float,  # Beam divergence in the target chamber [mrad]
-    "num_x_ints": int,  # Position intervals in the target chamber (internal mesh)
-    "num_x_ints_C": int,  # Position intervals in the target chamber (output mesh)
-    "angle_int": float,  # Angle interval [deg] (internal mesh)
-    "angle_int_C": float,  # Angle interval [deg] (output mesh)
-    "EN_int": float,  # Neutron energy interval [MeV] (output mesh)
+    "num_x_bins": int,  # Position bins in the target chamber (internal mesh)
+    "num_x_bins_out": int,  # Position bins in the target chamber (output mesh)
+    "angle_step": float,  # Width of the emission-angle bins [deg] (internal mesh)
+    "angle_step_out": float,  # Width of the emission-angle bins [deg] (output mesh)
+    "energy_bin_width": float,  # Width of the neutron energy bins [MeV] (output mesh)
 }
 
 # Optional case settings and their defaults
@@ -47,13 +47,13 @@ OPTIONAL_CASE_SETTINGS = {
     "entry_position": [0.0, 0.0, 0.0],  # cm, where the beam enters (MCNP coordinates)
 }
 
-# Upstream stage settings: name -> (type, default). None means required. num_x_ints,
-# num_x_ints_C and divergence can be one value for every stage or a list with one per stage.
+# Upstream stage settings: name -> (type, default). None means required. num_x_bins,
+# num_x_bins_out and divergence can be one value for every stage or a list with one per stage.
 UPSTREAM_SETTINGS = {
     "pressure": (list, None),  # Pressure of each stage [torr]
     "length": (list, None),  # Length of each stage [cm]
-    "num_x_ints": (int, 10),  # Position intervals per stage (internal mesh)
-    "num_x_ints_C": (int, 1),  # Position intervals per stage (output mesh)
+    "num_x_bins": (int, 10),  # Position bins per stage (internal mesh)
+    "num_x_bins_out": (int, 1),  # Position bins per stage (output mesh)
     "divergence": (float, 0.0),  # Beam divergence in each stage [mrad]
 }
 
@@ -179,23 +179,23 @@ def load_input(path):
             if s["upstream"] not in upstreams:
                 raise InputError(f"{where}: no [upstream.{s['upstream']}] table")
             up = upstreams[s["upstream"]]
-        pressure_list = up["pressure"] + [s["pressure"]]
+        pressure = up["pressure"] + [s["pressure"]]
         resolved[name] = {
             "source": {
                 "T_frac": s["T_frac"],
                 "voltage": s["voltage"],
                 "current": s["current"],
-                "pressure_list": pressure_list,
-                "temperature_list": [s["temperature"]] * len(pressure_list),
-                "length_list": up["length"] + [s["length"]],
+                "pressure": pressure,
+                "temperature": [s["temperature"]] * len(pressure),
+                "length": up["length"] + [s["length"]],
                 "start_radius": s["start_radius"],
-                "max_radius": s["max_radius"],
-                "divergence_list": up["divergence"] + [s["divergence"]],
-                "num_x_ints_list": up["num_x_ints"] + [s["num_x_ints"]],
-                "num_x_ints_list_C": up["num_x_ints_C"] + [s["num_x_ints_C"]],
-                "angle_int": s["angle_int"],
-                "angle_int_C": s["angle_int_C"],
-                "EN_int": s["EN_int"],
+                "wall_radius": s["wall_radius"],
+                "divergence": up["divergence"] + [s["divergence"]],
+                "num_x_bins": up["num_x_bins"] + [s["num_x_bins"]],
+                "num_x_bins_out": up["num_x_bins_out"] + [s["num_x_bins_out"]],
+                "angle_step": s["angle_step"],
+                "angle_step_out": s["angle_step_out"],
+                "energy_bin_width": s["energy_bin_width"],
                 "stopping_power": s["stopping_power"],
             },
             "direction": s["direction"],
@@ -228,7 +228,7 @@ def run_case(name, settings, output_dir="output", input_file=None):
     s = settings["source"]
     logger.debug(
         f"{name}: starting: T_frac {s['T_frac']:g}, {s['voltage']:g} kV, {s['current']:g} mA, "
-        f"{len(s['pressure_list'])} gas region(s), stopping power {s['stopping_power']}"
+        f"{len(s['pressure'])} gas region(s), stopping power {s['stopping_power']}"
     )
     source = ShineSource(name=name, **s)
     case_dir = os.path.join(output_dir, name)
@@ -240,7 +240,7 @@ def run_case(name, settings, output_dir="output", input_file=None):
     sdef_info = {"sdef_direction": direction, "sdef_entry_position": entry}
     source.write_text_files(case_dir, {**run_info, **sdef_info})
     logger.info(
-        f"{name}: {source.nyield_tot:.3e} n/s in {time.time() - t0:.1f} s "
+        f"{name}: {source.yield_total:.3e} n/s in {time.time() - t0:.1f} s "
         f"-> {os.path.join(case_dir, '')}"  # Trailing separator: a directory
     )
     return source
@@ -260,7 +260,7 @@ def main(argv=None):
         "Each case is written to <output-dir>/<case>/: source.h5, source.sdef, plots/, "
         "summary.toml, axial_profile.txt, energy_spectrum.txt and angular_distribution.txt. "
         "Memory use is roughly 2.5 GB per case at 1370 position "
-        "intervals and a 0.01 degree angle interval, and scales with both.",
+        "bins and a 0.01 degree angle step, and scales with both.",
     )
     parser.add_argument("input", help="TOML input file (see examples/generic.toml)")
     parser.add_argument(
