@@ -1,0 +1,73 @@
+# Generic beam-target cases for shine_neutron_source.
+#
+# Run with:  python -m shine_neutron_source examples/generic.toml
+#
+# Settings in [defaults] apply to every case unless the case sets them itself. Every case
+# needs all of the settings below, either directly or from [defaults].
+#
+# A case can put gas regions in front of the target chamber (for example differential-
+# pumping stages) by naming an [upstream.<name>] table:
+#
+#   [upstream.example]
+#   pressure     = [1e-3, 1e-2]  # torr, one per stage, in beam order
+#   length       = [50.0, 50.0]  # cm
+#   num_x_ints   = 10            # optional (default 10): internal intervals per stage
+#   num_x_ints_C = 1             # optional (default 1): output intervals per stage
+#   divergence   = 0.0           # optional (default 0): mrad
+#
+#   [cases.with_upstream]
+#   upstream     = "example"
+#   ...
+
+[defaults]
+# Mesh. Memory use is roughly 2.5 GB per case at these settings.
+num_x_ints   = 1370  # position intervals in the target chamber, internal calculation
+num_x_ints_C = 137   # position intervals in the target chamber, output
+angle_int    = 0.01  # deg, internal calculation
+angle_int_C  = 3.0   # deg, output (180 gives an isotropic source)
+EN_int       = 0.01  # MeV, output neutron energy interval
+direction    = "-z"  # MCNP SDEF beam direction: -x, +x, -y, +y, -z or +z
+
+[cases.DD]
+T_frac       = 0.0       # atom fraction of tritium in the gas
+voltage      = 280.0     # kV
+current      = 38.39596  # mA
+pressure     = 38.39728  # torr, target chamber
+temperature  = 1800.0    # C
+length       = 137.3025  # cm, target chamber
+start_radius = 0.2       # cm, beam radius at entry
+max_radius   = 4.1783    # cm, target chamber wall
+divergence   = 36.0      # mrad
+
+[cases.DT01pct]
+T_frac       = 0.01
+voltage      = 280.0
+current      = 38.39596
+pressure     = 38.39738
+temperature  = 1800.0
+length       = 137.3025
+start_radius = 0.2
+max_radius   = 4.1783
+divergence   = 36.0
+
+[cases.DT90pct]
+T_frac       = 0.9
+voltage      = 280.0
+current      = 38.39596
+pressure     = 38.39738
+temperature  = 1800.0
+length       = 137.3025
+start_radius = 0.2
+max_radius   = 4.1783
+divergence   = 36.0
+
+[cases.DT]
+T_frac       = 1.0
+voltage      = 280.0
+current      = 38.39596
+pressure     = 38.39738
+temperature  = 1800.0
+length       = 137.3025
+start_radius = 0.2
+max_radius   = 4.1783
+divergence   = 36.0

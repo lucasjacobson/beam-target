@@ -1,2 +1,4 @@
 __pycache__
 output
+# Private input files (e.g. real machine cases): name them *.local.toml
+*.local.toml
