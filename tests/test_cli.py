@@ -36,8 +36,8 @@ def write_input(tmp_path, text, name="input.toml"):
 
 def test_example_input():
     cases = load_input(EXAMPLE_INPUT)
-    assert list(cases) == ["DD", "DT01pct", "DT90pct", "DT"]
-    dd = cases["DD"]
+    assert list(cases) == ["T000pct", "T001pct", "T050pct", "T090pct", "T100pct"]
+    dd = cases["T000pct"]
     assert dd["direction"] == "-z"
     assert dd["source"]["T_frac"] == 0.0
     assert dd["source"]["stopping_power"] == "srim"

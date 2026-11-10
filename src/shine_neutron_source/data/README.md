@@ -88,7 +88,7 @@ deuterium + T_frac × the value in tritium. Electronic stopping, which dominates
 for D and T (one electron each). Nuclear stopping per atom is about 45 % higher in deuterium
 than in tritium, but it is below 1.5 % of the total above 10 keV and below 0.1 % above
 100 keV: compared with using the tritium table for all mixtures, it lowers the DD yield of the
-generic DD case by 0.03 %.
+generic pure-deuterium case (`T000pct`) by 0.03 %.
 
 ### SRIM: `srim_deuteron_in_D_gas.txt`, `srim_deuteron_in_T_gas.txt`
 
@@ -129,7 +129,7 @@ Electronic stopping per atom, deuterons in hydrogen gas:
 | 150–400 keV | 0.965–0.985 |
 
 SRIM is 2–3.5 % lower than ICRU 49 where the beam enters the target. For the generic cases in
-`examples/generic.toml`, `"icru49"` gives neutron yields 1.4 % (DT) to 2.2 % (DD) lower than
+`examples/generic.toml`, `"icru49"` gives neutron yields 1.4 % (pure tritium) to 2.2 % (pure deuterium) lower than
 `"srim"`, and a beam energy at the backstop of about 7.6–7.7 keV instead of 9.9–10 keV. The choice of
 stopping powers is therefore a systematic uncertainty of about 2 % on the yields.
 

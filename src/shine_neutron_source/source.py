@@ -1100,7 +1100,7 @@ class ShineSource:
             ax.plot(0, 0, "")  # Keep the origin in view
             ax.set_xlabel("Distance into target chamber [cm]")
             ax.set_ylabel(ylabel)
-            ax.set_title(f"SHINE beam {quantity} profile ({self.name})")
+            ax.set_title(f"Beam {quantity} profile ({self.name})")
             ax.grid()
             if len(lines) > 1:
                 ax.legend(loc="lower left")
@@ -1122,7 +1122,7 @@ class ShineSource:
             ax.step(xvals, np.append(np.append(0, yvals), 0), label=label)
         ax.set_xlabel("Distance into target chamber [cm]")
         ax.set_ylabel("Linear neutron source [n/cm-s]")
-        ax.set_title(f"SHINE neutron source position distribution ({self.name})")
+        ax.set_title(f"Neutron source position distribution ({self.name})")
         ax.grid()
         ax.legend()
         _save_figure(os.path.join(directory, "neutron_position.png"))
@@ -1148,7 +1148,7 @@ class ShineSource:
         fig.set_size_inches(6, 6)
         ax.plot(xvals, yvals)
         ax.set_rlabel_position(270)
-        ax.set_title(f"SHINE neutron source angular distribution ({self.name})")
+        ax.set_title(f"Neutron source angular distribution ({self.name})")
         _save_figure(os.path.join(directory, "neutron_angle.png"))
         plt.close()
 
@@ -1212,7 +1212,9 @@ class ShineSource:
                 ax.set_ylim(10 ** (ymin - 0.25), 10 ** (ymax + 0.25))
             ax.set_xlabel("Neutron energy [MeV]")
             ax.set_ylabel("Neutron source [n/MeV-s]")
-            ax.set_title(f"SHINE {case} neutron source energy distribution ({self.name})")
+            ax.set_title(
+                f"{case.capitalize() if case == 'total' else case} neutron source energy distribution ({self.name})"
+            )
             ax.grid()
             ax.legend(loc=lloc)
             _save_figure(os.path.join(directory, f"neutron_energy_{case}.png"))

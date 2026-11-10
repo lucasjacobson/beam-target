@@ -31,7 +31,9 @@ direction    = "-z"  # MCNP SDEF beam direction: -x, +x, -y, +y, -z or +z
 # Physics
 stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
 
-[cases.DD]
+# Cases are named by the tritium fraction of the gas
+
+[cases.T000pct]
 T_frac       = 0.0       # atom fraction of tritium in the gas
 voltage      = 280.0     # kV
 current      = 38.39596  # mA
@@ -42,7 +44,7 @@ start_radius = 0.2       # cm, beam radius at entry
 max_radius   = 4.1783    # cm, target chamber wall
 divergence   = 36.0      # mrad
 
-[cases.DT01pct]
+[cases.T001pct]
 T_frac       = 0.01
 voltage      = 280.0
 current      = 38.39596
@@ -53,7 +55,18 @@ start_radius = 0.2
 max_radius   = 4.1783
 divergence   = 36.0
 
-[cases.DT90pct]
+[cases.T050pct]
+T_frac       = 0.5
+voltage      = 280.0
+current      = 38.39596
+pressure     = 38.39738
+temperature  = 1800.0
+length       = 137.3025
+start_radius = 0.2
+max_radius   = 4.1783
+divergence   = 36.0
+
+[cases.T090pct]
 T_frac       = 0.9
 voltage      = 280.0
 current      = 38.39596
@@ -64,7 +77,7 @@ start_radius = 0.2
 max_radius   = 4.1783
 divergence   = 36.0
 
-[cases.DT]
+[cases.T100pct]
 T_frac       = 1.0
 voltage      = 280.0
 current      = 38.39596
