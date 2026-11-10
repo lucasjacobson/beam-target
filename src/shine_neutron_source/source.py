@@ -33,6 +33,7 @@ Naming conventions used throughout:
 """
 
 import datetime
+import functools
 import importlib.metadata
 import logging
 import os
@@ -48,6 +49,7 @@ from numpy.polynomial.legendre import legval
 
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt  # Must follow matplotlib.use
+from matplotlib.colors import LogNorm
 
 PACKAGE_NAME = "shine-neutron-source"
 logger = logging.getLogger(__name__)
@@ -403,10 +405,27 @@ def _cosine_text(x):
     return f"{0.0 if abs(x) < 1e-12 else float(x):18.15f}"
 
 
-def _save_figure(fname):
-    """Save the current matplotlib figure to fname."""
-    plt.tight_layout()
-    plt.savefig(fname)
+# Matplotlib settings for every plot: serif text, upright mathtext, 200 dpi
+PLOT_STYLE = {"font.family": "serif", "mathtext.default": "regular", "savefig.dpi": 200}
+
+
+def _plot_style(method):
+    """Decorator: draw the plot with PLOT_STYLE, without changing global matplotlib settings."""
+
+    @functools.wraps(method)
+    def wrapper(*args, **kwargs):
+        with plt.rc_context(PLOT_STYLE):
+            return method(*args, **kwargs)
+
+    return wrapper
+
+
+def _save_figure(fig, fname, close=True):
+    """Lay out fig, save it to fname and (unless close is False) close it."""
+    fig.tight_layout()
+    fig.savefig(fname)
+    if close:
+        plt.close(fig)
 
 
 class ShineSource:
@@ -1590,7 +1609,19 @@ class ShineSource:
     def make_plots(self, directory):
         """Write plots of the beam and neutron source to directory as PNG files.
 
-        File names do not include the case name, so use a separate directory per case.
+        - beam.png: beam energy, radius (with the wall), current and the power deposited in
+          the gas and on the wall, along the beam.
+        - neutron_position.png, neutron_position_log.png: neutrons per unit length along the
+          beam, on linear and log scales.
+        - neutron_angle.png: neutrons per steradian against emission angle.
+        - neutron_energy_angle_DD.png, neutron_energy_angle_DT.png (for the reactions
+          present): neutron energy against emission angle, coloured by intensity.
+        - neutron_energy.png, neutron_energy_log.png: the neutron energy spectrum,
+          integrated over angle, on linear and log scales.
+
+        Position plots run from where the beam enters the first gas region, with dashed lines
+        at the boundaries between regions. File names do not include the case name, so use a
+        separate directory per case.
         """
         os.makedirs(directory, exist_ok=True)
         self.plot_beam(directory)
@@ -1598,146 +1629,170 @@ class ShineSource:
         self.plot_neutron_angle(directory)
         self.plot_neutron_energy(directory)
 
+    def _mark_regions(self, ax):
+        """Draw dashed lines at the boundaries between gas regions."""
+        for x in np.cumsum(self.length)[:-1]:
+            ax.axvline(x, color="gray", linestyle="--", linewidth=0.8)
+
+    def _set_position_axis(self, ax, mark_regions=True):
+        """Label the position axis and (unless mark_regions is False) mark the gas regions."""
+        if mark_regions:
+            self._mark_regions(ax)
+        ax.set_xlim(0, self.x_grid_out[-1])
+        if self.num_regions > 1:
+            ax.set_xlabel("Distance along the beam [cm] (dashed lines: region boundaries)")
+        else:
+            ax.set_xlabel("Distance into the target chamber [cm]")
+
+    @_plot_style
     def plot_beam(self, directory):
-        """Plot beam energy, current and power against position."""
-        xvals = np.array(self.x_grid_out)
-        yvals_erg = np.array(self.beam_energy_grid_out)
-        yvals_cur = np.array(self.current_grid_out)
-        yvals_cur_tot = np.full(xvals.shape, self.current)
-        yvals_pow = yvals_erg * yvals_cur / 1000
-        yvals_pow_tot = yvals_erg * yvals_cur_tot / 1000
+        """Plot the beam energy, radius, current and deposited power against position, in a
+        2 x 2 grid."""
+        x = self.x_grid_out
+        fig, axes = plt.subplots(2, 2, sharex=True, figsize=(13, 9))
+        (ax_energy, ax_radius), (ax_current, ax_power) = axes
 
-        plots = [
-            ("energy", "Beam energy [keV]", [(yvals_erg, None)]),
-            (
-                "current",
-                "Beam current [mA]",
-                [(yvals_cur_tot, "No scraping"), (yvals_cur, "With scraping")],
-            ),
-            (
-                "power",
-                "Beam power [kW]",
-                [(yvals_pow_tot, "No scraping"), (yvals_pow, "With scraping")],
-            ),
-        ]
-        for quantity, ylabel, lines in plots:
-            fig, ax = plt.subplots(1, 1)
-            fig.set_size_inches(8, 6)
-            for yvals, label in lines:
-                ax.plot(xvals, yvals, label=label)
-            ax.plot(0, 0, "")  # Keep the origin in view
-            ax.set_xlabel("Distance into target chamber [cm]")
-            ax.set_ylabel(ylabel)
-            ax.set_title(f"Beam {quantity} profile ({self.name})")
+        ax_energy.plot(x, self.beam_energy_grid_out)
+        ax_energy.set_ylabel("Beam energy [keV]")
+        ax_energy.set_ylim(bottom=0)
+
+        ax_radius.plot(x, self.radius_grid_out, label="Beam edge")
+        ax_radius.axhline(self.wall_radius, color="k", linewidth=1.5, label="Wall")
+        ax_radius.set_ylabel("Radius [cm]")
+        ax_radius.set_ylim(0, 1.1 * self.wall_radius)
+        ax_radius.legend(loc="lower right")
+
+        ax_current.plot(x, self.current_grid_out)
+        ax_current.set_ylabel("Beam current [mA]")
+        ax_current.set_ylim(0, 1.05 * self.current)
+
+        # Power per unit length [W/cm] in each output bin, with the totals in the legend
+        entry = self.voltage * self.current / 1000
+        gas_label = f"Into the gas ({self.gas_power:.3g} kW)"
+        wall_label = f"Onto the wall ({self.wall_power:.3g} kW)"
+        ax_power.stairs(self.gas_power_mids_out * 1000 / self.dx_out, x, label=gas_label)
+        ax_power.stairs(self.wall_power_mids_out * 1000 / self.dx_out, x, label=wall_label)
+        ax_power.set_ylabel("Power deposited [W/cm]")
+        ax_power.set_ylim(bottom=0)
+        ax_power.legend(
+            loc="center left",
+            title=f"Beam power {entry:.3g} kW\nTo the backstop: {self.backstop_power:.3g} kW",
+            alignment="left",
+        )
+
+        for ax in axes.flat:
+            self._mark_regions(ax)
             ax.grid()
-            if len(lines) > 1:
-                ax.legend(loc="lower left")
-            _save_figure(os.path.join(directory, f"beam_{quantity}.png"))
-            plt.close()
+        for ax in axes[1]:
+            self._set_position_axis(ax, mark_regions=False)
+        fig.suptitle(f"Beam along the target ({self.name})")
+        _save_figure(fig, os.path.join(directory, "beam.png"))
 
+    @_plot_style
     def plot_neutron_position(self, directory):
-        """Plot the neutron source per unit length against position (linear and log)."""
-        xvals = np.array(self.x_grid_out)
-        xvals = np.append(xvals, xvals[-1])
-        yvals_DD = np.sum(self.neutrons["DD"], (1, 2)) / self.dx_out
-        yvals_DT = np.sum(self.neutrons["DT"], (1, 2)) / self.dx_out
-        yvals_tot = yvals_DD + yvals_DT
+        """Plot the neutrons per unit length against position, on linear and log scales."""
+        x = self.x_grid_out
+        lines = [
+            (rxn, np.sum(self.neutrons[rxn], (1, 2)) / self.dx_out)
+            for rxn in self.reactions_present()
+        ]
+        if len(lines) > 1:
+            lines.append(("Total", lines[0][1] + lines[1][1]))
 
-        # Pad with zeros so the step outline drops to zero at both ends
-        fig, ax = plt.subplots(1, 1)
-        fig.set_size_inches(8, 6)
-        for yvals, label in [(yvals_DD, "DD"), (yvals_DT, "DT"), (yvals_tot, "Total")]:
-            ax.step(xvals, np.append(np.append(0, yvals), 0), label=label)
-        ax.set_xlabel("Distance into target chamber [cm]")
-        ax.set_ylabel("Linear neutron source [n/cm-s]")
-        ax.set_title(f"Neutron source position distribution ({self.name})")
+        fig, ax = plt.subplots(figsize=(8, 6))
+        for label, per_cm in lines:
+            ax.stairs(per_cm, x, label=label)
+        self._set_position_axis(ax)
+        ax.set_ylabel(r"Neutrons per unit length [n/(cm$\cdot$s)]")
+        ax.set_title(f"Neutron source along the beam ({self.name})")
+        ax.set_ylim(bottom=0)
         ax.grid()
         ax.legend()
-        _save_figure(os.path.join(directory, "neutron_position.png"))
+        _save_figure(fig, os.path.join(directory, "neutron_position.png"), close=False)
 
         ax.set_yscale("log")
-        _save_figure(os.path.join(directory, "neutron_position_log.png"))
-        plt.close()
+        ax.autoscale(axis="y")
+        _save_figure(fig, os.path.join(directory, "neutron_position_log.png"))
 
+    @_plot_style
     def plot_neutron_angle(self, directory):
-        """Polar plot of the neutron source per unit solid angle, normalised to its mean."""
-        # Mirror 0-180 degrees onto 180-360 degrees for a full polar plot
-        xvals = self.angle_grid_out * np.pi / 180
-        xvals = np.append(xvals, 2 * np.pi - np.flip(xvals[:-1]))
-        yvals_DD = np.sum(self.neutrons["DD"], (0, 2)) / self.solid_angles_out
-        yvals_DT = np.sum(self.neutrons["DT"], (0, 2)) / self.solid_angles_out
-        yvals = yvals_DD + yvals_DT
-        yvals = np.append(yvals, np.flip(yvals))
-        yvals = yvals / np.mean(yvals)
-        yvals = np.append(yvals, yvals[-1])
+        """Plot the neutrons per steradian against emission angle (from the beam direction).
 
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection="polar")
-        fig.set_size_inches(6, 6)
-        ax.plot(xvals, yvals)
-        ax.set_rlabel_position(270)
-        ax.set_title(f"Neutron source angular distribution ({self.name})")
-        _save_figure(os.path.join(directory, "neutron_angle.png"))
-        plt.close()
+        The y axis is not forced to start at zero, so that small anisotropies show.
+        """
+        lines = [
+            (rxn, np.sum(self.neutrons[rxn], (0, 2)) / self.solid_angles_out)
+            for rxn in self.reactions_present()
+        ]
+        if len(lines) > 1:
+            lines.append(("Total", lines[0][1] + lines[1][1]))
 
+        fig, ax = plt.subplots(figsize=(8, 6))
+        for label, per_sr in lines:
+            ax.stairs(per_sr, self.angle_grid_out, label=label)
+        ax.set_xlim(0, 180)
+        ax.set_xticks(np.arange(0, 181, 30))
+        ax.set_xlabel("Emission angle from the beam direction [degrees]")
+        ax.set_ylabel(r"Neutrons per steradian [n/(s$\cdot$sr)]")
+        ax.set_title(f"Neutron angular distribution ({self.name})")
+        ax.grid()
+        ax.legend()
+        _save_figure(fig, os.path.join(directory, "neutron_angle.png"))
+
+    @_plot_style
     def plot_neutron_energy(self, directory):
-        """Plot the neutron energy spectrum stacked by emission angle.
+        """Plot neutron energy against emission angle for each reaction, and the spectrum.
 
-        Writes one plot each for DD and DT (when present) and one for the total. The axis
-        ranges follow the neutron energies, so the plots suit any beam energy.
+        The maps show neutrons per unit energy and solid angle, so each column is the
+        spectrum at that angle, on a log colour scale covering four decades below the peak;
+        empty cells are left blank.
+
+        The spectrum is integrated over angle and drawn on linear and log scales (the log
+        one covers five decades below the peak). DD and DT are shown separately, since their
+        energies do not overlap, and each drops to zero at the ends of its energy range. The
+        axes follow the neutron energies, so the plots suit any beam energy.
         """
         present = self.reactions_present()
-        spectra = {rxn: np.sum(self.neutrons[rxn], 0) / self.energy_bin_width for rxn in present}
-        energy_grid_tot, on_common_grid = self.neutrons_by_angle_and_energy()
-        energy_mids_tot = (energy_grid_tot[:-1] + energy_grid_tot[1:]) / 2
-        spectrum_tot = (on_common_grid["DD"] + on_common_grid["DT"]) / self.energy_bin_width
-
-        cvals = np.linspace(0, 0.95, self.num_angle_bins_out)
-        colors = [plt.cm.nipy_spectral(x) for x in cvals]
-
-        # case: (energy mids, spectrum, x min, x max, legend location). Each reaction's plot
-        # spans its energy range plus a 10 % margin.
-        cases = {}
         for rxn in present:
-            lo, hi = self.neutron_energy_grid[rxn][0], self.neutron_energy_grid[rxn][-1]
-            margin = 0.1 * (hi - lo)
-            cases[rxn] = (
-                self.neutron_energy_mids[rxn],
-                spectra[rxn],
-                max(0, lo - margin),
-                hi + margin,
-                "upper right",
+            by_angle = np.sum(self.neutrons[rxn], 0)  # (angle, energy) [n/s]
+            density = by_angle / self.solid_angles_out[:, None] / self.energy_bin_width
+            filled = np.flatnonzero(np.sum(by_angle, 0))
+            lo, hi = filled[0], filled[-1] + 1
+            fig, ax = plt.subplots(figsize=(8, 6))
+            mesh = ax.pcolormesh(
+                self.angle_grid_out,
+                self.neutron_energy_grid[rxn][lo : hi + 1],
+                np.ma.masked_less_equal(density[:, lo:hi].T, 0),
+                cmap="viridis",
+                norm=LogNorm(vmin=np.max(density) * 1e-4, vmax=np.max(density)),
             )
-        cases["total"] = (energy_mids_tot, spectrum_tot, 0.0, energy_grid_tot[-1], "upper center")
+            fig.colorbar(mesh, ax=ax, label=r"Neutrons [n/(MeV$\cdot$s$\cdot$sr)]")
+            ax.set_xlim(0, 180)
+            ax.set_xticks(np.arange(0, 181, 30))
+            ax.set_xlabel("Emission angle from the beam direction [degrees]")
+            ax.set_ylabel("Neutron energy [MeV]")
+            ax.set_title(f"{rxn} neutron energy against emission angle ({self.name})")
+            _save_figure(fig, os.path.join(directory, f"neutron_energy_angle_{rxn}.png"))
 
-        # Label about 13 of the angle bins in the legend
-        labelled = np.round(np.linspace(0, self.num_angle_bins_out - 1, 13))
+        energy_grid, on_common_grid = self.neutrons_by_angle_and_energy()
+        peak = 0.0
+        fig, ax = plt.subplots(figsize=(8, 6))
+        for rxn in present:
+            spectrum = np.sum(on_common_grid[rxn], 0) / self.energy_bin_width
+            # Draw each reaction over its own energy range, dropping to zero at both ends
+            filled = np.flatnonzero(spectrum)
+            lo, hi = filled[0], filled[-1] + 1
+            ax.stairs(spectrum[lo:hi], energy_grid[lo : hi + 1], baseline=0, label=rxn)
+            peak = max(peak, np.max(spectrum))
+        ax.set_xlim(0, energy_grid[-1] + 0.05 * (energy_grid[-1] - energy_grid[0]))
+        ax.set_ylim(0, 1.05 * peak)
+        ax.set_xlabel("Neutron energy [MeV]")
+        ax.set_ylabel(r"Neutrons per unit energy [n/(MeV$\cdot$s)]")
+        ax.set_title(f"Neutron energy spectrum ({self.name})")
+        ax.grid()
+        ax.legend()
+        _save_figure(fig, os.path.join(directory, "neutron_energy.png"), close=False)
 
-        for case, (neutron_energy_mids, spectrum, xmin, xmax, lloc) in cases.items():
-            fig, ax = plt.subplots(1, 1)
-            fig.set_size_inches(8, 6)
-            ax.set_prop_cycle("color", colors)
-            total = np.zeros(spectrum.shape[1])
-            for i in range(self.num_angle_bins_out):
-                if i in labelled:
-                    label = rf"{self.angle_grid_out[i]:g}-{self.angle_grid_out[i + 1]:g}$\degree$"
-                else:
-                    label = ""
-                ax.fill_between(neutron_energy_mids, total, total + spectrum[i, :], label=label)
-                total += spectrum[i, :]
-            ax.set_xlim(xmin, xmax)
-            if case == "total":
-                # Show five decades below the peak
-                ax.set_yscale("log")
-                ymax = np.log10(np.max(total))
-                ymin = ymax - 5
-                ax.set_ylim(10 ** (ymin - 0.25), 10 ** (ymax + 0.25))
-            ax.set_xlabel("Neutron energy [MeV]")
-            ax.set_ylabel("Neutron source [n/MeV-s]")
-            ax.set_title(
-                f"{case.capitalize() if case == 'total' else case} neutron source energy distribution ({self.name})"
-            )
-            ax.grid()
-            ax.legend(loc=lloc)
-            _save_figure(os.path.join(directory, f"neutron_energy_{case}.png"))
-            plt.close()
+        ax.set_yscale("log")
+        ax.set_ylim(peak * 10**-5.25, peak * 10**0.25)
+        _save_figure(fig, os.path.join(directory, "neutron_energy_log.png"))

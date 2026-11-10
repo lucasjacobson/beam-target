@@ -216,7 +216,7 @@ def test_main_runs_cases(tmp_path):
         ]:
             assert (case_dir / fname).is_file()
         assert not (case_dir / "input.toml").exists()  # The summary records the inputs instead
-        assert len(list((case_dir / "plots").glob("*.png"))) in (8, 9)
+        assert len(list((case_dir / "plots").glob("*.png"))) in (7, 8)
         with open(case_dir / "summary.toml", "rb") as f:
             run = tomllib.load(f)["run"]
         assert run["name"] == case

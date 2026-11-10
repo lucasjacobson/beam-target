@@ -634,7 +634,7 @@ def test_text_files_pure_deuterium(tmp_path):
     assert results["yield_DT"] == 0 and "mean_neutron_energy_DT" not in results
 
 
-@pytest.mark.parametrize("T_frac, num_plots", [(0.0, 8), (0.5, 9)])
+@pytest.mark.parametrize("T_frac, num_plots", [(0.0, 7), (0.5, 8)])
 def test_plots(tmp_path, T_frac, num_plots):
     make_source(T_frac=T_frac).make_plots(tmp_path / "plots")
     assert len(list((tmp_path / "plots").glob("*.png"))) == num_plots
@@ -655,4 +655,4 @@ def test_plots_and_sdef_at_any_energy(tmp_path, overrides):
     source = make_source(**overrides)
     source.get_mcnp_sdef()
     source.make_plots(tmp_path / "plots")
-    assert len(list((tmp_path / "plots").glob("*.png"))) == 9
+    assert len(list((tmp_path / "plots").glob("*.png"))) == 8
