@@ -46,7 +46,6 @@ from scipy.special import legendre
 
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt  # Must follow matplotlib.use
-from matplotlib import ticker as mticker
 
 PACKAGE_NAME = "shine-neutron-source"
 logger = logging.getLogger(__name__)
@@ -414,8 +413,9 @@ class ShineSource:
         self.start_radius = float(start_radius)
         self.max_radius = float(max_radius)
         self.divergence_list = np.atleast_1d(np.array(divergence_list, dtype=float))
-        self.num_x_ints_list = np.atleast_1d(np.array(num_x_ints_list, dtype=int))
-        self.num_x_ints_list_C = np.atleast_1d(np.array(num_x_ints_list_C, dtype=int))
+        # Interval counts are converted to int after check_input confirms they are whole numbers
+        self.num_x_ints_list = np.atleast_1d(np.array(num_x_ints_list, dtype=float))
+        self.num_x_ints_list_C = np.atleast_1d(np.array(num_x_ints_list_C, dtype=float))
         self.angle_int = float(angle_int)
         self.angle_int_C = float(angle_int_C)
         self.EN_int = float(EN_int)
@@ -424,6 +424,8 @@ class ShineSource:
 
         self.num_regions = len(self.pressure_list)
         self.check_input()
+        self.num_x_ints_list = self.num_x_ints_list.astype(int)
+        self.num_x_ints_list_C = self.num_x_ints_list_C.astype(int)
 
         # Deuteron source rate [1/s]
         self.dps = self.current / 1000 / ee
@@ -478,9 +480,15 @@ class ShineSource:
         require(np.all(self.length_list > 0), "lengths must be positive")
         require(self.start_radius > 0, "start_radius must be positive")
         require(self.max_radius > 0, "max_radius must be positive")
+        require(
+            self.max_radius >= self.start_radius,
+            "max_radius (the wall) must not be smaller than start_radius (the beam at entry)",
+        )
         require(np.all(self.divergence_list >= 0), "divergences must not be negative")
-        require(np.all(self.num_x_ints_list > 0), "num_x_ints_list must be positive")
-        require(np.all(self.num_x_ints_list_C > 0), "num_x_ints_list_C must be positive")
+        for attr in ["num_x_ints_list", "num_x_ints_list_C"]:
+            counts = getattr(self, attr)
+            require(np.all(counts == np.round(counts)), f"{attr} must be whole numbers")
+            require(np.all(counts > 0), f"{attr} must be positive")
         require(self.angle_int > 0, "angle_int must be positive")
         require(self.angle_int_C > 0, "angle_int_C must be positive")
         require(self.EN_int > 0, "EN_int must be positive")
@@ -780,6 +788,12 @@ class ShineSource:
                 self.nscrape[rxn] = 1 - np.sum(vals_scr) / np.sum(vals_tot)
 
         self.nyield_tot = self.nyield["DD"] + self.nyield["DT"]
+        if self.nyield_tot == 0:
+            raise ValueError(
+                f"{self.name}: no neutrons are produced. Check that the beam voltage is high "
+                "enough (the cross-section data start at 1.8 keV for DD and 10 keV for DT) and "
+                "that the beam is not scraped away entirely."
+            )
         self.nscrape_tot = (
             self.nyield["DD"] * self.nscrape["DD"] + self.nyield["DT"] * self.nscrape["DT"]
         ) / self.nyield_tot
@@ -1156,41 +1170,43 @@ class ShineSource:
         """Plot the neutron energy spectrum stacked by emission angle.
 
         Writes one plot each for DD and DT (when present) and one for the total. The axis
-        ranges are fixed to suit beam energies of a few hundred keV.
+        ranges follow the neutron energies, so the plots suit any beam energy.
         """
-        # Common energy mesh for the total spectrum
-        EN_min_tot = 0.0
-        EN_max_tot = 16.0
-        num_EN_ints_tot = int(round((EN_max_tot - EN_min_tot) / self.EN_int))
-        EN_grid_tot = np.linspace(EN_min_tot, EN_max_tot, num_EN_ints_tot + 1)
-        EN_mids_tot = (EN_grid_tot[:-1] + EN_grid_tot[1:]) / 2
+        present = [rxn for rxn, frac in (("DD", 1 - self.T_frac), ("DT", self.T_frac)) if frac > 0]
+        spectra = {rxn: np.sum(self.neutrons[rxn], 0) / self.EN_int for rxn in present}
 
-        spectrum_DD = np.sum(self.neutrons["DD"], 0) / self.EN_int
-        spectrum_DT = np.sum(self.neutrons["DT"], 0) / self.EN_int
-        i_DD = int(round(self.EN_grid["DD"][0] / self.EN_int))
-        i_DT = int(round(self.EN_grid["DT"][0] / self.EN_int))
+        # Energy mesh for the total spectrum: from 0 to the highest neutron energy, aligned with
+        # the reactions' meshes (which start and end on multiples of EN_int)
+        num_EN_ints_tot = max(int(round(self.EN_grid[rxn][-1] / self.EN_int)) for rxn in present)
+        EN_grid_tot = np.arange(num_EN_ints_tot + 1) * self.EN_int
+        EN_mids_tot = (EN_grid_tot[:-1] + EN_grid_tot[1:]) / 2
         spectrum_tot = np.zeros((self.num_a_ints_C, num_EN_ints_tot))
-        spectrum_tot[:, i_DD : i_DD + spectrum_DD.shape[1]] += spectrum_DD
-        spectrum_tot[:, i_DT : i_DT + spectrum_DT.shape[1]] += spectrum_DT
+        for rxn in present:
+            i = int(round(self.EN_grid[rxn][0] / self.EN_int))
+            spectrum_tot[:, i : i + spectra[rxn].shape[1]] += spectra[rxn]
 
         cvals = np.linspace(0, 0.95, self.num_a_ints_C)
         colors = [plt.cm.nipy_spectral(x) for x in cvals]
 
-        # case: (energy mids, spectrum, x min, x max, x tick interval, legend location)
-        cases = {
-            "DD": (self.EN_mids["DD"], spectrum_DD, 1.8, 3.4, 0.2, "upper right"),
-            "DT": (self.EN_mids["DT"], spectrum_DT, 12.9, 15.5, 0.2, "upper right"),
-            "total": (EN_mids_tot, spectrum_tot, 0.0, 16.0, 1.0, "upper center"),
-        }
-        if self.T_frac == 1:
-            del cases["DD"]
-        if self.T_frac == 0:
-            del cases["DT"]
+        # case: (energy mids, spectrum, x min, x max, legend location). Each reaction's plot
+        # spans its energy range plus a 10 % margin.
+        cases = {}
+        for rxn in present:
+            lo, hi = self.EN_grid[rxn][0], self.EN_grid[rxn][-1]
+            margin = 0.1 * (hi - lo)
+            cases[rxn] = (
+                self.EN_mids[rxn],
+                spectra[rxn],
+                max(0, lo - margin),
+                hi + margin,
+                "upper right",
+            )
+        cases["total"] = (EN_mids_tot, spectrum_tot, 0.0, EN_grid_tot[-1], "upper center")
 
         # Label about 13 of the angle bins in the legend
         labelled = np.round(np.linspace(0, self.num_a_ints_C - 1, 13))
 
-        for case, (EN_mids, spectrum, xmin, xmax, xint, lloc) in cases.items():
+        for case, (EN_mids, spectrum, xmin, xmax, lloc) in cases.items():
             fig, ax = plt.subplots(1, 1)
             fig.set_size_inches(8, 6)
             ax.set_prop_cycle("color", colors)
@@ -1203,7 +1219,6 @@ class ShineSource:
                 ax.fill_between(EN_mids, total, total + spectrum[i, :], label=label)
                 total += spectrum[i, :]
             ax.set_xlim(xmin, xmax)
-            ax.xaxis.set_major_locator(mticker.MultipleLocator(base=xint))
             if case == "total":
                 # Show five decades below the peak
                 ax.set_yscale("log")

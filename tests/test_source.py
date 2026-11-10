@@ -138,6 +138,11 @@ def test_reference_results(T_frac, stopping_power):
         (dict(angle_int=4.0), "multiple of angle_int"),
         (dict(num_x_ints_list_C=[7]), "must divide num_x_ints_list"),
         (dict(divergence_list=[-1.0]), "divergences must not be negative"),
+        (dict(angle_int=200.0, angle_int_C=200.0), "angle_int_C must divide 180"),
+        (dict(num_x_ints_list=[0], num_x_ints_list_C=[1]), "num_x_ints_list must be positive"),
+        (dict(num_x_ints_list=[2.5], num_x_ints_list_C=[1]), "must be whole numbers"),
+        (dict(num_x_ints_list_C=[float("nan")]), "must be whole numbers"),
+        (dict(max_radius=0.1), "must not be smaller than start_radius"),
     ],
 )
 def test_invalid_inputs_rejected(overrides, message):
@@ -148,6 +153,26 @@ def test_invalid_inputs_rejected(overrides, message):
 def test_voltage_limit_accepted():
     """The highest allowed voltage (the top of the cross-section tables) is accepted."""
     assert make_source(voltage=MAX_VOLTAGE, num_x_ints_list=[2], num_x_ints_list_C=[1])
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        dict(angle_int=0.1, angle_int_C=0.3),  # 0.3 / 0.1 = 2.9999999999999996 in floating point
+        dict(angle_int=0.01, angle_int_C=3.0, num_x_ints_list=[4], num_x_ints_list_C=[2]),
+        dict(num_x_ints_list=[40.0], num_x_ints_list_C=[10.0]),  # Whole numbers given as floats
+        dict(max_radius=0.2, divergence_list=[0.0]),  # Wall exactly at the beam radius
+    ],
+)
+def test_valid_edge_inputs_accepted(overrides):
+    assert make_source(**overrides).nyield_tot > 0
+
+
+@pytest.mark.parametrize("overrides", [dict(voltage=1.0), dict(voltage=5.0, T_frac=1.0)])
+def test_no_neutrons_rejected(overrides):
+    """A beam below the cross-section data (1.8 keV DD, 10 keV DT) gives a clear error."""
+    with pytest.raises(ValueError, match="no neutrons are produced"):
+        make_source(**overrides)
 
 
 def test_multiple_regions():
@@ -222,3 +247,21 @@ def test_hdf5_file(mixed_source, tmp_path):
 def test_plots(tmp_path, T_frac, num_plots):
     make_source(T_frac=T_frac).make_plots(tmp_path / "plots")
     assert len(list((tmp_path / "plots").glob("*.png"))) == num_plots
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        dict(voltage=1000.0),  # DT neutrons above 16 MeV
+        dict(voltage=MAX_VOLTAGE, num_x_ints_list=[4], num_x_ints_list_C=[2]),
+        dict(EN_int=5.0),  # Energy bins coarser than the spectra
+        dict(EN_int=0.03),  # Bins that do not divide 16 MeV
+    ],
+)
+def test_plots_and_sdef_at_any_energy(tmp_path, overrides):
+    """The energy plots follow the neutron energies, so they work for any beam energy and
+    energy bin size."""
+    source = make_source(**overrides)
+    source.get_mcnp_sdef()
+    source.make_plots(tmp_path / "plots")
+    assert len(list((tmp_path / "plots").glob("*.png"))) == 9
