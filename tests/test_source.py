@@ -164,7 +164,7 @@ def test_target_chamber_needs_two_of_three():
                 num_x_bins_out=[1, 10],
                 beam_energy_backstop=100.0,
             ),
-            "every region before the target chamber",
+            "region 1 .* needs its pressure",
         ),
         (
             dict(
@@ -523,7 +523,7 @@ def test_hdf5_file(mixed_source, tmp_path):
         assert f.attrs["code_version"]
         assert f.attrs["created"] == s.created
         assert f.attrs["input_file"] == "cases.toml"
-        assert f["inputs/T_frac"][()] == 0.5
+        assert f["inputs/material"][0].decode() == "D/T gas"
         assert f["inputs/stopping_power"][()] == b"srim"
         assert f["inputs/voltage"].attrs["units"] == "kV"
         for name, value, units in s.get_results():  # The same results as summary.toml

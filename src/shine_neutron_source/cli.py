@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # Case settings: name -> required type. Every case needs all of them, either directly or
 # from [defaults].
 CASE_SETTINGS = {
+    "material": str,  # Name of the [materials.<name>] table filling the target chamber
     "voltage": float,  # Beam voltage [kV]
     "start_radius": float,  # Beam radius where it enters the first region [cm]
     "wall_radius": float,  # Target chamber wall radius [cm]
@@ -34,22 +35,26 @@ CASE_SETTINGS = {
     "energy_bin_width": float,  # Width of the neutron energy bins [MeV] (output mesh)
 }
 
-# Settings that only some cases need: T_frac where a region holds D/T gas (no material), and
-# temperature where a region holds a gas. A case that does not need one may not set it itself;
-# a value from [defaults] is then ignored.
-CONDITIONAL_SETTINGS = {
-    "T_frac": float,  # Atom fraction of tritium in the D/T gas of regions without a material
-    "temperature": float,  # Gas temperature [degC], used in every gas region
-}
+# Gas temperature [degC], used in every gas region given by pressure. Needed only by cases
+# with such a region.
+TEMPERATURE_SETTING = "temperature"
 
-# Target chamber settings: every case needs exactly two of these (directly or from
-# [defaults]), and the third is calculated. For a solid target chamber, pressure does not
-# apply: it needs one of length and beam_energy_backstop.
+# The gas state (pressure, temperature, density) is set in each case, never in [defaults], so
+# that what a case gives, and so what it calculates, is all in the case itself
+CASE_ONLY_SETTINGS = ("pressure", "temperature", "density")
+
+# Target chamber settings. A gas target chamber needs two of its state (pressure, which
+# needs a temperature, or density), its length and beam_energy_backstop, and the third is
+# calculated; with no state given, the calculated state is a pressure if the case has a
+# temperature and a density otherwise. The state is set in each case (CASE_ONLY_SETTINGS).
+# A solid target chamber has no state: it needs one of its length and beam_energy_backstop.
 TARGET_SETTINGS = {
     "pressure": float,  # Target chamber pressure [torr]
+    "density": float,  # Target chamber gas density [g/cm3], instead of pressure
     "length": float,  # Target chamber length [cm]
     "beam_energy_backstop": float,  # Beam energy at the backstop [keV]
 }
+STATE_SETTINGS = ("pressure", "density")
 
 # Beam settings: every case needs exactly one of these (directly or from [defaults]), and
 # the other is calculated
@@ -66,25 +71,28 @@ OPTIONAL_CASE_SETTINGS = {
     "upstream": None,
     "stopping_power": "srim",  # Stopping-power set, see STOPPING_POWERS
     "entry_position": [0.0, 0.0, 0.0],  # cm, where the beam enters (MCNP coordinates)
-    # Name of a [materials.<name>] table filling the target chamber; false or absent for D/T
-    # gas (T_frac of its atoms tritium)
-    "material": None,
 }
 
-# Material settings: name -> required type; density is required for (and only for) a solid
+# Material settings: name -> type. A solid needs atoms and density, a gas molecules (see
+# Material). A gas's state (pressure and temperature, or density) belongs to the region it
+# fills.
 MATERIAL_SETTINGS = {
     "phase": str,  # "gas" or "solid"
-    "composition": dict,  # {formula: amount}, see Material
+    "atoms": dict,  # Solid: {atom: amount}, atom ratios
+    "molecules": dict,  # Gas: {formula: amount}, mole fractions of its molecules
     "density": float,  # Mass density of a solid [g/cm3]
 }
 
-# Upstream stage settings: name -> (type, default). None means required. num_x_bins,
-# num_x_bins_out and divergence can be one value for every stage or a list with one per stage.
-# An upstream table may also have material: the name of a gas [materials.<name>] table (or a
-# list with one per stage); stages without one hold D/T gas.
+# Upstream stage settings: name -> (type, default). None means required. Each stage holds a
+# gas given by pressure (with the case's temperature) or by density: an upstream table has
+# exactly one of the two lists. material is the name of a gas [materials.<name>] table, or a
+# list with one per stage. num_x_bins, num_x_bins_out and divergence can be one value for
+# every stage or a list with one per stage.
 UPSTREAM_SETTINGS = {
-    "pressure": (list, None),  # Pressure of each stage [torr]
+    "material": (str, None),  # Gas filling each stage
     "length": (list, None),  # Length of each stage [cm]
+    "pressure": (list, ""),  # Pressure of each stage [torr] (or density)
+    "density": (list, ""),  # Gas density of each stage [g/cm3] (or pressure)
     "num_x_bins": (int, 10),  # Position bins per stage (internal mesh)
     "num_x_bins_out": (int, 1),  # Position bins per stage (output mesh)
     "divergence": (float, 0.0),  # Beam divergence in each stage [mrad]
@@ -126,43 +134,50 @@ def _per_stage(where, key, value, num_stages, item_type):
 
 
 def _read_upstream(where, table):
-    """Validate an [upstream.<name>] table and return its stages as lists (material: a name or
-    None for each stage)."""
-    _check_keys(where, table, list(UPSTREAM_SETTINGS) + ["material"])
-    for key, (_, default) in UPSTREAM_SETTINGS.items():
-        if default is None and key not in table:
+    """Validate an [upstream.<name>] table and return its stages as lists (one of pressure
+    and density is None for every stage)."""
+    _check_keys(where, table, UPSTREAM_SETTINGS)
+    for key in ("material", "length"):
+        if key not in table:
             raise InputError(f"{where}: missing {key}")
-    num_stages = len(table["pressure"]) if isinstance(table["pressure"], list) else 0
+    states = [key for key in STATE_SETTINGS if key in table]
+    if len(states) != 1:
+        raise InputError(f"{where}: give pressure or density for the stages (one of them)")
+    state = states[0]
+    num_stages = len(table[state]) if isinstance(table[state], list) else 0
     if num_stages == 0:
-        raise InputError(f"{where}: pressure must be a non-empty list")
+        raise InputError(f"{where}: {state} must be a non-empty list")
     stages = {}
     for key, (item_type, default) in UPSTREAM_SETTINGS.items():
+        if key in STATE_SETTINGS and key != state:
+            stages[key] = [None] * num_stages
+            continue
         item_type = float if item_type is list else item_type
         stages[key] = _per_stage(where, key, table.get(key, default), num_stages, item_type)
-    material = table.get("material")
-    stages["material"] = (
-        [None] * num_stages
-        if material is None
-        else _per_stage(where, "material", material, num_stages, str)
-    )
     return stages
 
 
 def _read_material(where, name, table):
     """Validate a [materials.<name>] table and return its Material."""
     _check_keys(where, table, MATERIAL_SETTINGS)
-    for key in ("phase", "composition"):
-        if key not in table:
-            raise InputError(f"{where}: missing {key}")
+    if "phase" not in table:
+        raise InputError(f"{where}: missing phase")
     for key, expected in MATERIAL_SETTINGS.items():
         if key in table:
             _check_type(where, key, table[key], expected)
     if table["phase"] not in PHASES:
         raise InputError(f"{where}: phase must be one of {', '.join(PHASES)}")
-    for formula, amount in table["composition"].items():
-        _check_type(where, f"composition {formula}", amount, float)
+    for key in ("atoms", "molecules"):
+        for formula, amount in table.get(key, {}).items():
+            _check_type(where, f"{key} {formula}", amount, float)
     try:
-        return Material(name, table["composition"], table["phase"], table.get("density"))
+        return Material(
+            name,
+            table["phase"],
+            atoms=table.get("atoms"),
+            molecules=table.get("molecules"),
+            density=table.get("density"),
+        )
     except ValueError as e:
         raise InputError(f"{where}: {str(e).split(': ', 1)[-1]}") from None
 
@@ -186,16 +201,18 @@ def load_input(path):
     The file has a [cases.<name>] table for each case, an optional [defaults] table whose
     settings apply to every case unless the case overrides them, optional [upstream.<name>]
     tables describing gas regions (such as differential-pumping stages) that the beam passes
-    through before the target chamber, and optional [materials.<name>] tables describing
-    materials other than D/T gas. See CASE_SETTINGS, CONDITIONAL_SETTINGS, TARGET_SETTINGS,
-    BEAM_SETTINGS, OPTIONAL_CASE_SETTINGS, UPSTREAM_SETTINGS and MATERIAL_SETTINGS for the
-    settings and their units, and examples/generic.toml for an example.
+    through before the target chamber, and [materials.<name>] tables describing the materials
+    that fill them. See CASE_SETTINGS, TEMPERATURE_SETTING, TARGET_SETTINGS, BEAM_SETTINGS,
+    OPTIONAL_CASE_SETTINGS, UPSTREAM_SETTINGS and MATERIAL_SETTINGS for the settings and their
+    units, and examples/generic.toml for an example.
 
-    Each case needs two of pressure, length and beam_energy_backstop; the third is
-    calculated (for a solid target chamber, one of length and beam_energy_backstop). If a
-    case and [defaults] together give too many, the ones the case sets itself are used.
-    Likewise each case needs one of current and yield_total, and if both are given, the one
-    the case sets itself is used.
+    A gas target chamber needs two of its state (pressure with temperature, or density),
+    length and beam_energy_backstop; the third is calculated (for a solid target chamber, one
+    of length and beam_energy_backstop). The state is set in each case, never in [defaults]:
+    with none given, a case with a temperature calculates its pressure and one without
+    calculates its density. If a case and [defaults] together give too many, the ones the
+    case sets itself are used. Likewise each case needs one of current and yield_total, and
+    if both are given, the one the case sets itself is used.
 
     Each returned settings dict has "source", the keyword arguments for ShineSource
     (without name), and "direction", the MCNP SDEF beam direction.
@@ -208,7 +225,7 @@ def load_input(path):
     _check_keys(path, data, ["defaults", "upstream", "materials", "cases"], what="table")
     allowed = (
         list(CASE_SETTINGS)
-        + list(CONDITIONAL_SETTINGS)
+        + [TEMPERATURE_SETTING]
         + list(TARGET_SETTINGS)
         + list(BEAM_SETTINGS)
         + list(OPTIONAL_CASE_SETTINGS)
@@ -216,6 +233,12 @@ def load_input(path):
 
     defaults = data.get("defaults", {})
     _check_keys(f"{path} [defaults]", defaults, allowed)
+    in_defaults = [key for key in CASE_ONLY_SETTINGS if key in defaults]
+    if in_defaults:
+        raise InputError(
+            f"{path} [defaults]: {', '.join(in_defaults)} must be set in each case (the gas "
+            "state is never a default)"
+        )
 
     materials = {
         name: _read_material(f"{path} [materials.{name}]", name, table)
@@ -227,8 +250,6 @@ def load_input(path):
     }
     for name, up in upstreams.items():
         for material in up["material"]:
-            if material is None:
-                continue
             if material not in materials:
                 raise InputError(f"{path} [upstream.{name}]: no [materials.{material}] table")
             if materials[material].phase != "gas":
@@ -253,29 +274,38 @@ def load_input(path):
             raise InputError(f"{where}: missing {', '.join(missing)}")
         for key, expected in CASE_SETTINGS.items():
             _check_type(where, key, s[key], expected)
-        # Target chamber material
-        target_material = s["material"]
-        if target_material is None or target_material is False:
-            target_material = None
-        elif not isinstance(target_material, str):
-            raise InputError(
-                f"{where}: material must be the name of a [materials.<name>] table, or false "
-                f"for D/T gas; got {target_material!r}"
-            )
-        elif target_material not in materials:
-            raise InputError(f"{where}: no [materials.{target_material}] table")
-        else:
-            target_material = materials[target_material]
-        solid = target_material is not None and target_material.phase == "solid"
-
+        # Target chamber material and state
+        if s["material"] not in materials:
+            raise InputError(f"{where}: no [materials.{s['material']}] table")
+        target_material = materials[s["material"]]
+        solid = target_material.phase == "solid"
+        case_state = [key for key in STATE_SETTINGS if key in case]
+        if len(case_state) > 1:
+            raise InputError(f"{where}: give pressure or density, not both")
         if solid:
-            if "pressure" in case:
-                raise InputError(f"{where}: pressure does not apply to a solid target chamber")
+            for key in STATE_SETTINGS:
+                if key in case:
+                    raise InputError(f"{where}: {key} does not apply to a solid target chamber")
             keys = ["length", "beam_energy_backstop"]
             what = "one of length and beam_energy_backstop (the target is a solid)"
+            target_state = None
         else:
-            keys = list(TARGET_SETTINGS)
-            what = "two of pressure, length and beam_energy_backstop"
+            if case_state:
+                target_state = case_state[0]
+            else:  # State calculated: a pressure if the case has a temperature
+                target_state = "pressure" if TEMPERATURE_SETTING in case else "density"
+            if target_state == "density" and TEMPERATURE_SETTING in case:
+                raise InputError(
+                    f"{where}: temperature goes with pressure; a gas given by density has none"
+                )
+            keys = [target_state, "length", "beam_energy_backstop"]
+            if case_state:
+                what = f"two of {target_state}, length and beam_energy_backstop"
+            else:
+                what = (
+                    "two of the gas state (pressure with temperature, or density), length and "
+                    "beam_energy_backstop"
+                )
         given = _choose(where, s, case, keys, len(keys) - 1, what + "; the rest is calculated")
         for key in given:
             _check_type(where, key, s[key], TARGET_SETTINGS[key])
@@ -303,8 +333,8 @@ def load_input(path):
                 f"got {s['stopping_power']!r}"
             )
 
-        # Gas regions: upstream stages (if any), then the target chamber
-        up = {key: [] for key in list(UPSTREAM_SETTINGS) + ["material"]}
+        # Regions: upstream stages (if any), then the target chamber
+        up = {key: [] for key in UPSTREAM_SETTINGS}
         if s["upstream"] is not None and s["upstream"] is not False:
             if not isinstance(s["upstream"], str):
                 raise InputError(
@@ -314,39 +344,26 @@ def load_input(path):
             if s["upstream"] not in upstreams:
                 raise InputError(f"{where}: no [upstream.{s['upstream']}] table")
             up = upstreams[s["upstream"]]
-        up_materials = [None if m is None else materials[m] for m in up["material"]]
-        region_materials = up_materials + [target_material]
+        region_materials = [materials[m] for m in up["material"]] + [target_material]
+        pressure = up["pressure"] + [target["pressure"]]
+        density = up["density"] + [target["density"]]
+        by_pressure = [p is not None for p in up["pressure"]] + [target_state == "pressure"]
 
-        # T_frac where a region holds D/T gas, temperature where a region holds gas
-        needs = {
-            "T_frac": any(m is None for m in region_materials),
-            "temperature": any(m is None or m.phase == "gas" for m in region_materials),
-        }
-        conditional = {}
-        for key, needed in needs.items():
-            if needed:
-                if key not in s:
-                    raise InputError(f"{where}: missing {key}")
-                _check_type(where, key, s[key], CONDITIONAL_SETTINGS[key])
-                conditional[key] = s[key]
-            elif key in case:
-                raise InputError(
-                    f"{where}: {key} does not apply (no region holds "
-                    f"{'D/T gas' if key == 'T_frac' else 'gas'})"
-                )
-            else:
-                conditional[key] = None
-        temperature = [
-            None if m is not None and m.phase == "solid" else conditional["temperature"]
-            for m in region_materials
-        ]
+        # The temperature, where a gas is given by pressure
+        if any(by_pressure):
+            if TEMPERATURE_SETTING not in s:
+                raise InputError(f"{where}: missing temperature (for a gas given by pressure)")
+            _check_type(where, TEMPERATURE_SETTING, s[TEMPERATURE_SETTING], float)
+        elif TEMPERATURE_SETTING in case:
+            raise InputError(f"{where}: temperature does not apply (no gas given by pressure)")
+        temperature = [s[TEMPERATURE_SETTING] if b else None for b in by_pressure]
         resolved[name] = {
             "source": {
-                "T_frac": conditional["T_frac"],
                 "voltage": s["voltage"],
                 "current": beam["current"],
-                "pressure": up["pressure"] + [target["pressure"]],
+                "pressure": pressure,
                 "temperature": temperature,
+                "density": density,
                 "length": up["length"] + [target["length"]],
                 "start_radius": s["start_radius"],
                 "wall_radius": s["wall_radius"],
@@ -393,12 +410,9 @@ def run_case(name, settings, output_dir="output", input_file=None):
         beam = f"yield {s['yield_total']:.4e} n/s"
     else:
         beam = f"{s['current']:g} mA"
-    target = s["material"][-1]
-    target = "D/T gas" if target is None else target.name
-    t_frac = "" if s["T_frac"] is None else f"T_frac {s['T_frac']:g}, "
     logger.debug(
-        f"{name}: starting: {t_frac}{s['voltage']:g} kV, {beam}, {len(s['pressure'])} "
-        f"region(s), target {target}, stopping power {s['stopping_power']}"
+        f"{name}: starting: {s['voltage']:g} kV, {beam}, {len(s['pressure'])} region(s), "
+        f"target {s['material'][-1].name}, stopping power {s['stopping_power']}"
     )
     source = ShineSource(name=name, **s)
     case_dir = os.path.join(output_dir, name)

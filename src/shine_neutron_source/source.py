@@ -68,6 +68,8 @@ STOPPING_POWERS = {
 BEAM_PARTICLE = "d"  # Beam particle group in SRIM_STOPPING_FILE
 PHASES = ("gas", "solid")
 HYDROGEN_ISOTOPES = ("H", "D", "T")
+# Elements whose gases are diatomic molecules: a gas Material rejects them as lone atoms
+DIATOMIC_ELEMENTS = ("H", "D", "T", "N", "O", "F", "Cl", "Br", "I")
 
 # Decimal places for the beam radii in the SDEF card [cm]
 SDEF_RADIUS_DECIMALS = 5
@@ -221,30 +223,56 @@ def parse_formula(formula):
 
 
 class Material:
-    """A target material: its composition, phase and (for a solid) density.
+    """A target material: its phase, composition and (for a solid) density.
+
+    A solid's composition is given as atoms and a gas's as molecules, so that the molecules a
+    gas pressure counts are always stated: H2O vapour, a mixture of H2 and O2, and atomic H
+    and O are different gases with the same atom ratios.
 
     Args:
         name: Name, used in messages and outputs.
-        composition: {formula: amount}. Each formula is an atom (such as "Ti", "D" or "3He")
-            or a molecule (such as "D2" or "CD4"); see parse_formula. Amounts are relative: atom
-            ratios, or for a gas the mole fractions of its molecules. They need not sum to 1.
         phase: "gas" or "solid", which selects SRIM's gas- or solid-phase stopping.
-        density: Mass density of a solid [g/cm^3]. A gas has none: its density comes from the
-            pressure and temperature of the region it fills.
+        atoms: For a solid, {atom: amount}: atom ratios, such as {"Ti": 1, "D": 1.5}. Atoms
+            are element symbols or the isotopes D, T and 3He.
+        molecules: For a gas, {formula: amount}: mole fractions of its molecules, such as
+            {"D2": 0.5, "T2": 0.5} or {"H2O": 1} (see parse_formula). A single atom is a
+            monatomic molecule (such as "Ar"); hydrogen isotopes, N, O and the halogens are
+            rejected on their own (write D2, not D).
+        density: Mass density of a solid [g/cm^3]. A gas has none: its state (pressure and
+            temperature, or density) belongs to the region it fills.
+        Amounts are relative and need not sum to 1.
 
-    Attributes: atom_fractions ({atom: fraction of all atoms}) and atoms_per_unit (atoms per
-    species listed in the composition, averaged over the amounts: for a gas, the mean number
-    of atoms per molecule, which converts the molecule density to an atom density).
+    Attributes: composition (the atoms or molecules given), atom_fractions ({atom: fraction
+    of all atoms}) and atoms_per_unit (for a gas, the mean number of atoms per molecule, which
+    converts a molecule density to an atom density; 1 for a solid).
     """
 
-    def __init__(self, name, composition, phase="solid", density=None):
+    def __init__(self, name, phase, *, atoms=None, molecules=None, density=None):
         self.name = str(name)
         self.phase = str(phase)
-        self.composition = {str(k): float(v) for k, v in dict(composition).items()}
         self.density = None if density is None else float(density)
         where = f"material {self.name}"
         if self.phase not in PHASES:
             raise ValueError(f"{where}: phase must be one of {', '.join(PHASES)}")
+        if self.phase == "solid":
+            if molecules is not None or atoms is None:
+                raise ValueError(f"{where}: give a solid's composition as atoms (atom ratios)")
+            if not (self.density is not None and self.density > 0):
+                raise ValueError(f"{where}: a solid needs a positive density (g/cm3)")
+            given = atoms
+        else:
+            if atoms is not None or molecules is None:
+                raise ValueError(
+                    f"{where}: give a gas's composition as molecules (mole fractions of its "
+                    "molecules, such as D2 = 0.5, T2 = 0.5)"
+                )
+            if self.density is not None:
+                raise ValueError(
+                    f"{where}: a gas's density belongs to the region it fills (with pressure "
+                    "and temperature, or density), not to the material"
+                )
+            given = molecules
+        self.composition = {str(k): float(v) for k, v in dict(given).items()}
         if not self.composition:
             raise ValueError(f"{where}: empty composition")
         if any(not (v >= 0) for v in self.composition.values()):
@@ -252,33 +280,45 @@ class Material:
         total = sum(self.composition.values())
         if not total > 0:
             raise ValueError(f"{where}: composition amounts must not all be zero")
-        if self.phase == "solid" and not (self.density is not None and self.density > 0):
-            raise ValueError(f"{where}: a solid needs a positive density (g/cm3)")
-        if self.phase == "gas" and self.density is not None:
-            raise ValueError(
-                f"{where}: a gas takes its density from the region's pressure and temperature, "
-                "so it cannot have a density"
-            )
+
         counts = {}
         for formula, amount in self.composition.items():
             try:
-                atoms = parse_formula(formula)
+                parsed = parse_formula(formula)
             except ValueError as e:
                 raise ValueError(f"{where}: {e}") from None
-            for atom, n in atoms.items():
+            if self.phase == "solid" and (len(parsed) != 1 or list(parsed.values()) != [1.0]):
+                raise ValueError(
+                    f"{where}: atoms takes single atoms (such as Ti or D), not {formula!r}"
+                )
+            if self.phase == "gas" and list(parsed) in ([a] for a in DIATOMIC_ELEMENTS):
+                if parsed[list(parsed)[0]] == 1.0:
+                    raise ValueError(
+                        f"{where}: {formula} on its own is a lone atom; its gas is made of "
+                        f"{formula}2 molecules, so write {formula}2"
+                    )
+            for atom, n in parsed.items():
                 counts[atom] = counts.get(atom, 0.0) + amount * n
         atoms_total = sum(counts.values())
         self.atoms_per_unit = atoms_total / total
         self.atom_fractions = {atom: n / atoms_total for atom, n in counts.items() if n > 0}
 
+    @property
+    def kind(self):
+        """ "atoms" for a solid, "molecules" for a gas: how composition is given."""
+        return "atoms" if self.phase == "solid" else "molecules"
+
     def __repr__(self):
-        return f"Material({self.name!r}, {self.composition!r}, {self.phase!r}, {self.density!r})"
+        density = "" if self.density is None else f", density={self.density!r}"
+        return f"Material({self.name!r}, {self.phase!r}, {self.kind}={self.composition!r}{density})"
 
 
-def dt_gas(T_frac):
-    """Return the D/T gas used for regions without a material: D2 and T2 molecules with
-    T_frac of the atoms tritium. (DT molecules would give the same atoms.)"""
-    return Material("D/T gas", {"D2": 1 - T_frac, "T2": T_frac}, phase="gas")
+def dt_gas(T_frac, name="D/T gas"):
+    """Return a gas Material of D2 and T2 molecules with T_frac of its atoms tritium (DT
+    molecules would give the same atoms). A convenience for D/T gas targets."""
+    if not 0 <= T_frac <= 1:
+        raise ValueError(f"T_frac must be between 0 and 1, got {T_frac}")
+    return Material(name, "gas", molecules={"D2": 1 - T_frac, "T2": T_frac})
 
 
 @functools.lru_cache(maxsize=4)
@@ -518,37 +558,39 @@ class ShineSource:
     values are logged at DEBUG level to the "shine_neutron_source" logger (silent unless
     logging is configured).
 
-    pressure, temperature, length, divergence, num_x_bins, num_x_bins_out and material take one
-    value per region, in the order the beam passes through them; a scalar is treated as a
-    single region. The last region is the target chamber (a gas, or a solid target such as a
-    metal hydride); earlier regions are normally upstream differential-pumping stages.
+    material, pressure, temperature, density, length, divergence, num_x_bins and
+    num_x_bins_out take one value per region, in the order the beam passes through them; a
+    scalar is treated as a single region. The last region is the target chamber (a gas, or a
+    solid target such as a metal hydride); earlier regions are normally upstream
+    differential-pumping stages.
 
-    Each region is filled with a Material, or with D/T gas (T_frac of its atoms tritium) where
-    material is None. A gas region needs its pressure and temperature; a solid region has
-    neither (give None), since its density is part of the material. Neutrons come from the
-    deuterium (D(d,n)3He) and tritium (T(d,n)4He) atoms; other atoms only slow the beam.
+    Each region is filled with a Material. A gas region gives its state: pressure and
+    temperature (ideal gas), or density. A solid region gives none of these (None), since
+    its density is part of the material. Neutrons come from the deuterium (D(d,n)3He) and
+    tritium (T(d,n)4He) atoms; other atoms only slow the beam. dt_gas makes a D/T gas.
 
     Give either the beam current or the total neutron yield (yield_total), and the other is
     calculated: the yield is proportional to the current. Give None for the current to
     calculate it.
 
-    Of the target chamber's pressure, its length and the beam energy at the backstop, give
-    any two and the third is calculated (see solve_target_chamber); for a solid target
-    chamber, give its length or the backstop energy. To calculate the pressure or length,
-    give None as the target chamber's value (the last entry, or the whole argument for a
-    single region) and set beam_energy_backstop. Every upstream region needs its length, and
-    its pressure if it is a gas.
+    Of the target chamber's gas state (its pressure, or its density if it has no
+    temperature), its length and the beam energy at the backstop, give any two and the third
+    is calculated (see solve_target_chamber); for a solid target chamber, give its length or
+    the backstop energy. To calculate the pressure, density or length, give None as the
+    target chamber's value (the last entry, or the whole argument for a single region) and
+    set beam_energy_backstop. Every upstream region needs its length and, if it is a gas,
+    its state.
 
     Args:
         name: Case name, used in output file names and titles.
-        T_frac: Atom fraction of tritium in the D/T gas of regions without a material (0 =
-            pure D, 1 = pure T). May be None if every region has a material.
+        material: The Material filling each region (one Material for a single region).
         voltage: Beam voltage [kV]. The beam starts with this energy in keV. At most
             MAX_VOLTAGE (40 MeV), the upper limit of the Legendre cross-section data.
         current: Beam current [mA]; None to calculate it from yield_total.
-        pressure: Gas pressure in each region [torr]; None for the target chamber to
-            calculate it, and None for a solid region.
-        temperature: Gas temperature in each region [degC]; None for a solid region.
+        pressure: Gas pressure in each region [torr]; None for a solid region or a gas given
+            by density, or for the target chamber to calculate it.
+        temperature: Gas temperature in each region [degC]; None for a solid region or a gas
+            given by density.
         length: Length of each region along the beam [cm]; None for the target chamber to
             calculate it.
         start_radius: Beam radius where it enters the first region [cm].
@@ -568,18 +610,18 @@ class ShineSource:
         stopping_power: Stopping-power set, one of STOPPING_POWERS: "srim" (default) or
             "icru49". See read_stopping_power.
         beam_energy_backstop: Beam energy wanted at the backstop, the end of the target
-            chamber [keV]; give it to calculate the target chamber's pressure or length.
-            None (default) calculates the beam energy from the pressure and length.
+            chamber [keV]; give it to calculate the target chamber's pressure, density or
+            length. None (default) calculates the beam energy from the others.
         yield_total: Total neutron yield wanted [n/s]; give it, with current None, to
             calculate the current. None (default) calculates the yield from the current.
-        material: The Material filling each region, or None for D/T gas (see T_frac).
-            None (default) means D/T gas everywhere.
+        density: Mass density of a gas in each region given by density instead of pressure
+            and temperature [g/cm^3]; None elsewhere (default: None everywhere).
     """
 
     def __init__(
         self,
         name,
-        T_frac,
+        material,
         voltage,
         current,
         pressure,
@@ -597,13 +639,12 @@ class ShineSource:
         stopping_power="srim",
         beam_energy_backstop=None,
         yield_total=None,
-        material=None,
+        density=None,
     ):
         t0 = time.time()
 
         # Input parameters
         self.name = str(name)
-        self.T_frac = None if T_frac is None else float(T_frac)
         self.voltage = float(voltage)
         self.current = None if current is None else float(current)
         self.requested_yield_total = None if yield_total is None else float(yield_total)
@@ -627,19 +668,25 @@ class ShineSource:
         )
 
         self.num_regions = len(self.length)
-        if material is None or isinstance(material, Material):
+        if isinstance(material, Material):
             material = [material] * self.num_regions
-        # The materials given (None for D/T gas); D/T gas is filled in after check_input
         self.materials = list(material)
-        self.solid = np.array([m is not None and m.phase == "solid" for m in self.materials])
+        if density is None:
+            density = [None] * self.num_regions
+        self.density = np.atleast_1d(np.array(density, dtype=float))
+        self.solid = np.array([getattr(m, "phase", None) == "solid" for m in self.materials])
+        # A gas region with a temperature is given by pressure; without one, by density
+        self.by_pressure = ~self.solid & ~np.isnan(np.resize(self.temperature, self.num_regions))
 
-        # Which of the target chamber's pressure and length and the backstop beam energy is
-        # calculated from the other two (a missing pressure or length is NaN here). A solid
-        # target chamber has no pressure.
+        # Which of the target chamber's gas state (pressure or density), its length and the
+        # backstop beam energy is calculated from the other two (a missing value is NaN here).
+        # A solid target chamber has no gas state.
+        state = "pressure" if self.by_pressure[-1] else "density"
+        state_missing = not self.solid[-1] and np.isnan(getattr(self, state)[-1])
         unknown = [
             name
             for name, missing in [
-                ("pressure", not self.solid[-1] and np.isnan(self.pressure[-1])),
+                (state, state_missing),
                 ("length", np.isnan(self.length[-1])),
                 ("beam_energy_backstop", self.beam_energy_backstop is None),
             ]
@@ -648,8 +695,6 @@ class ShineSource:
         self.calculated = unknown[0] if len(unknown) == 1 else None
 
         self.check_input()
-        dt = None if self.T_frac is None else dt_gas(self.T_frac)
-        self.materials = [dt if m is None else m for m in self.materials]
         self.num_x_bins = self.num_x_bins.astype(int)
         self.num_x_bins_out = self.num_x_bins_out.astype(int)
 
@@ -684,6 +729,7 @@ class ShineSource:
         for attr in [
             "pressure",
             "temperature",
+            "density",
             "divergence",
             "num_x_bins",
             "num_x_bins_out",
@@ -694,8 +740,43 @@ class ShineSource:
                 f"{attr} has {len(getattr(self, attr))} entries, expected {self.num_regions}",
             )
         require(
-            all(m is None or isinstance(m, Material) for m in self.materials),
-            "material must be a Material or None (D/T gas) for each region",
+            all(isinstance(m, Material) for m in self.materials),
+            "material must be a Material for each region",
+        )
+        last = self.num_regions - 1
+        for r, material in enumerate(self.materials):
+            where = f"region {r + 1} ({material.name})"
+            given = {
+                key: not np.isnan(getattr(self, key)[r])
+                for key in ("pressure", "temperature", "density")
+            }
+            if self.solid[r]:
+                require(
+                    not any(given.values()),
+                    f"{where} is a solid, so it takes no pressure, temperature or density "
+                    "(give None)",
+                )
+            elif given["temperature"]:
+                require(
+                    not given["density"],
+                    f"{where}: give pressure and temperature, or density, not both",
+                )
+                require(
+                    given["pressure"] or r == last,  # The chamber's state: see below
+                    f"{where} needs its pressure (with its temperature), or its density",
+                )
+            else:
+                require(
+                    not given["pressure"],
+                    f"{where}: a pressure needs a temperature (or give density instead)",
+                )
+                require(
+                    given["density"] or r == last,
+                    f"{where} needs its pressure and temperature, or its density",
+                )
+        require(
+            not np.any(np.isnan(self.length[:-1])),
+            "every region before the target chamber needs its length",
         )
         if self.solid[-1]:
             require(
@@ -704,33 +785,11 @@ class ShineSource:
                 "is a solid); the other is calculated",
             )
         else:
+            state = "pressure" if self.by_pressure[-1] else "density"
             require(
                 self.calculated is not None,
-                "give exactly two of the target chamber's pressure and length and "
+                f"give exactly two of the target chamber's {state} and length and "
                 "beam_energy_backstop; the third is calculated",
-            )
-        gas = ~self.solid
-        for r in np.flatnonzero(self.solid):
-            require(
-                np.isnan(self.pressure[r]) and np.isnan(self.temperature[r]),
-                f"region {r + 1} is a solid ({self.materials[r].name}), so it takes no pressure "
-                "or temperature (give None)",
-            )
-        require(
-            not np.any(np.isnan(self.pressure[:-1][gas[:-1]]))
-            and not np.any(np.isnan(self.length[:-1])),
-            "every region before the target chamber needs its length, and its pressure if it is "
-            "a gas",
-        )
-        require(
-            not np.any(np.isnan(self.temperature[gas])),
-            "every gas region needs its temperature",
-        )
-        if any(m is None for m in self.materials):
-            require(
-                self.T_frac is not None and 0 <= self.T_frac <= 1,
-                "T_frac must be between 0 and 1 (it sets the D/T gas of regions without a "
-                "material)",
             )
         if self.beam_energy_backstop is not None:
             require(
@@ -751,10 +810,15 @@ class ShineSource:
             require(self.current > 0, "current must be positive")
         if self.requested_yield_total is not None:
             require(self.requested_yield_total > 0, "yield_total must be positive")
-        known = [~np.isnan(self.pressure), ~np.isnan(self.length)]
-        require(np.all(self.pressure[known[0]] > 0), "pressures must be positive")
-        require(np.all(self.temperature[gas] > -273.15), "temperatures must be above 0 K")
-        require(np.all(self.length[known[1]] > 0), "lengths must be positive")
+        for key, values in [
+            ("pressures", self.pressure),
+            ("densities", self.density),
+            ("lengths", self.length),
+        ]:
+            known = values[~np.isnan(values)]
+            require(np.all(known > 0), f"{key} must be positive")
+        temperatures = self.temperature[~np.isnan(self.temperature)]
+        require(np.all(temperatures > -273.15), "temperatures must be above 0 K")
         require(self.start_radius > 0, "start_radius must be positive")
         require(self.wall_radius > 0, "wall_radius must be positive")
         require(
@@ -785,14 +849,14 @@ class ShineSource:
         )
 
     def solve_target_chamber(self):
-        """Calculate the target chamber's pressure or length (whichever is None) that gives
-        beam_energy_backstop at the backstop.
+        """Calculate the target chamber's pressure, density or length (whichever is None)
+        that gives beam_energy_backstop at the backstop.
 
         The beam is slowed down through the upstream regions once, then through the target
         chamber on its internal mesh (num_x_bins), exactly as the full calculation does, for
-        trial pressures or lengths. The backstop energy falls steadily as either grows, so the
-        value is bracketed by doubling and then found by bisection, to a relative precision of
-        1e-12. The result replaces the NaN in self.pressure or self.length.
+        trial values. The backstop energy falls steadily as any of them grows, so the value is
+        bracketed by doubling and then found by bisection, to a relative precision of 1e-12.
+        The result replaces the NaN in self.pressure, self.density or self.length.
 
         Raises ValueError if the beam is already at or below beam_energy_backstop when it
         enters the target chamber, or if that energy cannot be reached because it is below
@@ -800,7 +864,7 @@ class ShineSource:
         """
         target = self.beam_energy_backstop
         last = self.num_regions - 1
-        atom_density = self._atom_densities(self.pressure, self.temperature)  # NaN if unknown
+        atom_density = self._atom_densities(self.pressure, self.density)  # NaN if unknown
         E_in = self._slow_down_regions(self.voltage, range(last), atom_density, self.length)[-1]
         if not E_in > target:
             raise ValueError(
@@ -809,16 +873,16 @@ class ShineSource:
             )
 
         def backstop_energy(value):
-            pressure = self.pressure.copy()
-            length = self.length.copy()
-            if self.calculated == "pressure":
-                pressure[last] = value
-            else:
-                length[last] = value
-            density = self._atom_densities(pressure, self.temperature)
-            return self._slow_down_regions(E_in, [last], density, length)[-1]
+            trial = {
+                "pressure": self.pressure.copy(),
+                "density": self.density.copy(),
+                "length": self.length.copy(),
+            }
+            trial[self.calculated][last] = value
+            atoms = self._atom_densities(trial["pressure"], trial["density"])
+            return self._slow_down_regions(E_in, [last], atoms, trial["length"])[-1]
 
-        # Bracket the value (torr or cm), then bisect
+        # Bracket the value (torr, g/cm3 or cm), then bisect
         lo, hi = 0.0, 1.0
         while backstop_energy(hi) > target:
             lo, hi = hi, 2 * hi
@@ -835,11 +899,8 @@ class ShineSource:
                 f"{self.stopping_per_region[last][0][0]:g} keV the beam is treated as stopped"
             )
 
-        if self.calculated == "pressure":
-            self.pressure[-1] = value
-        else:
-            self.length[-1] = value
-        units = "torr" if self.calculated == "pressure" else "cm"
+        getattr(self, self.calculated)[-1] = value
+        units = {"pressure": "torr", "density": "g/cm3", "length": "cm"}[self.calculated]
         logger.debug(
             f"{self.name}: target chamber {self.calculated} = {value:.6g} {units} for a beam "
             f"energy of {target:g} keV at the backstop"
@@ -852,14 +913,13 @@ class ShineSource:
         atom density [1/cm^3], the atom fractions of deuterium and tritium (the reaction
         targets) and the stopping power per atom averaged over its composition (see
         read_stopping_power), so the energy loss per unit length is the atom density times
-        that stopping. Regions without a material of their own hold D/T gas (dt_gas) with
-        T_frac of its atoms tritium.
+        that stopping.
 
         Sets self.atom_density_per_region, self.atom_fractions_per_region (isotope -> array),
         self.target_density_per_region and self.target_density_mids (reaction -> density of
         its target atoms [1/cm^3], per region and per internal bin) and self.divergence_mids.
         """
-        self.atom_density_per_region = self._atom_densities(self.pressure, self.temperature)
+        self.atom_density_per_region = self._atom_densities(self.pressure, self.density)
         self.atom_fractions_per_region = {
             isotope: np.array([m.atom_fractions.get(isotope, 0.0) for m in self.materials])
             for isotope in REACTION_TARGETS.values()
@@ -874,19 +934,21 @@ class ShineSource:
         }
         self.divergence_mids = np.repeat(self.divergence, self.num_x_bins)
 
-    def _atom_densities(self, pressure, temperature):
-        """Return the atom density [1/cm^3] of each region for the given pressures [torr] and
-        temperatures [degC]: from the ideal gas law for a gas, from the density for a solid."""
+    def _atom_densities(self, pressure, density):
+        """Return the atom density [1/cm^3] of each region for the given gas pressures [torr]
+        and densities [g/cm^3]: from the ideal gas law (with self.temperature) for a gas given
+        by pressure, and from the mass density for a gas given by density or a solid."""
         densities = np.zeros(self.num_regions)
         for r, material in enumerate(self.materials):
-            if material.phase == "gas":
-                molecules = get_molecule_density(pressure[r], temperature[r])
+            if self.by_pressure[r]:
+                molecules = get_molecule_density(pressure[r], self.temperature[r])
                 densities[r] = molecules * material.atoms_per_unit
             else:
+                rho = material.density if self.solid[r] else density[r]
                 mean_mass = sum(
                     f * self.srim_masses[atom] for atom, f in material.atom_fractions.items()
                 )
-                densities[r] = material.density * NA / mean_mass
+                densities[r] = rho * NA / mean_mass
         return densities
 
     def _slow_down_regions(self, E0, regions, atom_density, length):
@@ -1278,15 +1340,17 @@ class ShineSource:
 
         A calculated target chamber pressure or length is given as calculated, and its units
         say so, as does a calculated current. beam_energy_backstop and yield_total are
-        included only if they were given, and T_frac only if some region holds D/T gas.
+        included only if they were given, and density only if some gas is given by density.
         material lists each region's material by name (see unique_materials).
         """
         calculated = {
             name: ", target chamber value calculated" if self.calculated == name else ""
-            for name in ("pressure", "length")
+            for name in ("pressure", "density", "length")
         }
-        t_frac = [] if self.T_frac is None else [("T_frac", self.T_frac, "fraction")]
-        nan_solid = "; nan for a solid" if np.any(self.solid) else ""
+        unused = "; nan where unused" if not np.all(self.by_pressure) else ""
+        density = []
+        if np.any(~self.solid & ~self.by_pressure):
+            density = [("density", self.density, "g/cm3" + calculated["density"] + unused)]
         material_names = [m.name for m in self.materials]
         requested_yield = []
         if self.requested_yield_total is not None:
@@ -1295,16 +1359,18 @@ class ShineSource:
         if self.beam_energy_backstop is not None:
             requested = [("beam_energy_backstop", self.beam_energy_backstop, "keV, requested")]
         return (
-            t_frac
-            + [
+            [
                 ("voltage", self.voltage, "kV"),
                 ("current", self.current, "mA, calculated" if self.current_calculated else "mA"),
             ]
             + requested_yield
             + [
                 ("material", material_names, "per region; see [materials]"),
-                ("pressure", self.pressure, "torr" + calculated["pressure"] + nan_solid),
-                ("temperature", self.temperature, "degC" + nan_solid),
+                ("pressure", self.pressure, "torr" + calculated["pressure"] + unused),
+                ("temperature", self.temperature, "degC" + unused),
+            ]
+            + density
+            + [
                 ("length", self.length, "cm" + calculated["length"]),
             ]
             + requested
@@ -1330,7 +1396,8 @@ class ShineSource:
         file). The inputs group holds every input parameter (see get_inputs) and the results
         group the key results (see get_results), one dataset each with a "units" attribute.
         The materials group has a group for each material used, whose attributes give its
-        phase, density (solids), composition and atom fractions.
+        phase, density (solids), composition (composition_kind "atoms" or "molecules", with
+        composition_formulas and composition_amounts) and atom fractions.
 
         Datasets, each with "units" and "description" attributes ("grid" arrays hold values at
         mesh boundaries, "mids" arrays one value per bin):
@@ -1396,6 +1463,7 @@ class ShineSource:
                 if material.density is not None:
                     g.attrs["density"] = material.density
                     g.attrs["density_units"] = "g/cm3"
+                g.attrs["composition_kind"] = material.kind
                 g.attrs["composition_formulas"] = list(material.composition)
                 g.attrs["composition_amounts"] = list(material.composition.values())
                 g.attrs["atoms"] = list(material.atom_fractions)
@@ -1699,7 +1767,7 @@ class ShineSource:
         as the input file and SDEF direction), [inputs] (the ShineSource arguments, see
         get_inputs; lists have one value per gas region in beam order) and [results] (see
         get_results), followed by a [materials.<name>] table for each material used (phase,
-        density for a solid, composition). Units are given in comments. title adds a first
+        density for a solid, and its atoms or molecules). Units are given in comments. title adds a first
         comment line saying what the file is. The "=" signs are aligned across all sections, and so are the comments
         (except after values too long for the comment column).
         """
@@ -1731,7 +1799,7 @@ class ShineSource:
             composition = ", ".join(
                 f"{_toml_key(k)} = {_toml_value(v)}" for k, v in material.composition.items()
             )
-            s += f"{'composition':<{key_width}} = {{ {composition} }}\n"
+            s += f"{material.kind:<{key_width}} = {{ {composition} }}\n"
         return s
 
     def write_text_files(self, directory, run_info=None):

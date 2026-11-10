@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from shine_neutron_source import ShineSource
-from shine_neutron_source.source import DEFAULT_DATA_DIR
+from shine_neutron_source.source import DEFAULT_DATA_DIR, dt_gas
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 EXAMPLE_INPUT = REPO_DIR / "examples" / "generic.toml"
@@ -21,7 +21,7 @@ def data_path(fname):
 # with a 1 cm wall radius so that part of the diverging beam is scraped
 SMALL_CASE = dict(
     name="test",
-    T_frac=0.5,
+    material=dt_gas(0.5),
     voltage=280.0,
     current=10.0,
     pressure=[5.0],
@@ -39,7 +39,10 @@ SMALL_CASE = dict(
 
 
 def make_source(**overrides):
-    """Return a ShineSource for SMALL_CASE with some settings overridden."""
+    """Return a ShineSource for SMALL_CASE with some settings overridden. T_frac=x is short for
+    material=dt_gas(x), a D/T gas with that tritium fraction."""
+    if "T_frac" in overrides:
+        overrides["material"] = dt_gas(overrides.pop("T_frac"))
     return ShineSource(**{**SMALL_CASE, **overrides})
 
 

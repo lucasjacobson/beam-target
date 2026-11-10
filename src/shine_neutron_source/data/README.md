@@ -85,7 +85,8 @@ The code uses the deuteron stopping per atom of each element in a region's mater
 material's phase (gas or solid), and combines them per atom (Bragg additivity): the stopping
 per atom of the material is the sum over its atoms of each atom fraction times that element's
 stopping, and the energy loss per unit length is that times the region's atom density. For
-D/T gas this is (1 − T_frac) × the value in deuterium + T_frac × the value in tritium.
+a D/T gas with a fraction f of its atoms tritium this is (1 − f) × the value in deuterium +
+f × the value in tritium.
 Electronic stopping, which dominates, is the same for D and T (one electron each). Nuclear
 stopping per atom is about 45 % higher in deuterium than in tritium, but it is below 1.5 % of
 the total above 10 keV and below 0.1 % above 100 keV.

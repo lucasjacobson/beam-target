@@ -7,30 +7,30 @@
 #
 # Settings in [defaults] apply to every case unless the case sets them itself. Every case
 # needs all of the settings below, either directly or from [defaults]. Here [defaults] holds
-# a 50/50 D/T target, and each case changes only what it demonstrates.
+# a 50/50 D/T gas target, and each case changes only what it demonstrates.
 #
-# Of the target chamber's pressure and length and the beam energy at the backstop
-# (beam_energy_backstop), give any two and the third is calculated. Likewise give either the
-# beam current or the total neutron yield (yield_total), and the other is calculated. When
-# [defaults] and a case together give too many, the ones the case sets itself are used.
+# The target chamber holds the material named by material = "<name>", from a
+# [materials.<name>] table: a gas or a solid (such as a metal hydride); see [materials] below.
+# A gas region has a state, set in each case (never in [defaults]): pressure with
+# temperature, or density. For a gas target chamber, give two of its state, its length and
+# the beam energy at the backstop (beam_energy_backstop), and the third is calculated; with
+# no state given, a case with a temperature calculates its pressure and one without
+# calculates its density. A solid target chamber has no state and needs its length or
+# beam_energy_backstop.
+#
+# Likewise give either the beam current or the total neutron yield (yield_total), and the
+# other is calculated. When [defaults] and a case together give too many, the ones the case
+# sets itself are used.
 #
 # A case can put gas regions in front of the target chamber (for example differential-
 # pumping stages) by naming an [upstream.<name>] table; see [upstream.stages] below. If
 # [defaults] names one, a case can remove it with upstream = false.
-#
-# The target chamber (and any upstream stage) holds D/T gas with T_frac of its atoms tritium,
-# unless it names a [materials.<name>] table with material = "<name>": a gas of any
-# composition, or a solid such as a metal hydride; see [materials] below. A solid target
-# chamber has no pressure, temperature or T_frac (values in [defaults] are ignored), and
-# needs its length or beam_energy_backstop.
 
 [defaults]
 # Beam and target
-T_frac       = 0.5     # atom fraction of tritium in the gas
+material     = "DT50"  # see [materials] below
 voltage      = 280.0   # kV
 current      = 50.0    # mA
-pressure     = 38.0    # torr, target chamber
-temperature  = 1800.0  # degC
 length       = 137.0   # cm, target chamber
 start_radius = 0.2     # cm, beam radius at entry
 wall_radius  = 4.1783  # cm, target chamber wall
@@ -52,40 +52,67 @@ stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 ele
 
 # Two differential-pumping stages in front of the target chamber (illustrative values)
 [upstream.stages]
-pressure       = [0.05, 0.5]   # torr, one per stage, in beam order
+material       = "DT50"        # gas in every stage (or a list, one per stage)
+pressure       = [0.05, 0.5]   # torr, one per stage, in beam order (or density, g/cm3)
 length         = [50.0, 50.0]  # cm
 num_x_bins     = 10            # optional (default 10): internal bins per stage
 num_x_bins_out = 1             # optional (default 1): output bins per stage
 divergence     = 0.0           # optional (default 0): mrad
 
-# Materials other than D/T gas (illustrative values). composition gives atom ratios, or for a
-# gas the mole fractions of its molecules; D, T and 3He are the isotopes. A solid needs its
-# mass density.
+# Materials. A gas gives its molecules (mole fractions): its pressure counts molecules, so
+# H2O vapour, H2 + O2, and atomic H and O are different gases. A solid gives its atoms (atom
+# ratios) and its mass density. D, T and 3He are the isotopes.
+[materials.D2]
+phase     = "gas"
+molecules = { D2 = 1.0 }
+
+[materials.T2]
+phase     = "gas"
+molecules = { T2 = 1.0 }
+
+[materials.DT50]
+phase     = "gas"
+molecules = { D2 = 0.5, T2 = 0.5 }  # DT molecules would give the same atoms
+
+# Illustrative values
 [materials."TiD1.5"]
-phase       = "solid"
-density     = 3.9  # g/cm3
-composition = { Ti = 1.0, D = 1.5 }
+phase   = "solid"
+density = 3.9  # g/cm3
+atoms   = { Ti = 1.0, D = 1.5 }
 
 [materials.DT_argon]
-phase       = "gas"
-composition = { D2 = 0.49, T2 = 0.49, Ar = 0.02 }
+phase     = "gas"
+molecules = { D2 = 0.49, T2 = 0.49, Ar = 0.02 }
 
 # --- Gas mixtures ----------------------------------------------------------------------------
 
 # Pure deuterium: DD neutrons only
 [cases.DD]
-T_frac = 0.0
+material    = "D2"
+pressure    = 38.0    # torr
+temperature = 1800.0  # degC
 
 # Pure tritium: DT neutrons only
 [cases.DT]
-T_frac = 1.0
+material    = "T2"
+pressure    = 38.0
+temperature = 1800.0
 
-# 50/50 D/T: everything from [defaults]. The DT50_ cases below change one thing each.
+# 50/50 D/T: the DT50_ cases below change one thing each
 [cases.DT50]
+pressure    = 38.0
+temperature = 1800.0
 
 # 50/50 D/T with 2 % argon (by molecule): same pressure, fewer D and T atoms, more stopping
 [cases.DT50_argon]
-material = "DT_argon"
+material    = "DT_argon"
+pressure    = 38.0
+temperature = 1800.0
+
+# The same gas as DT50 given by its density (that of 38 torr at 1800 degC) instead of its
+# pressure and temperature: the same results
+[cases.DT50_by_density]
+density = 1.478437e-6  # g/cm3
 
 # --- Solid targets ---------------------------------------------------------------------------
 
@@ -108,32 +135,43 @@ divergence           = 0.0    # mrad
 
 # ICRU 49 electronic stopping instead of SRIM
 [cases.DT50_icru49]
+pressure       = 38.0
+temperature    = 1800.0
 stopping_power = "icru49"
 
 # A denser target: the beam stops about 117 cm in, so no beam power reaches the backstop
 [cases.DT50_beam_stops]
-pressure = 50.0  # torr
+pressure    = 50.0  # torr
+temperature = 1800.0
 
 # --- Calculated settings -------------------------------------------------------------------
 
 # Calculate the target chamber length that leaves the beam with 30 keV at the backstop
 [cases.DT50_find_length]
-pressure             = 38.0  # torr
-beam_energy_backstop = 30.0  # keV
+pressure             = 38.0
+temperature          = 1800.0
+beam_energy_backstop = 30.0   # keV
 
-# Calculate the pressure instead, for the same backstop energy
+# Calculate the pressure instead (no pressure, but a temperature), for the same backstop
+# energy
 [cases.DT50_find_pressure]
+temperature          = 1800.0
 length               = 137.0  # cm
 beam_energy_backstop = 30.0   # keV
 
 # Calculate the beam current that gives a total neutron yield of 1e13 n/s
 [cases.DT50_find_current]
+pressure    = 38.0
+temperature = 1800.0
 yield_total = 1e13  # n/s
 
 # --- Geometry and MCNP output ----------------------------------------------------------------
 
-# Upstream pumping stages, with the beam travelling along +x from x = -100 cm
+# Upstream pumping stages (at this case's temperature), with the beam travelling along +x
+# from x = -100 cm
 [cases.DT50_upstream]
+pressure       = 38.0
+temperature    = 1800.0
 upstream       = "stages"
 direction      = "+x"
 entry_position = [-100.0, 0.0, 0.0]  # cm
@@ -141,5 +179,7 @@ entry_position = [-100.0, 0.0, 0.0]  # cm
 # No divergence (a constant beam radius, so no scraping) and one output angle bin (an
 # isotropic source)
 [cases.DT50_isotropic]
+pressure       = 38.0
+temperature    = 1800.0
 divergence     = 0.0    # mrad
 angle_step_out = 180.0  # deg
