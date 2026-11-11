@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from shine_neutron_source import Region, ShineSource
@@ -80,3 +81,30 @@ def make_source(**overrides):
 def mixed_source():
     """A 50/50 D/T case, shared by tests that only read its results."""
     return make_source()
+
+
+# --- Statistical checks of sampled source particles (OpenMC and MCNP sampling tests) ---------
+
+MAX_Z = 5.0  # Largest deviation allowed in any bin, in standard deviations
+
+
+def assert_counts_match(counts, probabilities, what):
+    """Check sampled counts per bin against expected probabilities: none where the
+    probability is zero, and within MAX_Z standard deviations everywhere else."""
+    counts = np.asarray(counts, dtype=float).ravel()
+    p = np.asarray(probabilities, dtype=float).ravel()
+    p = p / p.sum()
+    n = counts.sum()
+    assert np.all(counts[p == 0] == 0), f"{what}: particles in bins with no neutrons"
+    filled = (p > 0) & (p < 1)  # A bin holding everything carries no information
+    if not np.any(filled):
+        return
+    z = (counts[filled] - n * p[filled]) / np.sqrt(n * p[filled] * (1 - p[filled]))
+    assert np.max(np.abs(z)) < MAX_Z, f"{what}: max deviation {np.max(np.abs(z)):.1f} sigma"
+
+
+def assert_mean_matches(values, mean, variance, what):
+    """Check a sample mean against the expected mean, within MAX_Z standard errors."""
+    error = np.sqrt(variance / len(values))
+    z = (np.mean(values) - mean) / error
+    assert abs(z) < MAX_Z, f"{what}: mean off by {z:.1f} sigma"
