@@ -1,25 +1,27 @@
 """Nuclides and their masses, beam particles, and the neutron-producing reactions.
 
-Atomic masses (AME2020) and element symbols come from the periodictable package; natural
-isotopic compositions from NATURAL_ABUNDANCE_FILE (IUPAC 2009 representative compositions,
-see data/README.md). Nuclear (bare-nucleus) masses, used for the beam and the reaction
+Atomic masses and element symbols come from MASS_FILE (the AME2020 atomic mass table), natural
+isotopic compositions from NATURAL_ABUNDANCE_FILE (NIST Atomic Weights and Isotopic
+Compositions); see data/README.md. Nuclear (bare-nucleus) masses, used for the beam and the reaction
 kinematics, are the atomic masses less the electrons, plus the electrons' binding energy.
 
 Atoms are named by element symbol for the natural element ("Li", "H"), or with the mass
 number first for one isotope ("7Li", "1H", "3He"); D and T are names for 2H and 3H.
 """
 
-import csv
 import functools
 import os
 import re
 from dataclasses import dataclass
 
 import numpy as np
-import periodictable
 
-# Natural isotopic compositions (in data/): nuclide, Z, A, isomer (1 for 180mTa), abundance
-NATURAL_ABUNDANCE_FILE = os.path.join(os.path.dirname(__file__), "data", "natural_abundances.csv")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+# AME2020 atomic mass table (in data/), as distributed by the IAEA AMDC
+MASS_FILE = os.path.join(DATA_DIR, "mass_1.mas20.txt")
+# Natural isotopic compositions (in data/): the NIST Atomic Weights and Isotopic Compositions
+# records
+NATURAL_ABUNDANCE_FILE = os.path.join(DATA_DIR, "nist_isotopic_compositions.txt")
 
 # Energy equivalents [MeV], CODATA 2022
 U_MEV = 931.49410372  # Atomic mass unit
@@ -45,18 +47,37 @@ def electron_binding(Z):
     return (14.4381 * Z**2.39 + 1.55468e-6 * Z**5.35) * 1e-6
 
 
-def _isotope(Z, A):
-    element = periodictable.elements[Z]
-    try:
-        isotope = element[A]
-    except (KeyError, IndexError):
-        raise ValueError(f"no isotope {A}{element.symbol} in the mass table") from None
-    return isotope
+@functools.cache
+def mass_table():
+    """Return ({(Z, A): atomic mass [u]}, {Z: element symbol}) from MASS_FILE.
+
+    The file is fixed-width (Fortran format a1,i3,i5,i5,i5,1x,a3,a4,1x,f14.6,f12.6,f13.5,1x,
+    f10.5,1x,a2,f13.5,f11.5,1x,i3,1x,f13.6,f12.6): N - Z, N, Z, A, element, origin, mass excess,
+    binding energy, beta-decay energy and the atomic mass, as an integer part [u] and the rest
+    [micro-u]. A "#" in place of the decimal point marks an estimated (non-experimental)
+    value; it is read as a decimal point. The table starts after the "(micro-u)" header line.
+    """
+    with open(MASS_FILE, encoding="ascii") as f:
+        lines = f.read().splitlines()
+    start = next(i for i, line in enumerate(lines) if "(micro-u)" in line) + 1
+    masses, symbols = {}, {}
+    for line in lines[start:]:
+        if not line.strip():
+            continue
+        Z, A = int(line[9:14]), int(line[14:19])
+        micro_u = int(line[106:109]) * 1e6 + float(line[110:123].replace("#", "."))
+        masses[(Z, A)] = micro_u * 1e-6
+        symbols.setdefault(Z, line[20:23].strip())
+    return masses, symbols
 
 
 def atomic_mass(Z, A):
-    """Return the atomic mass of the neutral atom (Z, A) [u] (the neutron's for Z = 0)."""
-    return _isotope(Z, A).mass
+    """Return the atomic mass of the neutral atom (Z, A) [u] (the neutron's for Z = 0).
+    Raises ValueError if (Z, A) is not in the mass table."""
+    masses, symbols = mass_table()
+    if (Z, A) not in masses:
+        raise ValueError(f"no isotope {A}{symbols.get(Z, f'(Z={Z})')} in the mass table")
+    return masses[(Z, A)]
 
 
 def nuclear_mass(Z, A, excitation=0.0):
@@ -77,22 +98,20 @@ def parse_atom(name):
     m = _ATOM.match(name)
     if not m:
         raise ValueError(f"cannot read the atom {name!r}")
-    try:
-        element = periodictable.elements.symbol(m.group(2))
-    except ValueError:
-        raise ValueError(f"unknown element {m.group(2)!r}") from None
-    if not hasattr(element, "number") or element.number < 1:
+    numbers = {symbol: Z for Z, symbol in mass_table()[1].items() if Z > 0}
+    if m.group(2) not in numbers:
         raise ValueError(f"unknown element {m.group(2)!r}")
+    Z = numbers[m.group(2)]
     if not m.group(1):
-        return element.number, None
+        return Z, None
     A = int(m.group(1))
-    _isotope(element.number, A)  # Raises for an unknown isotope
-    return element.number, A
+    atomic_mass(Z, A)  # Raises for an unknown isotope
+    return Z, A
 
 
 def atom_name(Z, A=None):
     """Return the canonical name of an atom: "Li" (natural), "7Li", or D or T."""
-    symbol = periodictable.elements[Z].symbol
+    symbol = mass_table()[1][Z]
     if A is None:
         return symbol
     return ALIAS_NAMES.get((Z, A), f"{A}{symbol}")
@@ -100,14 +119,24 @@ def atom_name(Z, A=None):
 
 @functools.cache
 def natural_abundances():
-    """Return {Z: {A: atom fraction}} from NATURAL_ABUNDANCE_FILE. An isomer (180mTa) counts as
-    its mass number: only its mass matters here."""
+    """Return {Z: {A: atom fraction}} from NATURAL_ABUNDANCE_FILE.
+
+    The file holds one record per nuclide, separated by blank lines, of "key = value" lines
+    ("Atomic Number = 3", "Mass Number = 7", "Isotopic Composition = 0.9241(4)", ...); the
+    uncertainty in brackets is dropped, and nuclides with no composition are left out.
+    """
     table = {}
-    with open(NATURAL_ABUNDANCE_FILE, newline="", encoding="ascii") as f:
-        for row in csv.DictReader(f):
-            element = table.setdefault(int(row["Z"]), {})
-            A = int(row["A"])
-            element[A] = element.get(A, 0.0) + float(row["abundance"])
+    with open(NATURAL_ABUNDANCE_FILE, encoding="ascii") as f:
+        records = f.read().strip().split("\n\n")
+    for record in records:
+        fields = {}
+        for line in record.strip().splitlines():
+            key, _, value = line.partition("=")
+            fields[key.strip()] = value.strip()
+        composition = fields.get("Isotopic Composition", "").split("(")[0]
+        if composition:
+            Z, A = int(fields["Atomic Number"]), int(fields["Mass Number"])
+            table.setdefault(Z, {})[A] = float(composition)
     return table
 
 

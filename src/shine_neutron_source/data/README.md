@@ -2,8 +2,9 @@
 
 The files in this directory are read by `ShineSource` (see `read_drosg_koe`,
 `read_srim_h5`, `read_pstar`, `read_cross_sections` and `read_stopping_power` in
-`source.py`, and `natural_abundances` in `nuclear.py`). The DROSG files are kept exactly as distributed, including their Windows
-(CRLF) line endings (see `.gitattributes`).
+`source.py`, and `mass_table` and `natural_abundances` in `nuclear.py`). The DROSG files and
+the mass table are kept exactly as distributed, the DROSG files including their Windows (CRLF)
+line endings (see `.gitattributes`).
 
 | File | Contents | Source |
 |---|---|---|
@@ -14,7 +15,8 @@ The files in this directory are read by `ShineSource` (see `read_drosg_koe`,
 | `p7lies.koe` | ⁷Li(p,n₁)⁷Be* cross sections (⁷Be first excited state, 0.429 MeV) | DROSG-2000 v12.01 |
 | `srim_stopping.h5` | Stopping powers of p, d, t, ³He and α in every element, solid and gas | SRIM-2012.01 |
 | `pstar_hydrogen.txt` | Stopping power of protons in hydrogen gas | ICRU Report 49 (NIST PSTAR) |
-| `natural_abundances.csv` | Natural isotopic compositions of the elements | IUPAC 2009 |
+| `nist_isotopic_compositions.txt` | Natural isotopic compositions of the elements | NIST SRD 144 |
+| `mass_1.mas20.txt` | Atomic masses of 3558 nuclides, and the element symbols | AME2020 |
 
 ## Cross sections: the `.koe` files
 
@@ -201,29 +203,44 @@ The figure shows the total stopping per tritium atom as the code uses it for eac
 their ratio; the kinks in the ratio come from the spacing of the two tables. It is made by
 [`docs/figures/plot_stopping_power.py`](../../../docs/figures/plot_stopping_power.py).
 
-## Natural isotopic compositions: `natural_abundances.csv`
+## Natural isotopic compositions: `nist_isotopic_compositions.txt`
 
 The atom fraction of each isotope in each natural element, used when a material names an
-element ("Li") rather than an isotope ("7Li"). The values are the representative isotopic
-compositions of the IUPAC 2009 report (Berglund and Wieser, 2011), for the 84 elements that
-have one (H to Bi, Th, Pa and U). Columns: `nuclide` (mass number first, `m` for an isomer),
-`Z`, `A`, `isomer` (1 for ¹⁸⁰ᵐTa, the only natural isomer; the code counts it as A = 180, since
-only its mass matters here) and `abundance` (atom fraction; each element sums to 1).
+element ("Li") rather than an isotope ("7Li"). The file is the NIST *Atomic Weights and
+Isotopic Compositions with Relative Atomic Masses* database (NIST Standard Reference Database
+144), retrieved on 2026-11-10 from
+<https://physics.nist.gov/cgi-bin/Compositions/stand_alone.pl?ele=&all=all&ascii=ascii2&isotype=all>
+("Linearized ASCII Output", all isotopes). The records are kept exactly as served; only the
+HTML page around them (header, navigation links and scripts) was removed. Each record is a set
+of `key = value` lines; the code reads `Atomic Number`, `Mass Number` and `Isotopic
+Composition` (dropping the uncertainty in brackets), for the 288 isotopes of the 84 elements
+that have a representative composition (H to Bi, Th, Pa and U). ¹⁸⁰ᵐTa, the only natural
+isomer, is listed as mass number 180; only its mass matters here. The relative atomic masses in
+the file are not used (see `mass_1.mas20.txt`).
 
 Natural compositions vary between samples, and some are often altered on purpose: commercial
 lithium is frequently depleted in ⁶Li (the representative value here is 7.59 %). If the
 composition of a target is known, give its isotopes explicitly, for example
 `atoms = { 6Li = 0.05, 7Li = 0.95 }`.
 
-Atomic masses, in contrast, come from the AME2020 evaluation via the `periodictable` package.
+## Atomic masses: `mass_1.mas20.txt`
+
+The atomic mass table of the 2020 Atomic Mass Evaluation (AME2020), unmodified, as distributed
+by the IAEA Atomic Mass Data Center at <https://www-nds.iaea.org/amdc/> (file `mass.mas20`, the
+unrounded values). The code reads each nuclide's Z, A, element symbol and atomic mass (in
+micro-u) from the fixed-width columns described in the file's header; values marked `#`
+(estimated rather than measured) are read like the others. Nuclear masses are the atomic
+masses less the electrons' rest mass, plus their binding energy (see `nuclear_mass`); they
+agree with the CODATA 2022 masses of the neutron, proton, deuteron, triton, helion and alpha
+particle to within 0.2 eV (the neutron differs most: AME2020 predates CODATA 2022).
 
 ## Licensing
 
 The MIT License in the repository's `LICENSE` file covers this project's code and
 documentation, not the data files in this directory. The `.koe` files (DROSG-2000),
 `srim_stopping.h5` (SRIM output) and
-`pstar_hydrogen.txt` (NIST PSTAR / ICRU Report 49) and `natural_abundances.csv` (IUPAC) are
-redistributed unmodified, or with values copied exactly, from the sources above, which are freely available, and remain subject to their
+`pstar_hydrogen.txt` (NIST PSTAR / ICRU Report 49), `nist_isotopic_compositions.txt` (NIST)
+and `mass_1.mas20.txt` (AME2020) are redistributed unmodified, or with values copied exactly, from the sources above, which are freely available, and remain subject to their
 sources' terms. Please cite those sources when using the data.
 
 ## References
@@ -235,8 +252,11 @@ sources' terms. Please cite those sources when using the data.
   <https://www-nds.iaea.org/public/libraries/drosg2000/iaeands-v12.01.pdf>.)
 - J. F. Ziegler, M. D. Ziegler and J. P. Biersack, "SRIM – The stopping and range of ions in
   matter (2010)", Nucl. Instrum. Methods Phys. Res. B 268 (2010) 1818–1823.
-- M. Berglund and M. E. Wieser, "Isotopic compositions of the elements 2009 (IUPAC Technical
-  Report)", Pure Appl. Chem. 83 (2011) 397–410.
+- J. S. Coursey, D. J. Schwab, J. J. Tsai and R. A. Dragoset, *Atomic Weights and Isotopic
+  Compositions with Relative Atomic Masses*, NIST Standard Reference Database 144,
+  <https://www.nist.gov/pml/atomic-weights-and-isotopic-compositions-relative-atomic-masses>.
+- W. J. Huang, M. Wang, F. G. Kondev, G. Audi and S. Naimi, "The AME 2020 atomic mass
+  evaluation (I)", Chin. Phys. C 45 (2021) 030002.
 - M. Wang, W. J. Huang, F. G. Kondev, G. Audi and S. Naimi, "The AME 2020 atomic mass
   evaluation (II)", Chin. Phys. C 45 (2021) 030003.
 - ICRU Report 49, *Stopping Powers and Ranges for Protons and Alpha Particles*, International

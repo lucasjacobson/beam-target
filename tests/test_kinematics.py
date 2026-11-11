@@ -11,6 +11,7 @@ from shine_neutron_source.nuclear import (
     cm_to_lab,
     coulomb_barrier,
     isotope_fractions,
+    mass_table,
     mean_atomic_mass,
     natural_abundances,
     neutron_channels,
@@ -26,9 +27,19 @@ ENDOTHERMIC = ["pT", "p7Li_n0", "p7Li_n1", "tH"]
 # --- Masses and isotopes -----------------------------------------------------------------------
 
 
+def test_mass_table():
+    """The AME2020 table reads in full, with spot values copied from mass_1.mas20.txt."""
+    masses, symbols = mass_table()
+    assert len(masses) == 3558
+    assert symbols[0] == "n" and symbols[3] == "Li" and symbols[118] == "Og"
+    assert masses[(3, 7)] == pytest.approx(7.016003434260, abs=1e-12)
+    assert masses[(6, 12)] == 12.0
+    assert masses[(3, 3)] == pytest.approx(3.030775, abs=1e-12)  # Estimated: "3 030775#"
+
+
 def test_masses_match_codata():
     """Bare-nucleus masses from AME2020 atomic masses agree with the CODATA 2022 nuclear
-    mass-energies [MeV] to within 0.1 eV."""
+    mass-energies [MeV] to within 0.2 eV (the AME2020 neutron mass is 0.15 eV below CODATA 2022)."""
     codata = {
         (0, 1): 939.56542194,
         (1, 1): 938.27208943,
@@ -38,7 +49,7 @@ def test_masses_match_codata():
         (2, 4): 3727.3794118,
     }
     for (Z, A), mass in codata.items():
-        assert nuclear_mass(Z, A) == pytest.approx(mass, abs=1e-7), (Z, A)
+        assert nuclear_mass(Z, A) == pytest.approx(mass, abs=2e-7), (Z, A)
 
 
 @pytest.mark.parametrize(
@@ -66,14 +77,14 @@ def test_bad_atom_names(name):
 
 
 def test_natural_abundances():
-    """IUPAC 2009 representative isotopic compositions (data/natural_abundances.csv)."""
+    """NIST representative isotopic compositions (data/nist_isotopic_compositions.txt)."""
     li = isotope_fractions("Li")
     assert li == {(3, 6): 0.0759, (3, 7): 0.9241}
     assert isotope_fractions("H") == {(1, 1): 0.999885, (1, 2): 0.000115}
     assert isotope_fractions("7Li") == {(3, 7): 1.0}
     assert mean_atomic_mass(li) == pytest.approx(6.940, abs=1e-3)  # Standard atomic weight
     assert isotope_fractions("U")[(92, 235)] == 0.007204
-    assert isotope_fractions("Ta")[(73, 180)] == 0.00012  # 180mTa, by its mass number
+    assert isotope_fractions("Ta")[(73, 180)] == 0.0001201  # 180mTa, by its mass number
     with pytest.raises(ValueError, match="no natural isotopes"):
         isotope_fractions("Tc")
 
@@ -100,8 +111,8 @@ def test_reactions_per_beam():
         ("DD", 3.268857),
         ("DT", 17.589248),
         ("pT", -0.763807),
-        ("p7Li_n0", -1.644420),
-        ("p7Li_n1", -1.644420 - 0.42908),
+        ("p7Li_n0", -1.644423),
+        ("p7Li_n1", -1.644423 - 0.42908),
         ("tD", 17.589248),
         ("tH", -0.763807),
     ],
