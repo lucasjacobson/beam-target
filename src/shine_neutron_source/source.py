@@ -1140,9 +1140,10 @@ class ShineSource:
         wall radius, so the fraction of the beam still left at a point is m^2, where m is the
         smallest wall radius / r met so far along the path (at most 1). With one wall radius
         and a growing beam this is (wall radius / r)^2, the usual flat-beam result; walls
-        that narrow and widen again (each region has its own) are handled the same way. This
-        is conservative. Divergence is used as dr/dx = divergence / 1000 (small-angle
-        approximation) unless use_atan is True.
+        that narrow and widen again (each region has its own) are handled the same way. A flat
+        profile scrapes more than one peaked on the axis (such as a Gaussian), but less than a
+        hollow one, with more of its current near the edge. Divergence is used as
+        dr/dx = divergence / 1000 (small-angle approximation) unless use_atan is True.
 
         Sets the beam edge radius (m r: the edge of the part left) [cm] and scrape fraction
         on the internal and output meshes.
