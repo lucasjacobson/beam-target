@@ -41,6 +41,31 @@ def test_case_placement(h5_path, mixed_source):
     np.testing.assert_allclose(space.z.x, mixed_source.x_grid_out[:2])  # Along the beam
 
 
+@pytest.mark.parametrize(
+    "kwargs, origin, axis",
+    [
+        (dict(backstop_position=[1.0, 2.0, 3.0]), "backstop - L u", [0, 0, -1]),
+        (dict(entry_position=[1.0, 2.0, 3.0]), [1.0, 2.0, 3.0], [0, 0, -1]),
+        (dict(direction="+x", backstop_position=[0.0, 0.0, 0.0]), "backstop - L u", [1, 0, 0]),
+        (dict(direction=[0.0, 3.0, 4.0], entry_position=[1.0, 2.0, 3.0]), [1, 2, 3], [0, 0.6, 0.8]),
+        # The case's own direction, however written, needs no position: nothing moves
+        (dict(direction="-z"), "backstop - L u", [0, 0, -1]),
+        (dict(direction=[0.0, 0.0, -2.0]), "backstop - L u", [0, 0, -1]),
+    ],
+)
+def test_moved_or_turned(h5_path, mixed_source, kwargs, origin, axis):
+    L = mixed_source.x_grid_out[-1]
+    u = np.array(axis, dtype=float)
+    backstop = np.array(kwargs.get("backstop_position", [0.0, 0.0, 0.0]))
+    expected = backstop - L * u if isinstance(origin, str) else origin
+    src = get_openmc_sources(h5_path, **kwargs)[0]
+    np.testing.assert_allclose(src.space.origin, expected, atol=1e-12)
+    np.testing.assert_allclose(src.space.z_dir, u, atol=1e-12)
+    np.testing.assert_allclose(src.angle.reference_uvw, u, atol=1e-12)
+    for v in (src.space.r_dir, src.angle.reference_vwu):
+        assert np.dot(v, u) == pytest.approx(0, abs=1e-12)
+
+
 def test_cells_match_the_output_mesh(h5_path, mixed_source):
     """Each source covers one position bin and one angle bin, with that cell's spectrum as a
     histogram on the output energy bins."""
@@ -102,3 +127,15 @@ def test_old_file_rejected(tmp_path):
         f.attrs["format_version"] = 5
     with pytest.raises(ValueError, match="format_version 5"):
         get_openmc_sources(path)
+
+
+def test_bad_placement_rejected(h5_path):
+    with pytest.raises(ValueError, match="not both"):
+        get_openmc_sources(h5_path, entry_position=[0, 0, 0], backstop_position=[0, 0, 0])
+    with pytest.raises(ValueError, match="non-zero vector"):
+        get_openmc_sources(h5_path, direction=[0, 0, 0])
+    with pytest.raises(ValueError, match="direction must be one of"):
+        get_openmc_sources(h5_path, direction="z")
+    # Turning the source needs a position, to say which end goes where
+    with pytest.raises(ValueError, match=r"differs from the case's \(-z\): give entry_position"):
+        get_openmc_sources(h5_path, direction="+x")

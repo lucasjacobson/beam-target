@@ -21,11 +21,34 @@ from .source import SDEF_DIRECTIONS
 MIN_FORMAT_VERSION = 6
 
 
+def _unit_vector(direction):
+    """Return the beam direction as a unit vector: from one of SDEF_DIRECTIONS ("-z", ...) or
+    any three numbers (x, y, z)."""
+    if isinstance(direction, str):
+        if direction not in SDEF_DIRECTIONS:
+            raise ValueError(
+                f"direction must be one of {', '.join(SDEF_DIRECTIONS)} or a vector (x, y, z), "
+                f"got {direction!r}"
+            )
+        return np.array(SDEF_DIRECTIONS[direction][1].split(), dtype=float)
+    u = np.array(direction, dtype=float)
+    if u.shape != (3,) or not np.all(np.isfinite(u)) or not np.any(u):
+        raise ValueError(f"direction must be a non-zero vector (x, y, z), got {direction!r}")
+    return u / np.linalg.norm(u)
+
+
 def _perpendicular(u):
     """Return a unit vector perpendicular to the unit vector u."""
     a = np.array([1.0, 0.0, 0.0]) if abs(u[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
     v = a - np.dot(a, u) * u
     return v / np.linalg.norm(v)
+
+
+def _point(name, value):
+    point = np.array(value, dtype=float)
+    if point.shape != (3,) or not np.all(np.isfinite(point)):
+        raise ValueError(f"{name} must be three numbers (x, y, z), got {value!r}")
+    return point
 
 
 def read_placement(path):
@@ -52,7 +75,7 @@ def _check_format(path, hf):
         )
 
 
-def get_openmc_sources(path):
+def get_openmc_sources(path, direction=None, entry_position=None, backstop_position=None):
     """Return a list of openmc.IndependentSource for the neutron source in a source.h5 file.
 
     There is one source for each (position bin, emission-angle bin, reaction) of the output
@@ -69,11 +92,26 @@ def get_openmc_sources(path):
       normalises tallies per source particle, so multiply tallies by the total of the
       strengths (yield_total in the file's results) for absolute rates.
 
-    The source is placed as it was for the case: the direction, entry_position and
-    backstop_position the case was run with, stored in the file. Everything else (lengths,
-    radii, the yield) comes from the calculation; to change it, rerun the case.
+    The source is placed as it was for the case (the direction, entry_position and
+    backstop_position the case was run with, stored in the file), unless moved here:
+
+    Args:
+        path: The source.h5 file.
+        direction: Beam direction: one of SDEF_DIRECTIONS ("-x", ..., "+z") or any vector
+            (x, y, z). None keeps the case's.
+        entry_position: Point where the beam enters the first region, (x, y, z) [cm].
+        backstop_position: Point where the beam reaches the backstop, (x, y, z) [cm]. Give
+            this or entry_position, not both. With neither, the source stays where it was for
+            the case. A direction other than the case's needs one of them, since turning the
+            source moves at least one of its ends.
+
+    Everything else (lengths, radii, the yield) comes from the calculation; to change it,
+    rerun the case.
     """
     import openmc
+
+    if entry_position is not None and backstop_position is not None:
+        raise ValueError("give entry_position or backstop_position, not both")
 
     with h5py.File(path, "r") as hf:
         _check_format(path, hf)
@@ -88,8 +126,20 @@ def get_openmc_sources(path):
         case_direction = str(hf.attrs["direction"])
         case_entry = np.array(hf.attrs["entry_position"], dtype=float)
 
-    u = np.array(SDEF_DIRECTIONS[case_direction][1].split(), dtype=float)
-    entry = case_entry
+    case_u = _unit_vector(case_direction)
+    u = case_u if direction is None else _unit_vector(direction)
+    length = x_grid[-1]
+    if entry_position is not None:
+        entry = _point("entry_position", entry_position)
+    elif backstop_position is not None:
+        entry = _point("backstop_position", backstop_position) - length * u
+    elif np.allclose(u, case_u, rtol=0, atol=1e-12):
+        entry = case_entry
+    else:
+        raise ValueError(
+            f"direction {direction!r} differs from the case's ({case_direction}): give "
+            "entry_position or backstop_position too, to say where the source goes"
+        )
     v = _perpendicular(u)
 
     def histogram(x):
