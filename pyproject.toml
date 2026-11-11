@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "shine-neutron-source"
 version = "0.1.0"
-description = "Beam-target fusion neutron source terms for Monte Carlo transport codes"
+description = "Neutron source terms from proton, deuteron and triton beams in gas and solid targets, for MCNP and OpenMC"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]

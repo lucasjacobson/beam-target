@@ -1,4 +1,5 @@
-"""Beam-target fusion neutron source terms for Monte Carlo transport codes.
+"""Neutron source terms from proton, deuteron and triton beams in gas and solid targets, for
+MCNP and OpenMC.
 
 - ShineSource (in source.py) calculates the source for one case and writes it as HDF5, an
   MCNP SDEF card and plots.
