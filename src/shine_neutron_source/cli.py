@@ -17,7 +17,7 @@ import time
 import tomllib
 
 from .nuclear import BEAMS
-from .source import PHASES, SDEF_DIRECTIONS, STOPPING_POWERS, Material, Region, ShineSource
+from .source import DROSG, PHASES, SDEF_DIRECTIONS, STOPPING_POWERS, Material, Region, ShineSource
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +41,15 @@ BEAM_SETTINGS = {
 
 # Optional case settings and their defaults
 OPTIONAL_CASE_SETTINGS = {
-    "beam": "d",  # Beam particle, see nuclear.BEAMS: "p", "d" or "t"
+    "beam": "d",  # Beam particle, see nuclear.BEAMS: "p", "d", "t", "h" (3He) or "a" (alpha)
     # Beam energy at the backstop [keV]; give it to calculate the one region value left out
     "beam_energy_backstop": None,
     "direction": "-z",  # MCNP SDEF beam direction, see SDEF_DIRECTIONS
     "stopping_power": "srim",  # Stopping-power set, see STOPPING_POWERS
+    # Nuclear-data libraries, searched in order for each target isotope: "drosg" (the built-in
+    # two-body reactions) or directories of evaluated files (ENDF/B, FENDL, TENDL), relative
+    # to the input file's directory unless absolute
+    "nuclear_data": ["drosg"],
 }
 
 # MCNP SDEF placement: give at most one (with neither, the beam enters at the origin). If a
@@ -186,6 +190,28 @@ def _read_regions(where, items, named, materials):
     return regions
 
 
+def _read_nuclear_data(where, entries, input_path):
+    """Check a nuclear_data list and return it with relative directories resolved against
+    the input file's directory."""
+    if isinstance(entries, str):
+        entries = [entries]
+    if not isinstance(entries, list) or not entries or not all(isinstance(e, str) for e in entries):
+        raise InputError(
+            f'{where}: nuclear_data must be a list of "drosg" and directories, got {entries!r}'
+        )
+    base = os.path.dirname(os.path.abspath(input_path))
+    resolved = []
+    for entry in entries:
+        if entry == DROSG:
+            resolved.append(entry)
+            continue
+        directory = entry if os.path.isabs(entry) else os.path.join(base, entry)
+        if not os.path.isdir(directory):
+            raise InputError(f"{where}: nuclear_data directory not found: {directory}")
+        resolved.append(os.path.normpath(directory))
+    return resolved
+
+
 def load_input(path):
     """Read a TOML input file and return {case name: settings}.
 
@@ -292,6 +318,7 @@ def load_input(path):
                 f"{where}: stopping_power must be one of {', '.join(STOPPING_POWERS)}, "
                 f"got {s['stopping_power']!r}"
             )
+        nuclear_data = _read_nuclear_data(where, s["nuclear_data"], path)
         resolved[name] = {
             "source": {
                 "regions": regions,
@@ -305,6 +332,7 @@ def load_input(path):
                 "energy_bin_width": s["energy_bin_width"],
                 "stopping_power": s["stopping_power"],
                 "beam_energy_backstop": s["beam_energy_backstop"],
+                "nuclear_data": nuclear_data,
             },
             "direction": s["direction"],
             **positions,
