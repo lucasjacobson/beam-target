@@ -449,6 +449,23 @@ def test_main_errors(tmp_path, capsys, args, message):
     assert message in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("name, expected", [("Artemis", 1.7756e13), ("Apollo", 3.1611e13)])
+def test_shine_systems_example(name, expected):
+    """examples/shine_systems.toml: SHINE's systems at their operating points give the
+    yields quoted in the file (about 1.8e13 and 3.2e13 n/s; 1.7756e13 and 3.1611e13 at the
+    file's full mesh), with the chamber pressure solved for 10 keV at the beam stop."""
+    cases = load_input(EXAMPLE_INPUT.with_name("shine_systems.toml"))
+    assert list(cases) == ["Artemis", "Apollo"]
+    s = cases[name]["source"]
+    assert s["current"] == 45.0 and s["voltage"] == 280.0 and s["beam_energy_backstop"] == 10.0
+    for region in s["regions"]:
+        region.num_x_bins = region.num_x_bins_out  # A coarse mesh, for speed
+    source = ShineSource(name=name, **{**s, "angle_step": 1.0})
+    assert source.calculated == "pressure"
+    assert source.yield_total == pytest.approx(expected, rel=0.01)
+    assert source.warnings == []
+
+
 def test_simple_example():
     """examples/simple.toml, the smallest input file, holds one case that runs."""
     cases = load_input(EXAMPLE_INPUT.with_name("simple.toml"))
