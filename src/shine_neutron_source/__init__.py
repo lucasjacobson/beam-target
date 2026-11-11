@@ -5,6 +5,8 @@
 - load_input and run_case (in cli.py) read cases from a TOML input file and run them; the
   shine-neutron-source command (or python -m shine_neutron_source) does this from the
   command line.
+- openmc_source.get_openmc_sources turns a case's source.h5 into OpenMC sources (needs the
+  openmc package, which is not imported otherwise).
 
 Progress and results are logged to the "shine_neutron_source" logger, which is silent unless
 logging is configured (the command line shows it; see setup_logging).

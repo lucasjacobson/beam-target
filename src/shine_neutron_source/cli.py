@@ -350,7 +350,7 @@ def run_case(name, settings, output_dir="output", input_file=None):
     entry, backstop = source.sdef_positions(
         direction, settings["entry_position"], settings["backstop_position"]
     )
-    source.write_hdf5(os.path.join(case_dir, "source.h5"), run_info)
+    source.write_hdf5(os.path.join(case_dir, "source.h5"), run_info, direction, entry)
     source.write_mcnp_sdef(os.path.join(case_dir, "source.sdef"), direction, run_info, entry)
     source.make_plots(os.path.join(case_dir, "plots"))
     sdef_info = {

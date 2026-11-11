@@ -491,6 +491,11 @@ def test_backstop_position(tmp_path):
     assert run["sdef_entry_position"] == pytest.approx([0.0, 0.0, length], rel=1e-6)
     sdef = (out / "find_length" / "source.sdef").read_text()
     assert "        pos = 0 0 0\n" in sdef  # -z: POS is the backstop end
+    # The HDF5 file records the same placement (read by openmc_source)
+    with h5py.File(out / "find_length" / "source.h5") as f:
+        assert f.attrs["direction"] == "-z"
+        assert list(f.attrs["backstop_position"]) == [0.0, 0.0, 0.0]
+        assert list(f.attrs["entry_position"]) == pytest.approx(run["sdef_entry_position"])
 
 
 @pytest.mark.parametrize(

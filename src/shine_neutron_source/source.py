@@ -89,7 +89,7 @@ SRIM_ISOTOPE_TABLES = {(1, 2): "D", (1, 3): "T", (2, 3): "He3"}
 SDEF_RADIUS_DECIMALS = 5
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
-HDF5_FORMAT_VERSION = 5
+HDF5_FORMAT_VERSION = 6
 
 # Error message when a case produces no neutrons
 NO_NEUTRONS = (
@@ -1529,13 +1529,17 @@ class ShineSource:
             ]
         )
 
-    def write_hdf5(self, path, run_info=None):
+    def write_hdf5(
+        self, path, run_info=None, direction="-z", entry_position=None, backstop_position=None
+    ):
         """Write the source on the output mesh to an HDF5 file at path.
 
         File attributes: format ("shine-neutron-source") and format_version (HDF5_FORMAT_VERSION,
         increased whenever the layout changes), name (case name), code_version (see
-        get_code_version), created (UTC time), warnings (see check_channels; empty if none)
-        and any run_info entries (such as the input file). The inputs group holds every input
+        get_code_version), created (UTC time), warnings (see check_channels; empty if none),
+        the placement of the source (direction, and entry_position and backstop_position
+        [cm], see sdef_positions; read by openmc_source.get_openmc_sources) and any run_info
+        entries (such as the input file). The inputs group holds every input
         parameter (see get_inputs) and the results group the key results (see get_results),
         one dataset each with a "units" attribute.
         The materials group has a group for each material used, whose attributes give its
@@ -1558,6 +1562,7 @@ class ShineSource:
           shape (len(x_grid) - 1, len(angle_grid) - 1, len(neutron_energy_grid_<rxn>) - 1);
           the "dimensions" attribute names the axes and "reaction" gives the reaction.
         """
+        entry, backstop = self.sdef_positions(direction, entry_position, backstop_position)
         _make_parent_dir(path)
         datasets = [
             ("x_grid", self.x_grid_out, "cm", "position mesh along the beam (bin boundaries)"),
@@ -1591,6 +1596,9 @@ class ShineSource:
             hf.attrs["code_version"] = get_code_version()
             hf.attrs["created"] = self.created
             hf.attrs["warnings"] = self.warnings  # Open neutron channels not modelled
+            hf.attrs["direction"] = direction
+            hf.attrs["entry_position"] = entry
+            hf.attrs["backstop_position"] = backstop
             for key, value in (run_info or {}).items():
                 hf.attrs[key] = value
             for group_name, entries in [
