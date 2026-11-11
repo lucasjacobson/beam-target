@@ -79,7 +79,7 @@ file, or the `stopping_power` argument of `ShineSource`):
 | `stopping_power` | Electronic stopping | Nuclear stopping |
 |---|---|---|
 | `"srim"` (default) | SRIM-2012.01 (`srim_stopping.h5`) | SRIM-2012.01 |
-| `"icru49"` | ICRU Report 49 (`pstar_hydrogen.txt`) for H, D and T; SRIM for other elements | SRIM-2012.01 |
+| `"icru49"` | ICRU Report 49 (`pstar_hydrogen.txt`); hydrogen-isotope gases only | SRIM-2012.01 |
 
 The code uses the deuteron stopping per atom of each element in a region's material, in the
 material's phase (gas or solid), and combines them per atom (Bragg additivity): the stopping
@@ -146,9 +146,12 @@ Stopping powers of protons in hydrogen gas from ICRU Report 49, as tabulated by 
 9 November 2026), with the values copied exactly as printed (see the file header). The code
 uses the electronic stopping at the proton energy with the same velocity as the deuteron,
 E_p = E_d × m_p/m_d ≈ E_d/2, converted to stopping per atom with the atomic weight ICRU 49 uses
-(1.00794). It replaces the SRIM electronic stopping of the hydrogen isotopes only; other
-elements, and all nuclear stopping, still come from SRIM, mixed per atom as above. Because the
-data are for hydrogen gas, `"icru49"` can be used only with gas materials. The table starts
+(1.00794). The ICRU 49 nuclear stopping is for protons, so the nuclear part comes from SRIM,
+mixed per atom as above. Because this file holds ICRU 49 data for hydrogen gas only,
+`"icru49"` can be used only for gases made of hydrogen isotopes (H, D, T); a solid, or a gas
+with any other element, is refused, so that a case run with it uses ICRU 49 throughout.
+(PSTAR also tabulates about 25 other elements, but not hydrogen as a solid, so hydride
+targets could not be described consistently with it.) The table starts
 at a proton energy of 1 keV, so it covers deuteron energies from 2 keV; below that the beam is
 treated as stopped.
 

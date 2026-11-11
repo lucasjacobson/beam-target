@@ -63,7 +63,7 @@ SRIM_STOPPING_FILE = "srim_stopping.h5"
 PSTAR_FILE = "pstar_hydrogen.txt"
 STOPPING_POWERS = {
     "srim": "SRIM-2012.01, per atom, mixed over each region's composition",
-    "icru49": "as srim, but ICRU 49 electronic stopping for hydrogen isotopes (gas only)",
+    "icru49": "ICRU 49 electronic + SRIM nuclear stopping; hydrogen-isotope gases only",
 }
 BEAM_PARTICLE = "d"  # Beam particle group in SRIM_STOPPING_FILE
 PHASES = ("gas", "solid")
@@ -1043,15 +1043,16 @@ class ShineSource:
 
         - "srim": SRIM-2012.01 stopping for deuterons in each element (SRIM_STOPPING_FILE),
           in the material's phase (gas or solid).
-        - "icru49": as "srim", but the electronic stopping of hydrogen isotopes comes from ICRU
-          Report 49 for protons in hydrogen gas (PSTAR_FILE), taken at the proton energy with
-          the same velocity (E_p = E_d * M_H1 / M_H2); electronic stopping does not depend on
-          the hydrogen isotope. Only for gas materials, since the data are for hydrogen gas.
-          The table covers deuteron energies from about 2 keV upwards; below that the beam is
+        - "icru49": electronic stopping from ICRU Report 49 for protons in hydrogen gas
+          (PSTAR_FILE), taken at the proton energy with the same velocity
+          (E_p = E_d * M_H1 / M_H2), plus SRIM nuclear stopping; electronic stopping does not
+          depend on the hydrogen isotope. Only for gases of hydrogen isotopes (H, D, T), the
+          only ICRU 49 data here, so that a case run with it uses ICRU 49 throughout. The
+          table covers deuteron energies from about 2 keV upwards; below that the beam is
           treated as stopped.
 
         Raises ValueError if a material contains an atom with no stopping data, or if
-        "icru49" is used with a solid.
+        "icru49" is used with a solid or with any element other than hydrogen.
         """
         path = os.path.join(self.data_dir, SRIM_STOPPING_FILE)
         E, self.srim_masses, srim = read_srim_h5(path)
@@ -1069,11 +1070,19 @@ class ShineSource:
         self.stopping_per_region = []
         for material in self.materials:
             if id(material) not in cache:
-                if self.stopping_power == "icru49" and material.phase != "gas":
-                    raise ValueError(
-                        f"{self.name}: stopping_power icru49 is for hydrogen gas only, but "
-                        f"material {material.name} is a {material.phase}"
-                    )
+                if self.stopping_power == "icru49":
+                    others = [a for a in material.atom_fractions if a not in HYDROGEN_ISOTOPES]
+                    if material.phase != "gas" or others:
+                        reason = (
+                            f"is a {material.phase}"
+                            if material.phase != "gas"
+                            else f"contains {', '.join(others)}"
+                        )
+                        raise ValueError(
+                            f"{self.name}: stopping_power icru49 is for hydrogen-isotope gases "
+                            f"only (the ICRU 49 data here are for hydrogen gas), but material "
+                            f"{material.name} {reason}; use srim"
+                        )
                 eps = np.zeros(int(np.sum(keep)))
                 for atom, fraction in material.atom_fractions.items():
                     if atom not in srim[material.phase]:
@@ -1083,7 +1092,7 @@ class ShineSource:
                         )
                     elec, nuc = srim[material.phase][atom]
                     elec = elec[keep]
-                    if self.stopping_power == "icru49" and atom in HYDROGEN_ISOTOPES:
+                    if self.stopping_power == "icru49":  # Hydrogen isotopes only (above)
                         elec = icru_elec
                     eps += fraction * (elec + nuc[keep])
                 cache[id(material)] = (E[keep], eps)
