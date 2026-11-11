@@ -37,7 +37,10 @@ def make_solid(material=TID, **overrides):
         ("Ti", {"Ti": 1.0}),
         ("TiD1.5", {"Ti": 1.0, "D": 1.5}),
         ("CD4", {"C": 1.0, "D": 4.0}),
-        ("3He", {"He3": 1.0}),  # The helium-3 isotope
+        ("3He", {"3He": 1.0}),  # The helium-3 isotope
+        ("7Li", {"7Li": 1.0}),
+        ("2H", {"D": 1.0}),  # Canonical names for the hydrogen isotopes
+        ("LiH", {"Li": 1.0, "H": 1.0}),
         ("He3", {"He": 3.0}),  # Three helium atoms
         ("DT", {"D": 1.0, "T": 1.0}),
         ("Er.5D", {"Er": 0.5, "D": 1.0}),
@@ -47,7 +50,7 @@ def test_parse_formula(formula, atoms):
     assert parse_formula(formula) == atoms
 
 
-@pytest.mark.parametrize("formula", ["", "d2", "Ti-D", "2"])
+@pytest.mark.parametrize("formula", ["", "d2", "Ti-D", "2", "Xx", "99Li"])
 def test_parse_formula_rejects(formula):
     with pytest.raises(ValueError):
         parse_formula(formula)
@@ -201,8 +204,23 @@ def test_solid_rejects(overrides, message):
 
 
 def test_unknown_element_rejected():
-    with pytest.raises(ValueError, match="no stopping data for 'Xx'"):
-        make_solid(material=Material("bad", "solid", atoms={"Xx": 1}, density=1.0))
+    with pytest.raises(ValueError, match="unknown element 'Xx'"):
+        Material("bad", "solid", atoms={"Xx": 1}, density=1.0)
+
+
+def test_isotopes_and_natural_elements():
+    """A natural element is split into its isotopes; an isotope stays itself. Stopping uses
+    the element's table, except for D, T and 3He."""
+    natural = Material("Li", "solid", atoms={"Li": 1}, density=0.534)
+    assert natural.isotope_fractions[(3, 7)] == 0.9241
+    assert natural.stopping_fractions() == {"Li": pytest.approx(1.0)}
+    enriched = Material("7Li", "solid", atoms={"7Li": 1}, density=0.534)
+    assert enriched.isotope_fractions == {(3, 7): 1.0}
+    assert enriched.mean_mass == pytest.approx(7.016, abs=1e-3)
+    gas = Material("He3", "gas", molecules={"3He": 1, "D2": 1})
+    assert gas.stopping_fractions() == {"He3": pytest.approx(1 / 3), "D": pytest.approx(2 / 3)}
+    hydrogen = Material("H2", "gas", molecules={"H2": 1})
+    assert hydrogen.isotope_fractions[(1, 2)] > 0  # Natural hydrogen holds some deuterium
 
 
 def test_material_required():
@@ -287,7 +305,8 @@ def test_small_case_unchanged_by_materials():
     s = make_source()
     assert [m.name for m in s.materials] == ["D/T gas"]
     assert s.materials[0].phase == "gas"
-    assert s.atom_fractions_per_region["T"][0] == 0.5
+    assert s.materials[0].isotope_fractions == {(1, 2): 0.5, (1, 3): 0.5}
+    assert s.target_density_per_region["DT"][0] == 0.5 * s.atom_density_per_region[0]
 
 
 @pytest.mark.parametrize("molecules", [{"D2": 0.9, "Ar": 0.1}, {"D2": 0.5, "N2": 0.5}])

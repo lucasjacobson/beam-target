@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 from conftest import data_path
 
+from shine_neutron_source.nuclear import REACTIONS
 from shine_neutron_source.source import (
-    DROSG_FILES,
     PSTAR_FILE,
     SRIM_STOPPING_FILE,
     _fortran_float,
@@ -18,6 +18,8 @@ from shine_neutron_source.source import (
 )
 
 # --- DROSG-2000 cross sections ---------------------------------------------------------------
+
+DROSG_FILES = {rxn: r.data_file for rxn, r in REACTIONS.items()}
 
 
 @pytest.mark.parametrize(
@@ -38,12 +40,21 @@ def test_fortran_float(field, value):
     assert _fortran_float(field) == pytest.approx(value, rel=1e-15)
 
 
-@pytest.mark.parametrize("rxn, num_records, E_first", [("DD", 102, 0.0018), ("DT", 171, 0.01)])
-def test_drosg_tables(rxn, num_records, E_first):
+@pytest.mark.parametrize(
+    "rxn, num_records, E_first, E_last",
+    [
+        ("DD", 102, 0.0018, 40.0),
+        ("DT", 171, 0.01, 40.0),
+        ("pT", 82, 1.019054, 32.8),
+        ("p7Li_n0", 114, 1.8807, 23.0),
+        ("p7Li_n1", 68, 2.372, 23.0),
+    ],
+)
+def test_drosg_tables(rxn, num_records, E_first, E_last):
     E, total, coeffs = read_drosg_koe(data_path(DROSG_FILES[rxn]))
     assert len(E) == num_records
     assert E[0] == E_first
-    assert E[-1] == 40.0  # Reading stops at EMAXL; the single-angle records above are skipped
+    assert E[-1] == E_last  # Reading stops at EMAXL; the single-angle records above are skipped
     assert coeffs.shape == (num_records, 18)
     assert np.all(np.diff(E) > 0)
     assert np.all(np.abs(coeffs.sum(axis=1) - 1) <= 1e-3)
@@ -112,7 +123,7 @@ def test_pstar_table():
 
 def test_data_files_unchanged_line_endings():
     """The DROSG files are kept byte-for-byte as distributed (CRLF)."""
-    for fname in DROSG_FILES.values():
+    for fname in set(DROSG_FILES.values()):
         raw = open(data_path(fname), "rb").read()
         assert raw.count(b"\r\n") == raw.count(b"\n"), fname
 

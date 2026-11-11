@@ -8,16 +8,20 @@ import numpy as np
 import pytest
 from conftest import SMALL_CASE, make_source
 
-from shine_neutron_source.source import HDF5_FORMAT_VERSION, MAX_VOLTAGE, SDEF_RADIUS_DECIMALS
+from shine_neutron_source.nuclear import REACTIONS
+from shine_neutron_source.source import HDF5_FORMAT_VERSION, SDEF_RADIUS_DECIMALS
+
+# Highest voltage for SMALL_CASE (D and T): where T(d,np)T opens [kV]
+MAX_VOLTAGE = REACTIONS["DT"].complete_up_to()[0] * 1000
 
 # --- Physics checks ------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("rxn", ["DD", "DT"])
-def test_lab_cross_section_integrates_to_total(rxn):
-    """At every position, the lab-frame cross section summed over all emission angles equals
-    the total cross section 4 pi sigma_0 C_0 from the data (the CM-to-lab conversion conserves
-    reactions)."""
+def test_cross_section_integrates_to_total(rxn):
+    """At every position, the CM cross section summed over the CM angle mesh equals the total
+    cross section 4 pi sigma_0 C_0 from the data, and every neutron lands in an output bin
+    (none are lost converting to lab angles and energies)."""
     source = make_source(angle_step=0.25)
     xs = source.xs_data[rxn]
     total = (
@@ -26,8 +30,11 @@ def test_lab_cross_section_integrates_to_total(rxn):
         * np.interp(source.beam_energy_mids, xs["E"], xs["total"])
         * np.interp(source.beam_energy_mids, xs["E"], xs["coeffs"][:, 0])
     )
-    lab = np.sum(source.ddxs[rxn] * source.solid_angles[None, :], axis=1)
-    np.testing.assert_allclose(lab, total, rtol=1e-4)
+    cm = np.sum(source.cm_xs[rxn] * source.solid_angles[None, :], axis=1)
+    np.testing.assert_allclose(cm, total, rtol=1e-4)
+    per_bin = cm * source.target_density_mids[rxn] * 1e-24 * source.dx * source.particle_rate
+    expected = np.sum(per_bin * (1 - source.scrape_mids))
+    assert source.yields[rxn] == pytest.approx(expected, rel=1e-4)
 
 
 def test_yields_add_up(mixed_source):
@@ -86,7 +93,7 @@ def test_beam_stops_inside_target(T_frac, stopping_power):
     rxn = "DT" if T_frac else "DD"
     assert np.all(EB[i_stop + 1 :] == 0)
     assert np.all(source.beam_energy_mids[i_stop + 1 :] == 0)
-    assert np.all(source.ddxs[rxn][i_stop + 1 :] == 0)
+    assert np.all(source.cm_xs[rxn][i_stop + 1 :] == 0)
     neutrons_per_bin = source.neutrons[rxn].sum(axis=(1, 2))
     beyond = source.x_grid_out[:-1] >= x_stop  # Output bins entirely past the stop
     assert beyond.sum() > 50
@@ -267,12 +274,12 @@ def test_neutron_energies(mixed_source):
 # [keV], fraction of neutrons lost to scraping). These pin the physics: if a change moves them,
 # check that it was meant to and update them.
 REFERENCE = {
-    (0.0, "srim"): (3.6281329494e10, 0.0, 194.2685042747, 1.7222154196e-01),
-    (0.0, "icru49"): (3.6135522000e10, 0.0, 191.6598797215, 1.7142869383e-01),
-    (0.5, "srim"): (1.8140963002e10, 7.8054185972e11, 194.2802627760, 2.3018646280e-01),
-    (0.5, "icru49"): (1.8068061915e10, 7.8737788093e11, 191.6716694936, 2.3159260092e-01),
-    (1.0, "srim"): (0.0, 1.5610282210e12, 194.2920207672, 2.3152708286e-01),
-    (1.0, "icru49"): (0.0, 1.5746989485e12, 191.6834643207, 2.3296652905e-01),
+    (0.0, "srim"): (3.6281319841e10, 0.0, 194.2685042747, 1.7222154825e-01),
+    (0.0, "icru49"): (3.6135512429e10, 0.0, 191.6598797222, 1.7142870030e-01),
+    (0.5, "srim"): (1.8140958175e10, 7.8054183702e11, 194.2802627760, 2.3018646410e-01),
+    (0.5, "icru49"): (1.8068057129e10, 7.8737785819e11, 191.6716694943, 2.3159260225e-01),
+    (1.0, "srim"): (0.0, 1.5610281756e12, 194.2920207672, 2.3152708373e-01),
+    (1.0, "icru49"): (0.0, 1.5746989030e12, 191.6834643214, 2.3296652994e-01),
 }
 
 
@@ -292,7 +299,7 @@ def test_reference_results(T_frac, stopping_power):
 @pytest.mark.parametrize(
     "overrides, message",
     [
-        (dict(voltage=MAX_VOLTAGE + 0.1), "voltage must be between"),
+        (dict(voltage=0.0), "voltage must be positive"),
         (dict(T_frac=1.5), "T_frac must be between 0 and 1"),
         (dict(current=0.0), "current must be positive"),
         (dict(pressure=[0.0]), "pressures must be positive"),
@@ -313,8 +320,19 @@ def test_invalid_inputs_rejected(overrides, message):
 
 
 def test_voltage_limit_accepted():
-    """The highest allowed voltage (the top of the cross-section tables) is accepted."""
-    assert make_source(voltage=MAX_VOLTAGE, num_x_bins=[2], num_x_bins_out=[1])
+    """Up to where the next DT channel opens there is no warning; above, a warning (in the
+    summary and the HDF5 file too), but the case runs."""
+    assert make_source(voltage=MAX_VOLTAGE, num_x_bins=[2], num_x_bins_out=[1]).warnings == []
+    s = make_source(voltage=MAX_VOLTAGE + 1, num_x_bins=[2], num_x_bins_out=[1])
+    assert [w.split(" is open")[0] for w in s.warnings] == ["T(d,np)T"]
+    assert tomllib.loads(s.get_summary())["run"]["warnings"] == s.warnings
+
+
+def test_warnings_in_hdf5(tmp_path):
+    s = make_source(voltage=MAX_VOLTAGE + 1, num_x_bins=[2], num_x_bins_out=[1])
+    s.write_hdf5(tmp_path / "s.h5")
+    with h5py.File(tmp_path / "s.h5") as f:
+        assert list(f.attrs["warnings"]) == s.warnings
 
 
 @pytest.mark.parametrize(

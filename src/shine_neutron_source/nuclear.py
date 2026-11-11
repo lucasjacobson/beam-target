@@ -1,0 +1,371 @@
+"""Nuclides and their masses, beam particles, and the neutron-producing reactions.
+
+Atomic masses (AME2020) and element symbols come from the periodictable package; natural
+isotopic compositions from NATURAL_ABUNDANCE_FILE (IUPAC 2009 representative compositions,
+see data/README.md). Nuclear (bare-nucleus) masses, used for the beam and the reaction
+kinematics, are the atomic masses less the electrons, plus the electrons' binding energy.
+
+Atoms are named by element symbol for the natural element ("Li", "H"), or with the mass
+number first for one isotope ("7Li", "1H", "3He"); D and T are names for 2H and 3H.
+"""
+
+import csv
+import functools
+import os
+import re
+from dataclasses import dataclass
+
+import numpy as np
+import periodictable
+
+# Natural isotopic compositions (in data/): nuclide, Z, A, isomer (1 for 180mTa), abundance
+NATURAL_ABUNDANCE_FILE = os.path.join(os.path.dirname(__file__), "data", "natural_abundances.csv")
+
+# Energy equivalents [MeV], CODATA 2022
+U_MEV = 931.49410372  # Atomic mass unit
+M_ELECTRON = 0.51099895069  # Electron
+
+# Names for hydrogen isotopes; the reverse gives their canonical names
+ISOTOPE_ALIASES = {"D": (1, 2), "T": (1, 3)}
+ALIAS_NAMES = {za: name for name, za in ISOTOPE_ALIASES.items()}
+
+_ATOM = re.compile(r"^(\d*)([A-Z][a-z]?)$")
+
+
+# Total electron binding energies of H and He [eV] (ionisation energies, NIST ASD)
+_ELECTRON_BINDING_EV = {1: 13.598434599702, 2: 24.587389011 + 54.4177655282}
+
+
+def electron_binding(Z):
+    """Return the total binding energy of the Z electrons of a neutral atom [MeV]: exact for
+    H and He, otherwise from the fit of D. Lunney, J. M. Pearson and C. Thibault, Rev. Mod.
+    Phys. 75 (2003) 1021, eq. A4 (a few keV even at Z = 10, so it matters little here)."""
+    if Z in _ELECTRON_BINDING_EV:
+        return _ELECTRON_BINDING_EV[Z] * 1e-6
+    return (14.4381 * Z**2.39 + 1.55468e-6 * Z**5.35) * 1e-6
+
+
+def _isotope(Z, A):
+    element = periodictable.elements[Z]
+    try:
+        isotope = element[A]
+    except (KeyError, IndexError):
+        raise ValueError(f"no isotope {A}{element.symbol} in the mass table") from None
+    return isotope
+
+
+def atomic_mass(Z, A):
+    """Return the atomic mass of the neutral atom (Z, A) [u] (the neutron's for Z = 0)."""
+    return _isotope(Z, A).mass
+
+
+def nuclear_mass(Z, A, excitation=0.0):
+    """Return the rest-mass energy [MeV] of the bare nucleus (Z, A), plus an excitation
+    energy [MeV] for an excited state. Z = 0, A = 1 is the neutron."""
+    mass = atomic_mass(Z, A) * U_MEV
+    if Z > 0:
+        mass += -Z * M_ELECTRON + electron_binding(Z)
+    return mass + excitation
+
+
+def parse_atom(name):
+    """Return (Z, A) for an atom name: A is None for the natural element ("Li"), the mass
+    number for one isotope ("7Li", "D"). Raises ValueError for an unknown element or
+    isotope."""
+    if name in ISOTOPE_ALIASES:
+        return ISOTOPE_ALIASES[name]
+    m = _ATOM.match(name)
+    if not m:
+        raise ValueError(f"cannot read the atom {name!r}")
+    try:
+        element = periodictable.elements.symbol(m.group(2))
+    except ValueError:
+        raise ValueError(f"unknown element {m.group(2)!r}") from None
+    if not hasattr(element, "number") or element.number < 1:
+        raise ValueError(f"unknown element {m.group(2)!r}")
+    if not m.group(1):
+        return element.number, None
+    A = int(m.group(1))
+    _isotope(element.number, A)  # Raises for an unknown isotope
+    return element.number, A
+
+
+def atom_name(Z, A=None):
+    """Return the canonical name of an atom: "Li" (natural), "7Li", or D or T."""
+    symbol = periodictable.elements[Z].symbol
+    if A is None:
+        return symbol
+    return ALIAS_NAMES.get((Z, A), f"{A}{symbol}")
+
+
+@functools.cache
+def natural_abundances():
+    """Return {Z: {A: atom fraction}} from NATURAL_ABUNDANCE_FILE. An isomer (180mTa) counts as
+    its mass number: only its mass matters here."""
+    table = {}
+    with open(NATURAL_ABUNDANCE_FILE, newline="", encoding="ascii") as f:
+        for row in csv.DictReader(f):
+            element = table.setdefault(int(row["Z"]), {})
+            A = int(row["A"])
+            element[A] = element.get(A, 0.0) + float(row["abundance"])
+    return table
+
+
+def isotope_fractions(name):
+    """Return {(Z, A): fraction of the atoms} for an atom name: the natural isotopic
+    composition for an element (see natural_abundances), or 1 for one isotope. Raises
+    ValueError for an element with no natural isotopes (such as Tc)."""
+    Z, A = parse_atom(name)
+    if A is not None:
+        return {(Z, A): 1.0}
+    fractions = {(Z, A): f for A, f in natural_abundances().get(Z, {}).items() if f > 0}
+    if not fractions:
+        raise ValueError(f"{name} has no natural isotopes; name one, such as {name}99")
+    total = sum(fractions.values())
+    return {za: f / total for za, f in fractions.items()}
+
+
+def mean_atomic_mass(fractions):
+    """Return the mean atomic mass [u] of atoms with the given {(Z, A): fraction}."""
+    return sum(f * atomic_mass(Z, A) for (Z, A), f in fractions.items())
+
+
+@dataclass(frozen=True)
+class Beam:
+    """A beam particle: its name, description, nucleus (Z, A) and charge state."""
+
+    name: str
+    description: str
+    Z: int
+    A: int
+    charge: int = 1
+
+    @property
+    def mass(self):
+        """Rest-mass energy of the bare nucleus [MeV]."""
+        return nuclear_mass(self.Z, self.A)
+
+
+BEAMS = {
+    "p": Beam("p", "proton", 1, 1),
+    "d": Beam("d", "deuteron", 1, 2),
+    "t": Beam("t", "triton", 1, 3),
+}
+
+# Particles in final states: (Z, A, excitation energy [MeV])
+_N, _P, _D, _T = (0, 1, 0.0), (1, 1, 0.0), (1, 2, 0.0), (1, 3, 0.0)
+_HE3, _HE4, _LI6 = (2, 3, 0.0), (2, 4, 0.0), (3, 6, 0.0)
+_BE7_STAR2 = (4, 7, 4.57)  # Second excited state of 7Be
+
+# 7Be first excited state [MeV]
+BE7_FIRST_EXCITED = 0.42908
+
+
+@dataclass(frozen=True)
+class Reaction:
+    """A two-body neutron-producing reaction, beam + target -> neutron + residual.
+
+    Attributes:
+        key: Short name, used in output names (such as "DD").
+        label: Reaction in the usual notation (such as "D(d,n)3He").
+        beam: Beam particle name (see BEAMS).
+        target: Target nucleus (Z, A).
+        residual: Residual nucleus (Z, A), with excitation [MeV] for an excited state.
+        data_file: DROSG-2000 cross-section file (in data/).
+        inverse: True if the data are for the target as the beam (and the beam as the
+            target): for example D(t,n)4He from the T(d,n)4He data.
+        competing: Final states of the other neutron-producing channels of the same beam and
+            target, as tuples of (Z, A, excitation) particles. The reaction data (with any
+            others sharing them, such as the two 7Li(p,n) lines) give all the neutrons only
+            below the lowest of their thresholds (see complete_up_to).
+    """
+
+    key: str
+    label: str
+    beam: str
+    target: tuple
+    residual: tuple
+    data_file: str
+    excitation: float = 0.0
+    inverse: bool = False
+    competing: tuple = ()
+
+    def masses(self):
+        """Return (m1, m2, m3, m4) [MeV]: beam, target, neutron and residual."""
+        return (
+            BEAMS[self.beam].mass,
+            nuclear_mass(*self.target),
+            nuclear_mass(0, 1),
+            nuclear_mass(*self.residual, self.excitation),
+        )
+
+    @property
+    def q_value(self):
+        """Q value [MeV] (positive: exothermic)."""
+        m1, m2, m3, m4 = self.masses()
+        return (m1 + m2) - (m3 + m4)
+
+    def _threshold(self, final_masses):
+        m1, m2 = self.masses()[:2]
+        return max(0.0, ((sum(final_masses)) ** 2 - (m1 + m2) ** 2) / (2 * m2))
+
+    @property
+    def threshold(self):
+        """Lab beam kinetic energy at which the reaction opens [MeV] (0 if exothermic)."""
+        return self._threshold(self.masses()[2:])
+
+    def competing_channels(self):
+        """Return [(threshold [MeV], label)] for the competing channels (lab beam energy at
+        which each opens), lowest first."""
+        return sorted(
+            (self._threshold([nuclear_mass(Z, A, e) for Z, A, e in state]),
+             _channel_label(self, state))
+            for state in self.competing
+        )  # fmt: skip
+
+    def complete_up_to(self):
+        """Return (energy [MeV], channel): the lab beam energy below which this reaction (with
+        any others sharing its competing channels) gives all the neutrons from this beam and
+        target, and the label of the channel that opens there. (inf, "") if none."""
+        channels = self.competing_channels()
+        return channels[0] if channels else (np.inf, "")
+
+    def data_energy(self, beam_energy):
+        """Convert lab beam energies to the energies the cross-section data are tabulated at
+        (the same centre-of-mass energy): unchanged, or for an inverse reaction scaled by
+        target mass / beam mass, which is exact relativistically too."""
+        if not self.inverse:
+            return beam_energy
+        m1, m2 = self.masses()[:2]
+        return beam_energy * m2 / m1
+
+
+def _channel_label(reaction, state):
+    """Return a channel such as "T(d,np)T" for a final state of a reaction's beam and target."""
+    target = "H" if reaction.target == (1, 1) else atom_name(*reaction.target)
+    names = []
+    for Z, A, excitation in state:
+        if (Z, A) == (0, 1):
+            names.append("n")
+        elif (Z, A) == (1, 1):
+            names.append("p")
+        else:
+            name = atom_name(Z, A)
+            names.append(name + (f"* ({excitation:g} MeV)" if excitation else ""))
+    light = [n for n in names if n in ("n", "p")]
+    heavy = [n for n in names if n not in ("n", "p")]
+    if not heavy:
+        heavy, light = [light[-1]], light[:-1]
+    return f"{target}({reaction.beam},{''.join(light) + ''.join(heavy[:-1])}){heavy[-1]}"
+
+
+REACTIONS = {
+    r.key: r
+    for r in [
+        Reaction("DD", "D(d,n)3He", "d", (1, 2), (2, 3), "d2hags.koe",
+                 competing=((_N, _P, _D),)),
+        Reaction("DT", "T(d,n)4He", "d", (1, 3), (2, 4), "d3hags.koe",
+                 competing=((_N, _P, _T), (_N, _N, _HE3))),
+        Reaction("pT", "T(p,n)3He", "p", (1, 3), (2, 3), "p3hags.koe",
+                 competing=((_N, _P, _D),)),
+        Reaction("p7Li_n0", "7Li(p,n0)7Be", "p", (3, 7), (4, 7), "p7ligs.koe",
+                 competing=((_N, _HE3, _HE4), (_N, _P, _LI6), (_N, _BE7_STAR2))),
+        Reaction("p7Li_n1", "7Li(p,n1)7Be*", "p", (3, 7), (4, 7), "p7lies.koe",
+                 excitation=BE7_FIRST_EXCITED,
+                 competing=((_N, _HE3, _HE4), (_N, _P, _LI6), (_N, _BE7_STAR2))),
+        Reaction("tD", "D(t,n)4He", "t", (1, 2), (2, 4), "d3hags.koe", inverse=True,
+                 competing=((_N, _P, _T), (_N, _N, _HE3))),
+        Reaction("tH", "H(t,n)3He", "t", (1, 1), (2, 3), "p3hags.koe", inverse=True,
+                 competing=((_N, _P, _D),)),
+    ]
+}  # fmt: skip
+
+
+def cm_to_lab(T1, cos_cm, m1, m2, m3, m4):
+    """Relativistic kinematics of 1 + 2 -> 3 + 4 with particle 2 at rest, from the centre of
+    mass (CM) to the lab.
+
+    Args:
+        T1: Lab kinetic energy of the beam particle 1 [MeV] (scalar).
+        cos_cm: Cosine of the CM emission angle of particle 3, from the beam direction
+            (scalar or array).
+        m1, m2, m3, m4: Rest-mass energies [MeV].
+
+    Returns (T3, cos_lab), shaped like cos_cm: the lab kinetic energy of particle 3 [MeV] and
+    the cosine of its lab angle. Every CM angle has exactly one lab angle, so this also covers
+    endothermic reactions near threshold, where a lab angle can have two neutron energies.
+    Below the threshold both are NaN.
+    """
+    cos_cm = np.asarray(cos_cm, dtype=float)
+    E1 = T1 + m1
+    p1 = np.sqrt(E1**2 - m1**2)
+    E_tot = E1 + m2
+    s = m1**2 + m2**2 + 2 * E1 * m2
+    sqrt_s = np.sqrt(s)
+    if sqrt_s <= m3 + m4:
+        nan = np.full(cos_cm.shape, np.nan)
+        return nan, nan.copy()
+    beta, gamma = p1 / E_tot, E_tot / sqrt_s
+    E3_cm = (s + m3**2 - m4**2) / (2 * sqrt_s)
+    p3_cm = np.sqrt(E3_cm**2 - m3**2)
+    sin_cm = np.sqrt(np.clip(1 - cos_cm**2, 0, None))
+    p_par = gamma * (p3_cm * cos_cm + beta * E3_cm)
+    p_perp = p3_cm * sin_cm
+    E3 = gamma * (E3_cm + beta * p3_cm * cos_cm)
+    cos_lab = p_par / np.hypot(p_par, p_perp)
+    return E3 - m3, cos_lab
+
+
+# Radius parameter of the Coulomb barrier [fm], and e^2 / (4 pi eps0) [MeV fm]
+R0_COULOMB = 1.3
+E2_COULOMB = 1.439964548
+
+
+def coulomb_barrier(Z1, A1, Z2, A2):
+    """Return the Coulomb barrier [MeV] of two nuclei touching at radius
+    R0_COULOMB * (A1^(1/3) + A2^(1/3)), in the centre of mass (an estimate)."""
+    return E2_COULOMB * Z1 * Z2 / (R0_COULOMB * (A1 ** (1 / 3) + A2 ** (1 / 3)))
+
+
+def cm_energy(beam, target, beam_energy):
+    """Return the kinetic energy in the centre of mass [MeV] of a beam particle (a BEAMS key)
+    of lab energy beam_energy [MeV] on a target nucleus (Z, A) at rest."""
+    m1, m2 = BEAMS[beam].mass, nuclear_mass(*target)
+    return np.sqrt(m1**2 + m2**2 + 2 * (beam_energy + m1) * m2) - m1 - m2
+
+
+def neutron_channels(beam, target):
+    """Return [(threshold [MeV], label)] for the generic neutron-producing channels of a beam
+    on a target nucleus (Z, A): (b,n), (b,2n) and (b,np), lowest threshold first. Channels
+    whose residual nucleus is not in the mass table are left out."""
+    b = BEAMS[beam]
+    Z, A = target
+    finals = [
+        (_N, (Z + b.Z, A + b.A - 1, 0.0)),
+        (_N, _N, (Z + b.Z, A + b.A - 2, 0.0)),
+        (_N, _P, (Z + b.Z - 1, A + b.A - 2, 0.0)),
+    ]
+    m1, m2 = b.mass, nuclear_mass(*target)
+    channels = []
+    for state in finals:
+        residual = state[-1]
+        if residual[0] < 0 or residual[1] < 1 or residual[1] < residual[0]:
+            continue
+        try:
+            masses = [nuclear_mass(*particle) for particle in state]
+        except (ValueError, KeyError, IndexError):
+            continue
+        threshold = max(0.0, (sum(masses) ** 2 - (m1 + m2) ** 2) / (2 * m2))
+        channels.append((threshold, _generic_label(beam, target, state)))
+    return sorted(channels)
+
+
+def _generic_label(beam, target, state):
+    """Return a channel label such as "12C(d,n)13N", "48Ti(d,2n)48V" or "D(p,np)H"."""
+    light = ["n" if (Z, A) == (0, 1) else "p" for Z, A, _ in state[:-1]]
+    light = "2n" if light == ["n", "n"] else "".join(light)
+
+    def name(za):
+        return "H" if za == (1, 1) else atom_name(*za)
+
+    return f"{name(target)}({beam},{light}){name(state[-1][:2])}"

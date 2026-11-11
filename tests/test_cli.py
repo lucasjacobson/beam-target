@@ -76,6 +76,8 @@ EXAMPLE_CASES = [
     "DT50_by_density",
     "TiD_thick",
     "TiD_find_thickness",
+    "p_Li_thin",
+    "t_D2",
     "DT50_icru49",
     "DT50_beam_stops",
     "DT50_find_length",
@@ -93,6 +95,7 @@ def test_example_input():
     dd = cases["DD"]
     assert dd["direction"] == "-z"
     assert dd["source"]["stopping_power"] == "srim"
+    assert dd["source"]["beam"] == "d"
     assert dd["source"]["angle_step"] == 0.01
     (chamber,) = dd["source"]["regions"]
     assert chamber.name == "chamber" and chamber.material.name == "D2"
@@ -123,6 +126,8 @@ def test_example_cases_show_their_features(example_sources):
     assert s["TiD_thick"].beam_energy_grid[-1] == 0 and s["TiD_thick"].reactions_present() == ["DD"]
     assert s["TiD_find_thickness"].calculated == "length"
     assert s["TiD_find_thickness"].beam_energy_grid[-1] == pytest.approx(100.0, rel=1e-6)
+    assert s["p_Li_thin"].reactions_present() == ["p7Li_n0", "p7Li_n1"]
+    assert s["t_D2"].reactions_present() == ["tD"]
     assert s["DT50_icru49"].stopping_power == "icru49"
     assert s["DT50_beam_stops"].beam_energy_grid[-1] == 0
     assert s["DT50_beam_stops"].backstop_power == 0
@@ -284,6 +289,21 @@ def test_current_or_yield(tmp_path):
     assert cases["by_yield"]["yield_total"] == 1e10
 
 
+def test_beam_setting(tmp_path):
+    """beam picks the beam particle, a deuteron by default; a proton beam on lithium."""
+    lithium = (
+        '\n[materials.Li]\nphase = "solid"\ndensity = 0.534\natoms = { 7Li = 1 }\n'
+        '\n[cases.d]\n\n[cases.p]\nbeam = "p"\nvoltage = 2500.0\n'
+        'regions = [{ material = "Li", length = 1e-3, wall_radius = 1.0, num_x_bins = 4, '
+        "num_x_bins_out = 2 }]\n"
+    )
+    cases = load_input(write_input(tmp_path, BASE + lithium))
+    assert cases["d"]["source"]["beam"] == "d"
+    assert cases["p"]["source"]["beam"] == "p"
+    source = ShineSource(name="p", **cases["p"]["source"])
+    assert source.reactions_present() == ["p7Li_n0", "p7Li_n1"]
+
+
 @pytest.mark.parametrize(
     "extra, message",
     [
@@ -295,6 +315,7 @@ def test_current_or_yield(tmp_path):
         ('[cases.a]\nvoltage = "high"\n', "voltage must be float"),
         ('[cases.a]\ndirection = "z"\n', "direction must be one of"),
         ('[cases.a]\nstopping_power = "pstar"\n', "stopping_power must be one of"),
+        ('[cases.a]\nbeam = "alpha"\n', "beam must be one of p, d, t"),
         ("[cases.a]\nentry_position = [1.0, 2.0]\n", "entry_position must be"),
         ('[cases.a]\nentry_position = [1, 2, "z"]\n', "entry_position must be"),
         ('[cases."a/b"]\n', "case names may only use"),
@@ -312,6 +333,7 @@ def test_current_or_yield(tmp_path):
         "wrong type",
         "direction",
         "stopping power",
+        "beam",
         "entry position length",
         "entry position type",
         "case name",
@@ -405,7 +427,10 @@ def test_main_verbose_messages(tmp_path, caplog):
     """With -v: also each case's settings and detailed results."""
     main([str(write_input(tmp_path, TWO_CASES)), "-o", str(tmp_path / "out"), "-j", "1", "-v"])
     text = "\n".join(r.getMessage() for r in caplog.records)
-    assert "mix: starting: 280 kV, 10 mA, 1 region(s), last DT50, stopping power srim" in text
+    assert (
+        "mix: starting: deuteron beam, 280 kV, 10 mA, 1 region(s), last DT50, stopping power srim"
+        in text
+    )
     for detail in ["beam energy at the end of the target", "DT neutron yield", "total neutron"]:
         assert f"mix: {detail}" in text
     assert "% lost to beam scraping" in text
@@ -431,7 +456,7 @@ def test_simple_example():
     s = cases["DT90"]["source"]
     (chamber,) = s["regions"]
     assert chamber.material.atom_fractions["T"] == pytest.approx(0.9)
-    assert chamber.pressure == 38.0 and s["current"] == 50.0
+    assert chamber.pressure == 38.0 and s["current"] == 50.0 and s["beam"] == "d"
     chamber.num_x_bins = chamber.num_x_bins_out  # A coarse mesh, for speed
     source = ShineSource(name="DT90", **{**s, "angle_step": 1.0})
     assert source.calculated == "beam_energy_backstop"

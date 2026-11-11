@@ -12,7 +12,8 @@ import os
 import numpy as np
 from matplotlib import pyplot as plt
 
-from shine_neutron_source.source import DEFAULT_DATA_DIR, DROSG_FILES, read_drosg_koe
+from shine_neutron_source.nuclear import REACTIONS
+from shine_neutron_source.source import DEFAULT_DATA_DIR, read_drosg_koe
 
 plt.rcParams["font.family"] = "serif"
 plt.rcParams["mathtext.default"] = "regular"
@@ -21,7 +22,7 @@ labels = {"DD": r"D(d,n)$^3$He", "DT": r"T(d,n)$^4$He"}
 
 fig, ax = plt.subplots(figsize=(8, 6))
 for rxn in ["DD", "DT"]:
-    E, sigma0, coeffs = read_drosg_koe(os.path.join(DEFAULT_DATA_DIR, DROSG_FILES[rxn]))
+    E, sigma0, coeffs = read_drosg_koe(os.path.join(DEFAULT_DATA_DIR, REACTIONS[rxn].data_file))
     sigma_tot = 4 * np.pi * sigma0 * coeffs[:, 0] / 1000  # mb -> b
     ax.semilogy(E * 1000, sigma_tot, label=labels[rxn])
 

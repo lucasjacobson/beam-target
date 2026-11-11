@@ -2,17 +2,21 @@
 
 The files in this directory are read by `ShineSource` (see `read_drosg_koe`,
 `read_srim_h5`, `read_pstar`, `read_cross_sections` and `read_stopping_power` in
-`source.py`). The DROSG files are kept exactly as distributed, including their Windows
+`source.py`, and `natural_abundances` in `nuclear.py`). The DROSG files are kept exactly as distributed, including their Windows
 (CRLF) line endings (see `.gitattributes`).
 
 | File | Contents | Source |
 |---|---|---|
 | `d2hags.koe` | D(d,n)³He cross sections | DROSG-2000 v12.01 |
-| `d3hags.koe` | T(d,n)⁴He cross sections | DROSG-2000 v12.01 |
+| `d3hags.koe` | T(d,n)⁴He cross sections (also used for D(t,n)⁴He) | DROSG-2000 v12.01 |
+| `p3hags.koe` | T(p,n)³He cross sections (also used for H(t,n)³He) | DROSG-2000 v12.01 |
+| `p7ligs.koe` | ⁷Li(p,n₀)⁷Be cross sections (⁷Be ground state) | DROSG-2000 v12.01 |
+| `p7lies.koe` | ⁷Li(p,n₁)⁷Be* cross sections (⁷Be first excited state, 0.429 MeV) | DROSG-2000 v12.01 |
 | `srim_stopping.h5` | Stopping powers of p, d, t, ³He and α in every element, solid and gas | SRIM-2012.01 |
 | `pstar_hydrogen.txt` | Stopping power of protons in hydrogen gas | ICRU Report 49 (NIST PSTAR) |
+| `natural_abundances.csv` | Natural isotopic compositions of the elements | IUPAC 2009 |
 
-## Cross sections: `d2hags.koe`, `d3hags.koe`
+## Cross sections: the `.koe` files
 
 Unmodified data files from DROSG-2000 version 12.01 (March 2017), taken from
 `DROSG2000-v12.01.zip` (`pentiumpro/2017/`). DROSG-2000 is a collection of codes and evaluated
@@ -30,17 +34,17 @@ in `LEGINT.f95`):
 - Every line is ten 8-character fields. Spaces inside a field are ignored, blank fields are
   zero, and an exponent may be written without `e` (`8.619-4` means 8.619 × 10⁻⁴). Adjacent
   fields can therefore run together, as in `0.05115-0.04275`.
-- The first line holds EMIN, EMAX, EMINL and EMAXL [MeV]. EMAXL (40 MeV in both files) is the
-  highest energy of the Legendre table.
+- The first line holds EMIN, EMAX, EMINL and EMAXL [MeV]. EMAXL is the highest energy of the
+  Legendre table.
 - Each record is then two lines (20 fields):
 
   | Field | Meaning | Units |
   |---|---|---|
-  | 1 | Incident deuteron energy (lab frame) | MeV |
+  | 1 | Incident projectile energy (lab frame) | MeV |
   | 2 | Centre-of-mass differential cross section at 0° | mb/sr |
   | 3–20 | Legendre coefficients C₀ … C₁₇ of the angular distribution, normalised to sum to 1 | — |
 
-The centre-of-mass differential cross section at deuteron energy E and cosine μ of the
+The centre-of-mass differential cross section at projectile energy E and cosine μ of the
 centre-of-mass emission angle is
 
     dσ/dΩ(E, μ) = σ₀(E) × Σ C_l(E) P_l(μ),   l = 0, 1, …, 17
@@ -52,12 +56,33 @@ misaligned file is rejected rather than silently misread.
 This code interpolates linearly between tabulated energies; the DROSG-2000 codes themselves use
 spline interpolation, so values between table points can differ slightly.
 
-**Valid range.** The Legendre data cover 1.8 keV to 40 MeV for DD and 10 keV to 40 MeV for DT.
-Below the first energy the code takes the cross section to be zero. The records above EMAXL
-(40.0001 MeV upwards) are single-angle data rather than Legendre coefficients (the DROSG
-documentation states there is no angular-distribution information outside the Legendre
-table), so the code stops reading at EMAXL and limits the beam voltage to 40,000 kV
-(`MAX_VOLTAGE`).
+**Inverse reactions.** A triton beam uses the data of the reaction with the roles swapped:
+D(t,n)⁴He from `d3hags.koe` and H(t,n)³He from `p3hags.koe`. The centre-of-mass cross section
+is the same at the same centre-of-mass energy, which a triton of energy E_t has when the
+tabulated projectile has E_t × m_target / m_triton. The centre-of-mass angle is measured from
+the other particle, so μ changes sign.
+
+**Valid range.** The Legendre tables cover:
+
+| File | Legendre data [MeV] | Reaction(s) | Complete up to [MeV] | Where |
+|---|---|---|---|---|
+| `d2hags.koe` | 0.0018–40 | D(d,n)³He | 4.4505 | D(d,np)D opens |
+| `d3hags.koe` | 0.01–40 | T(d,n)⁴He; D(t,n)⁴He | 3.7109; 5.5574 | T(d,np)T / D(t,np)T open |
+| `p3hags.koe` | 1.019–32.8 | T(p,n)³He; H(t,n)³He | 8.3543; 25.0105 | T(p,np)D / H(t,np)D open |
+| `p7ligs.koe` | 1.8807–23 | ⁷Li(p,n₀)⁷Be | 3.6961 | ⁷Li(p,n³He)⁴He opens |
+| `p7lies.koe` | 2.372–23 | ⁷Li(p,n₁)⁷Be* | 3.6961 | ⁷Li(p,n³He)⁴He opens |
+
+"Complete up to" is the lab beam energy at which another neutron-producing channel of the same
+beam and target opens (relativistic threshold from the masses in `nuclear.py`); above it the
+two-body reaction no longer gives all the neutrons. The case still runs, with a warning naming
+the channel whose neutrons are missing (see `check_channels` in `source.py`, which also warns
+about open (b,n), (b,2n) and (b,np) channels of any other isotope in the target, once the beam
+reaches a tenth of the Coulomb barrier). (For ⁷Li, the 4.57 MeV ⁷Be state opens a little
+higher, at about 7.11 MeV.) Below the first tabulated energy the code takes the cross section to
+be zero, and below an endothermic reaction's threshold there are no neutrons. The records above
+EMAXL are single-angle data rather than Legendre coefficients (the DROSG documentation states
+there is no angular-distribution information outside the Legendre table), so the code stops
+reading at EMAXL and refuses beam energies above it.
 
 ### Total cross sections
 
@@ -176,13 +201,29 @@ The figure shows the total stopping per tritium atom as the code uses it for eac
 their ratio; the kinks in the ratio come from the spacing of the two tables. It is made by
 [`docs/figures/plot_stopping_power.py`](../../../docs/figures/plot_stopping_power.py).
 
+## Natural isotopic compositions: `natural_abundances.csv`
+
+The atom fraction of each isotope in each natural element, used when a material names an
+element ("Li") rather than an isotope ("7Li"). The values are the representative isotopic
+compositions of the IUPAC 2009 report (Berglund and Wieser, 2011), for the 84 elements that
+have one (H to Bi, Th, Pa and U). Columns: `nuclide` (mass number first, `m` for an isomer),
+`Z`, `A`, `isomer` (1 for ¹⁸⁰ᵐTa, the only natural isomer; the code counts it as A = 180, since
+only its mass matters here) and `abundance` (atom fraction; each element sums to 1).
+
+Natural compositions vary between samples, and some are often altered on purpose: commercial
+lithium is frequently depleted in ⁶Li (the representative value here is 7.59 %). If the
+composition of a target is known, give its isotopes explicitly, for example
+`atoms = { 6Li = 0.05, 7Li = 0.95 }`.
+
+Atomic masses, in contrast, come from the AME2020 evaluation via the `periodictable` package.
+
 ## Licensing
 
 The MIT License in the repository's `LICENSE` file covers this project's code and
-documentation, not the data files in this directory. `d2hags.koe` and `d3hags.koe` (DROSG-2000),
+documentation, not the data files in this directory. The `.koe` files (DROSG-2000),
 `srim_stopping.h5` (SRIM output) and
-`pstar_hydrogen.txt` (NIST PSTAR / ICRU Report 49) are redistributed unmodified, or with values
-copied exactly, from the sources above, which are freely available, and remain subject to their
+`pstar_hydrogen.txt` (NIST PSTAR / ICRU Report 49) and `natural_abundances.csv` (IUPAC) are
+redistributed unmodified, or with values copied exactly, from the sources above, which are freely available, and remain subject to their
 sources' terms. Please cite those sources when using the data.
 
 ## References
@@ -194,6 +235,10 @@ sources' terms. Please cite those sources when using the data.
   <https://www-nds.iaea.org/public/libraries/drosg2000/iaeands-v12.01.pdf>.)
 - J. F. Ziegler, M. D. Ziegler and J. P. Biersack, "SRIM – The stopping and range of ions in
   matter (2010)", Nucl. Instrum. Methods Phys. Res. B 268 (2010) 1818–1823.
+- M. Berglund and M. E. Wieser, "Isotopic compositions of the elements 2009 (IUPAC Technical
+  Report)", Pure Appl. Chem. 83 (2011) 397–410.
+- M. Wang, W. J. Huang, F. G. Kondev, G. Audi and S. Naimi, "The AME 2020 atomic mass
+  evaluation (II)", Chin. Phys. C 45 (2021) 030003.
 - ICRU Report 49, *Stopping Powers and Ranges for Protons and Alpha Particles*, International
   Commission on Radiation Units and Measurements (1993).
 - M. J. Berger, J. S. Coursey, M. A. Zucker and J. Chang, *ESTAR, PSTAR, and ASTAR: Computer

@@ -1,18 +1,19 @@
-"""Beam-target fusion neutron source term for Monte Carlo transport codes.
+"""Beam-target neutron source term for Monte Carlo transport codes.
 
-A deuteron beam passes through one or more gas regions containing a deuterium/tritium
-mixture. For each region the user gives a pressure, temperature, length and beam
+A beam of protons, deuterons or tritons passes through one or more regions, each filled
+with a gas or solid material, and makes neutrons in two-body reactions with the target
+isotopes, such as D(d,n)3He, T(d,n)4He and 7Li(p,n)7Be (see nuclear.REACTIONS). For each
+region the user gives the material and its state, a length, a wall radius and the beam
 divergence. The calculation:
 
 1. Slows the beam down along its path using SRIM or ICRU 49 stopping powers.
 2. Grows the beam radius with its divergence and removes the fraction of the beam that
    strikes the target wall (beam scraping).
-3. Evaluates the D(d,n)3He and T(d,n)4He double-differential cross sections at each
-   position from tabulated Legendre data, transformed from the centre-of-mass frame to
-   the lab frame, and the neutron energy at each emission angle, using relativistic
-   two-body kinematics.
-4. Tallies neutrons on a fine internal (position, angle) mesh and condenses them onto a
-   coarser output (position, angle, energy) mesh.
+3. Evaluates the centre-of-mass differential cross sections at each position from
+   tabulated Legendre data, and the lab energy and angle of the neutron from each
+   centre-of-mass angle, using relativistic two-body kinematics.
+4. Tallies neutrons on a fine internal (position, centre-of-mass angle) mesh onto a coarser
+   output (position, lab angle, energy) mesh.
 
 The result can be written as an HDF5 file, as an MCNP SDEF source card, as text files and
 as plots. The caller chooses every output path.
@@ -28,8 +29,8 @@ Naming conventions used throughout:
   calculation runs on. Each output bin is a whole number of internal bins (a "ratio").
 - ``*_per_region`` arrays have one entry per gas region. The region inputs (pressure,
   temperature, length, divergence, num_x_bins, num_x_bins_out) are also per region.
-- Beam (deuteron) energies are in keV; neutron energies are in MeV.
-- ``rxn`` is a reaction, "DD" for D(d,n)3He or "DT" for T(d,n)4He.
+- Beam energies are in keV; neutron energies are in MeV.
+- ``rxn`` is a reaction key (see nuclear.REACTIONS), such as "DD" for D(d,n)3He.
 """
 
 import datetime
@@ -51,13 +52,24 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt  # Must follow matplotlib.use
 from matplotlib.colors import LogNorm
 
+from .nuclear import (
+    BEAMS,
+    REACTIONS,
+    atom_name,
+    cm_energy,
+    cm_to_lab,
+    coulomb_barrier,
+    isotope_fractions,
+    mean_atomic_mass,
+    neutron_channels,
+    nuclear_mass,
+    parse_atom,
+)
+
 PACKAGE_NAME = "shine-neutron-source"
 logger = logging.getLogger(__name__)
 CODE_DIR = os.path.dirname(os.path.realpath(__file__))
 DEFAULT_DATA_DIR = os.path.join(CODE_DIR, "data")
-# DROSG-2000 cross-section file for each reaction (in data/)
-DROSG_FILES = {"DD": "d2hags.koe", "DT": "d3hags.koe"}
-
 # Stopping-power data files (in data/) and the available stopping-power sets
 SRIM_STOPPING_FILE = "srim_stopping.h5"
 PSTAR_FILE = "pstar_hydrogen.txt"
@@ -65,28 +77,26 @@ STOPPING_POWERS = {
     "srim": "SRIM-2012.01, per atom, mixed over each region's composition",
     "icru49": "ICRU 49 electronic + SRIM nuclear stopping; hydrogen-isotope gases only",
 }
-BEAM_PARTICLE = "d"  # Beam particle group in SRIM_STOPPING_FILE
 PHASES = ("gas", "solid")
-HYDROGEN_ISOTOPES = ("H", "D", "T")
-# Elements whose gases are diatomic molecules: a gas Material rejects them as lone atoms
-DIATOMIC_ELEMENTS = ("H", "D", "T", "N", "O", "F", "Cl", "Br", "I")
+# Elements (by Z) whose gases are diatomic molecules: a gas Material rejects lone atoms of
+# them: H, N, O, F, Cl, Br, I
+DIATOMIC_ELEMENTS = (1, 7, 8, 9, 17, 35, 53)
+# SRIM_STOPPING_FILE target names for single isotopes with their own tables; any other
+# isotope uses its element's table (electronic stopping hardly depends on the isotope)
+SRIM_ISOTOPE_TABLES = {(1, 2): "D", (1, 3): "T", (2, 3): "He3"}
 
 # Decimal places for the beam radii in the SDEF card [cm]
 SDEF_RADIUS_DECIMALS = 5
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
-HDF5_FORMAT_VERSION = 4
+HDF5_FORMAT_VERSION = 5
 
 # Error message when a case produces no neutrons
 NO_NEUTRONS = (
-    "no neutrons are produced. Check that the beam voltage is high enough (the cross-section "
-    "data start at 1.8 keV for DD and 10 keV for DT) and that the beam is not scraped away "
-    "entirely."
+    "no neutrons are produced. Check that the target holds an isotope the beam makes neutrons "
+    "with (see nuclear.REACTIONS), that the beam energy is above the reaction's threshold or the "
+    "start of its cross-section data, and that the beam is not scraped away entirely."
 )
-
-# Highest allowed beam voltage [kV]. The DROSG Legendre tables in data/ end at 40 MeV; the
-# rows above that are not angular distributions (see data/README.md).
-MAX_VOLTAGE = 40000.0
 
 # Repository root when running from a source checkout (src/shine_neutron_source/ -> root)
 REPO_DIR = os.path.normcase(os.path.dirname(os.path.dirname(CODE_DIR)))
@@ -99,28 +109,13 @@ kB = 1.380649e-23  # Boltzmann constant [J/K]
 # Atomic weight of hydrogen that ICRU Report 49 used for its per-mass stopping [g/mol]
 A_H_ICRU49 = 1.00794
 
-# Nuclear (bare-nucleus) rest-mass energies [MeV], CODATA 2022. Used for the beam ion and the
-# reaction kinematics, which involve bare nuclei; electron binding energies are negligible.
-M_H1 = 938.27208943  # Proton (H-1)
-M_N1 = 939.56542194  # Neutron (n-1)
-M_H2 = 1875.61294500  # Deuteron (H-2)
-M_HE3 = 2808.39161112  # Helion (He-3)
-M_H3 = 2808.92113668  # Triton (H-3)
-M_HE4 = 3727.3794118  # Alpha (He-4)
+# A neutron channel that is open but not modelled is warned about once the beam's
+# centre-of-mass energy reaches this fraction of the Coulomb barrier (see check_channels)
+COULOMB_FRACTION = 0.1
 
-# Reaction Q values [MeV]
-Q_DD = (M_H2 + M_H2) - (M_N1 + M_HE3)  #  3.26885694 MeV
-Q_DT = (M_H2 + M_H3) - (M_N1 + M_HE4)  # 17.58924794 MeV
-
-# Two-body kinematics for each reaction, 1 + 2 -> 3 + 4:
-# (beam M1, target M2, neutron M3, residual M4, Q value)
-REACTIONS = {
-    "DD": (M_H2, M_H2, M_N1, M_HE3, Q_DD),  # D(d,n)3He
-    "DT": (M_H2, M_H3, M_N1, M_HE4, Q_DT),  # T(d,n)4He
-}
-
-# Target isotope of each reaction: the beam deuteron reacts with this atom
-REACTION_TARGETS = {"DD": "D", "DT": "T"}
+# Nuclear (bare-nucleus) rest-mass energies [MeV], from nuclear.nuclear_mass (AME2020)
+M_H1 = nuclear_mass(1, 1)  # Proton
+M_N1 = nuclear_mass(0, 1)  # Neutron
 
 # MCNP source direction -> (AXS vector, VEC vector, reverse the position distributions).
 # For "-z" the extent runs along +z and the position-dependent distributions are written
@@ -136,45 +131,6 @@ SDEF_DIRECTIONS = {
     "-z": ("0 0 1", "0 0 -1", True),
     "+z": ("0 0 1", "0 0 1", False),
 }
-
-
-def two_body_kinematics(T1, cos_lab, m1, m2, m3, m4):
-    """Relativistic kinematics of the reaction 1 + 2 -> 3 + 4 with particle 2 at rest.
-
-    Args:
-        T1: Kinetic energy of the beam particle 1 in the lab [MeV].
-        cos_lab: Cosine of the lab emission angle of particle 3 (scalar or array).
-        m1, m2, m3, m4: Rest-mass energies [MeV].
-
-    Returns (T3, cos_cm, jacobian), each shaped like cos_lab:
-
-    - T3: kinetic energy of particle 3 in the lab [MeV].
-    - cos_cm: cosine of its emission angle in the centre-of-mass (CM) frame.
-    - jacobian: dOmega_cm / dOmega_lab = d(cos_cm) / d(cos_lab), which converts a CM
-      differential cross section to the lab frame.
-
-    The CM frame moves with velocity beta (units of c) and Lorentz factor gamma, and particle 3
-    has a fixed CM energy E3_cm. Its lab momentum p3 at each lab angle follows from
-    E3_cm = gamma (E3 - beta p3 cos_lab). This assumes particle 3 moves faster in the CM frame
-    than the CM frame moves in the lab, so each lab angle has one CM angle, which holds for
-    neutrons from these exothermic reactions.
-    """
-    E1 = T1 + m1
-    p1 = np.sqrt(E1**2 - m1**2)
-    E_tot = E1 + m2
-    sqrt_s = np.sqrt(m1**2 + m2**2 + 2 * E1 * m2)  # Total energy in the CM frame
-    beta, gamma = p1 / E_tot, E_tot / sqrt_s
-    E3_cm = (sqrt_s**2 + m3**2 - m4**2) / (2 * sqrt_s)
-    p3_cm = np.sqrt(E3_cm**2 - m3**2)
-
-    a = E3_cm / gamma
-    bc = beta * cos_lab
-    p3 = (a * bc + np.sqrt(a**2 - m3**2 * (1 - bc**2))) / (1 - bc**2)
-    E3 = np.sqrt(p3**2 + m3**2)
-    cos_cm = gamma * (p3 * cos_lab - beta * E3) / p3_cm
-    dp3_dcos = beta * p3 / (p3 / E3 - bc)
-    jacobian = gamma / p3_cm * (p3 + dp3_dcos * (cos_lab - beta * p3 / E3))
-    return E3 - m3, cos_cm, jacobian
 
 
 def get_molecule_density(pressure, temperature):
@@ -195,15 +151,16 @@ def get_atom_density(pressure, temperature):
     return get_molecule_density(pressure, temperature) * 2
 
 
-_FORMULA_TOKEN = re.compile(r"(\d+[A-Z][a-z]?|[A-Z][a-z]?)(\d+(?:\.\d*)?|\.\d+)?")
+_FORMULA_TOKEN = re.compile(r"(\d*[A-Z][a-z]?)(\d+(?:\.\d*)?|\.\d+)?")
 
 
 def parse_formula(formula):
-    """Return {atom: count} for a chemical formula such as "D2", "TiD1.5", "CD4" or "Ar".
+    """Return {atom: count} for a chemical formula such as "D2", "TiD1.5", "CD4", "7Li" or "Ar".
 
-    Atoms are element symbols, or the isotopes D, T and 3He (written with its mass number
-    first, so that "He3" still means three helium atoms). Counts may be decimal and default
-    to 1. Raises ValueError for anything else.
+    Atoms are element symbols (the natural element, such as "Li"), or one isotope with its
+    mass number first (such as "7Li" or "3He", so that "He3" still means three helium atoms);
+    D and T are the hydrogen isotopes. Counts may be decimal and default to 1. Atom names are
+    returned in canonical form (see nuclear.atom_name). Raises ValueError for anything else.
     """
     counts = {}
     pos = 0
@@ -211,10 +168,7 @@ def parse_formula(formula):
         m = _FORMULA_TOKEN.match(formula, pos)
         if not m:
             raise ValueError(f"cannot read the chemical formula {formula!r}")
-        symbol = m.group(1)
-        if symbol[0].isdigit():  # Isotope written as mass number + symbol: 3He -> He3
-            mass_number = symbol.rstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
-            symbol = symbol[len(mass_number) :] + mass_number
+        symbol = atom_name(*parse_atom(m.group(1)))
         counts[symbol] = counts.get(symbol, 0.0) + float(m.group(2) or 1)
         pos = m.end()
     if not counts:
@@ -233,7 +187,8 @@ class Material:
         name: Name, used in messages and outputs.
         phase: "gas" or "solid", which selects SRIM's gas- or solid-phase stopping.
         atoms: For a solid, {atom: amount}: atom ratios, such as {"Ti": 1, "D": 1.5}. Atoms
-            are element symbols or the isotopes D, T and 3He.
+            are element symbols (the natural element: "Li" is 7.59 % 6Li and 92.41 % 7Li) or
+            single isotopes with the mass number first ("7Li"); D and T are 2H and 3H.
         molecules: For a gas, {formula: amount}: mole fractions of its molecules, such as
             {"D2": 0.5, "T2": 0.5} or {"H2O": 1} (see parse_formula). A single atom is a
             monatomic molecule (such as "Ar"); hydrogen isotopes, N, O and the halogens are
@@ -243,8 +198,10 @@ class Material:
         Amounts are relative and need not sum to 1.
 
     Attributes: composition (the atoms or molecules given), atom_fractions ({atom: fraction
-    of all atoms}) and atoms_per_unit (for a gas, the mean number of atoms per molecule, which
-    converts a molecule density to an atom density; 1 for a solid).
+    of all atoms}, by the names used), isotope_fractions ({(Z, A): fraction of all atoms},
+    natural elements split into their isotopes), mean_mass (mean atomic mass [u]) and
+    atoms_per_unit (for a gas, the mean number of atoms per molecule, which converts a
+    molecule density to an atom density; 1 for a solid).
     """
 
     def __init__(self, name, phase, *, atoms=None, molecules=None, density=None):
@@ -291,8 +248,9 @@ class Material:
                 raise ValueError(
                     f"{where}: atoms takes single atoms (such as Ti or D), not {formula!r}"
                 )
-            if self.phase == "gas" and list(parsed) in ([a] for a in DIATOMIC_ELEMENTS):
-                if parsed[list(parsed)[0]] == 1.0:
+            if self.phase == "gas" and len(parsed) == 1 and list(parsed.values()) == [1.0]:
+                (atom,) = parsed
+                if parse_atom(atom)[0] in DIATOMIC_ELEMENTS:
                     raise ValueError(
                         f"{where}: {formula} on its own is a lone atom; its gas is made of "
                         f"{formula}2 molecules, so write {formula}2"
@@ -302,6 +260,24 @@ class Material:
         atoms_total = sum(counts.values())
         self.atoms_per_unit = atoms_total / total
         self.atom_fractions = {atom: n / atoms_total for atom, n in counts.items() if n > 0}
+        self.isotope_fractions = {}
+        for atom, fraction in self.atom_fractions.items():
+            try:
+                isotopes = isotope_fractions(atom)
+            except ValueError as e:
+                raise ValueError(f"{where}: {e}") from None
+            for za, f in isotopes.items():
+                self.isotope_fractions[za] = self.isotope_fractions.get(za, 0.0) + fraction * f
+        self.mean_mass = mean_atomic_mass(self.isotope_fractions)
+
+    def stopping_fractions(self):
+        """Return {SRIM_STOPPING_FILE target name: fraction of the atoms}: each isotope's
+        element, except the isotopes with their own tables (D, T, 3He)."""
+        fractions = {}
+        for (Z, A), f in self.isotope_fractions.items():
+            name = SRIM_ISOTOPE_TABLES.get((Z, A), atom_name(Z))
+            fractions[name] = fractions.get(name, 0.0) + f
+        return fractions
 
     @property
     def kind(self):
@@ -385,7 +361,7 @@ class Region:
 
 
 @functools.lru_cache(maxsize=4)
-def read_srim_h5(fname, particle=BEAM_PARTICLE):
+def read_srim_h5(fname, particle="d"):
     """Read the stopping of one beam particle in every target from SRIM_STOPPING_FILE.
 
     Returns (E [keV], masses, stopping): masses maps each target name (element symbols, plus
@@ -455,7 +431,7 @@ def read_drosg_koe(fname):
     LEGINT.f95): every line is ten 8-character fields, spaces inside a field are ignored and
     blank fields are zero. The first line holds EMIN, EMAX, EMINL and EMAXL [MeV]; EMAXL is the
     highest energy of the Legendre table. Each record is then two lines (20 values): incident
-    deuteron energy [MeV], the centre-of-mass differential cross section at 0 degrees [mb/sr]
+    projectile energy [MeV], the centre-of-mass differential cross section at 0 degrees [mb/sr]
     and 18 Legendre coefficients, normalised to sum to 1. Reading stops at the record at
     EMAXL; the records above it are single-angle data, not Legendre coefficients, and are not
     used (see data/README.md).
@@ -614,7 +590,7 @@ def _save_figure(fig, fname, close=True):
 
 
 class ShineSource:
-    """Neutron source term for a deuteron beam in a target containing deuterium and/or tritium.
+    """Neutron source term for a proton, deuteron or triton beam in a gas or solid target.
 
     The whole calculation runs when the object is created; afterwards use write_hdf5(),
     write_mcnp_sdef(), write_text_files() and make_plots() to write the results. Summary
@@ -624,8 +600,8 @@ class ShineSource:
     The beam passes through a list of regions (see Region), in order; the last one ends at
     the backstop. Each region holds a Material: a gas, given by pressure and temperature or
     by density, or a solid, whose density is part of the material. Neutrons come from the
-    deuterium (D(d,n)3He) and tritium (T(d,n)4He) atoms; other atoms only slow the beam.
-    dt_gas makes a D/T gas.
+    beam's reactions (nuclear.REACTIONS) with the target isotopes, such as D(d,n)3He and
+    T(d,n)4He for a deuteron beam; other atoms only slow the beam. dt_gas makes a D/T gas.
 
     Give either the beam current or the total neutron yield (yield_total), and the other is
     calculated: the yield is proportional to the current. Give None for the current to
@@ -638,8 +614,9 @@ class ShineSource:
     Args:
         name: Case name, used in output file names and titles.
         regions: The Regions the beam passes through, in order (one Region for a single one).
-        voltage: Beam voltage [kV]. The beam starts with this energy in keV. At most
-            MAX_VOLTAGE (40 MeV), the upper limit of the Legendre cross-section data.
+        voltage: Beam voltage [kV]. The beam starts with voltage times its charge in keV.
+            At most the energy up to which each reaction with a target isotope present is
+            complete (see nuclear.Reaction.complete_up_to) and has Legendre data.
         current: Beam current [mA]; None to calculate it from yield_total.
         start_radius: Beam radius where it enters the first region [cm].
         angle_step: Width of the emission-angle bins of the internal mesh [deg].
@@ -655,6 +632,7 @@ class ShineSource:
             calculates the beam energy.
         yield_total: Total neutron yield wanted [n/s]; give it, with current None, to
             calculate the current. None (default) calculates the yield from the current.
+        beam: Beam particle, one of nuclear.BEAMS: "p", "d" (default) or "t".
     """
 
     def __init__(
@@ -671,6 +649,7 @@ class ShineSource:
         stopping_power="srim",
         beam_energy_backstop=None,
         yield_total=None,
+        beam="d",
     ):
         t0 = time.time()
 
@@ -686,6 +665,7 @@ class ShineSource:
         self.energy_bin_width = float(energy_bin_width)
         self.data_dir = DEFAULT_DATA_DIR if data_dir is None else str(data_dir)
         self.stopping_power = str(stopping_power)
+        self.beam = str(beam)
         self.beam_energy_backstop = (
             None if beam_energy_backstop is None else float(beam_energy_backstop)
         )
@@ -735,10 +715,12 @@ class ShineSource:
 
         self.check_input()
         self.num_x_bins = self.num_x_bins.astype(int)
+        self.reactions = {key: r for key, r in REACTIONS.items() if r.beam == self.beam}
         self.num_x_bins_out = self.num_x_bins_out.astype(int)
 
         self.read_stopping_power()
         self.read_cross_sections()
+        self.check_channels()
         if self.calculated != "beam_energy_backstop":
             self.solve_region()
 
@@ -747,7 +729,7 @@ class ShineSource:
 
         self.calculate_beam_energy()
         self.calculate_scraping()
-        self.calculate_ddxs()
+        self.calculate_reactions()
         if self.current_calculated:
             self.solve_current()
         self.calculate_beam_current()
@@ -769,6 +751,11 @@ class ShineSource:
             all(isinstance(m, Material) for m in self.materials),
             "every region needs a Material",
         )
+        require(
+            self.beam in BEAMS,
+            f"beam must be one of {', '.join(BEAMS)}, got {self.beam!r}",
+        )
+        require(self.voltage > 0, "voltage must be positive")
         for r, material in enumerate(self.materials):
             where = self.region_label(r)
             given = {
@@ -808,15 +795,10 @@ class ShineSource:
         )
         if self.beam_energy_backstop is not None:
             require(
-                0 < self.beam_energy_backstop < self.voltage,
+                0 < self.beam_energy_backstop < self.beam_energy_entry,
                 f"beam_energy_backstop must be above 0 and below the beam energy at entry "
-                f"({self.voltage:g} keV)",
+                f"({self.beam_energy_entry:g} keV)",
             )
-        require(
-            0 < self.voltage <= MAX_VOLTAGE,
-            f"voltage must be between 0 and {MAX_VOLTAGE:g} kV (the upper limit of the "
-            "Legendre cross-section data, see data/README.md)",
-        )
         require(
             (self.current is None) != (self.requested_yield_total is None),
             "give exactly one of current and yield_total; the other is calculated",
@@ -864,6 +846,11 @@ class ShineSource:
             "num_x_bins_out must divide num_x_bins in every region",
         )
 
+    @property
+    def beam_energy_entry(self):
+        """Beam energy where the beam enters the first region [keV]: voltage times charge."""
+        return self.voltage * BEAMS[self.beam].charge
+
     def region_label(self, r):
         """Return "region <n>" for region index r, with its name or material in brackets."""
         name = self.region_names[r] or getattr(self.materials[r], "name", "")
@@ -888,7 +875,8 @@ class ShineSource:
         k = self.calculated_region
         rest = range(k, self.num_regions)
         atom_density = self._atom_densities(self.pressure, self.density)  # NaN at k
-        E_in = self._slow_down_regions(self.voltage, range(k), atom_density, self.length)[-1]
+        entry = self.beam_energy_entry
+        E_in = self._slow_down_regions(entry, range(k), atom_density, self.length)[-1]
 
         def backstop_energy(value):
             trial = {
@@ -936,29 +924,29 @@ class ShineSource:
         """Set the target properties of each region and spread them over the position mesh.
 
         Every region is filled with a Material (self.materials) and described by its total
-        atom density [1/cm^3], the atom fractions of deuterium and tritium (the reaction
-        targets) and the stopping power per atom averaged over its composition (see
+        atom density [1/cm^3], the fractions of its atoms that are each reaction's target
+        isotope, and the stopping power per atom averaged over its composition (see
         read_stopping_power), so the energy loss per unit length is the atom density times
         that stopping.
 
-        Sets self.atom_density_per_region, self.atom_fractions_per_region (isotope -> array),
-        self.target_density_per_region and self.target_density_mids (reaction -> density of
-        its target atoms [1/cm^3], per region and per internal bin) and self.divergence_mids.
+        Sets self.atom_density_per_region, self.target_density_per_region and
+        self.target_density_mids (reaction -> density of its target atoms [1/cm^3], per region
+        and per internal bin) and self.divergence_mids.
         """
         self.atom_density_per_region = self._atom_densities(self.pressure, self.density)
-        self.atom_fractions_per_region = {
-            isotope: np.array([m.atom_fractions.get(isotope, 0.0) for m in self.materials])
-            for isotope in REACTION_TARGETS.values()
-        }
         self.target_density_per_region = {
-            rxn: self.atom_density_per_region * self.atom_fractions_per_region[isotope]
-            for rxn, isotope in REACTION_TARGETS.items()
+            rxn: self.atom_density_per_region * self._target_fractions(reaction)
+            for rxn, reaction in self.reactions.items()
         }
         self.target_density_mids = {
             rxn: np.repeat(density, self.num_x_bins)
             for rxn, density in self.target_density_per_region.items()
         }
         self.divergence_mids = np.repeat(self.divergence, self.num_x_bins)
+
+    def _target_fractions(self, reaction):
+        """Return the fraction of each region's atoms that are the reaction's target isotope."""
+        return np.array([m.isotope_fractions.get(reaction.target, 0.0) for m in self.materials])
 
     def _atom_densities(self, pressure, density):
         """Return the atom density [1/cm^3] of each region for the given gas pressures [torr]
@@ -971,10 +959,7 @@ class ShineSource:
                 densities[r] = molecules * material.atoms_per_unit
             else:
                 rho = material.density if self.solid[r] else density[r]
-                mean_mass = sum(
-                    f * self.srim_masses[atom] for atom, f in material.atom_fractions.items()
-                )
-                densities[r] = rho * NA / mean_mass
+                densities[r] = rho * NA / material.mean_mass
         return densities
 
     def _slow_down_regions(self, E0, regions, atom_density, length):
@@ -1034,35 +1019,37 @@ class ShineSource:
         self.out_grid_inds = np.append(0, np.cumsum(self.x_ratio_out))
 
     def read_stopping_power(self):
-        """Read the stopping power of deuterons in each region's material, per atom.
+        """Read the stopping power of the beam particle in each region's material, per atom.
 
-        Stores self.stopping_per_region, an (E, eps) pair for each region: deuteron energy
-        [keV] and electronic + nuclear stopping per atom [keV cm^2], averaged over the
-        material's atoms (Bragg additivity), so the energy loss per unit length is eps times
-        the atom density. Also stores self.srim_masses (target -> atomic mass [u]).
+        Stores self.stopping_per_region, an (E, eps) pair for each region: beam energy [keV]
+        and electronic + nuclear stopping per atom [keV cm^2], averaged over the material's
+        atoms (Bragg additivity), so the energy loss per unit length is eps times the atom
+        density. Each isotope uses its element's table, except D, T and 3He, which have
+        their own (see Material.stopping_fractions).
 
-        - "srim": SRIM-2012.01 stopping for deuterons in each element (SRIM_STOPPING_FILE),
-          in the material's phase (gas or solid).
+        - "srim": SRIM-2012.01 stopping for the beam particle in each element
+          (SRIM_STOPPING_FILE), in the material's phase (gas or solid).
         - "icru49": electronic stopping from ICRU Report 49 for protons in hydrogen gas
           (PSTAR_FILE), taken at the proton energy with the same velocity
-          (E_p = E_d * M_H1 / M_H2), plus SRIM nuclear stopping; electronic stopping does not
-          depend on the hydrogen isotope. Only for gases of hydrogen isotopes (H, D, T), the
-          only ICRU 49 data here, so that a case run with it uses ICRU 49 throughout. The
-          table covers deuteron energies from about 2 keV upwards; below that the beam is
-          treated as stopped.
+          (E_p = E_beam * M_H1 / M_beam), plus SRIM nuclear stopping; electronic stopping
+          does not depend on the hydrogen isotope. Only for gases of hydrogen isotopes (H, D,
+          T), the only ICRU 49 data here, so that a case run with it uses ICRU 49 throughout.
+          The table starts at 1 keV proton energy (2 keV for deuterons); below that the beam
+          is treated as stopped.
 
         Raises ValueError if a material contains an atom with no stopping data, or if
         "icru49" is used with a solid or with any element other than hydrogen.
         """
         path = os.path.join(self.data_dir, SRIM_STOPPING_FILE)
-        E, self.srim_masses, srim = read_srim_h5(path)
+        E, _, srim = read_srim_h5(path, particle=self.beam)
         if self.stopping_power == "icru49":
             E_p, P_elec, _ = read_pstar(os.path.join(self.data_dir, PSTAR_FILE))
-            E_d = E_p * 1000 * M_H2 / M_H1  # Deuteron energy at the same velocity [keV]
+            # Beam energy at the same velocity [keV]
+            E_b = E_p * 1000 * BEAMS[self.beam].mass / M_H1
             P_elec = P_elec * 1000 * A_H_ICRU49 / NA  # MeV cm^2/g -> keV cm^2 per atom
-            keep = (E >= E_d[0]) & (E <= E_d[-1])
+            keep = (E >= E_b[0]) & (E <= E_b[-1])
             # Log-log interpolation of the ICRU 49 values onto the SRIM energy grid
-            icru_elec = np.exp(np.interp(np.log(E[keep]), np.log(E_d), np.log(P_elec)))
+            icru_elec = np.exp(np.interp(np.log(E[keep]), np.log(E_b), np.log(P_elec)))
         else:
             keep = np.ones(len(E), dtype=bool)
 
@@ -1071,7 +1058,8 @@ class ShineSource:
         for material in self.materials:
             if id(material) not in cache:
                 if self.stopping_power == "icru49":
-                    others = [a for a in material.atom_fractions if a not in HYDROGEN_ISOTOPES]
+                    others = [atom_name(Z) for Z, _ in material.isotope_fractions if Z != 1]
+                    others = list(dict.fromkeys(others))
                     if material.phase != "gas" or others:
                         reason = (
                             f"is a {material.phase}"
@@ -1084,7 +1072,7 @@ class ShineSource:
                             f"{material.name} {reason}; use srim"
                         )
                 eps = np.zeros(int(np.sum(keep)))
-                for atom, fraction in material.atom_fractions.items():
+                for atom, fraction in material.stopping_fractions().items():
                     if atom not in srim[material.phase]:
                         raise ValueError(
                             f"{self.name}: material {material.name}: no stopping data for "
@@ -1099,22 +1087,92 @@ class ShineSource:
             self.stopping_per_region.append(cache[id(material)])
 
     def read_cross_sections(self):
-        """Read the DD and DT cross sections from the DROSG-2000 files (see read_drosg_koe).
+        """Read the cross sections of the beam's reactions from the DROSG-2000 files (see
+        read_drosg_koe), and check that the beam energy is within their range.
 
         The centre-of-mass differential cross section is
 
             dsigma/dOmega_cm(E, mu) = total(E) * sum_l coeffs[l](E) * P_l(mu)
 
-        Stores self.xs_data[rxn] with "E" [keV], "total" [b/sr] and "coeffs".
+        at the energy E the data are tabulated at (see nuclear.Reaction.data_energy). Stores
+        self.xs_data[rxn] with "E" [keV], "total" [b/sr] and "coeffs".
+
+        Raises ValueError if, for a reaction whose target isotope is in some region, the beam
+        energy at entry is above the end of its Legendre data. (Other neutron channels opening
+        below that only give warnings, see check_channels.)
         """
         self.xs_data = {}
-        for rxn in REACTIONS:
-            E, total, coeffs = read_drosg_koe(os.path.join(self.data_dir, DROSG_FILES[rxn]))
+        files = {}
+        for rxn, reaction in self.reactions.items():
+            if reaction.data_file not in files:
+                path = os.path.join(self.data_dir, reaction.data_file)
+                files[reaction.data_file] = read_drosg_koe(path)
+            E, total, coeffs = files[reaction.data_file]
             self.xs_data[rxn] = {
                 "E": E * 1000,  # MeV -> keV
                 "total": total / 1000,  # mb/sr -> b/sr
                 "coeffs": coeffs,
             }
+
+            if not np.any(self._target_fractions(reaction) > 0):
+                continue
+            E_entry = self.beam_energy_entry
+            E_data_max = self.xs_data[rxn]["E"][-1]
+            if reaction.data_energy(E_entry) > E_data_max:
+                raise ValueError(
+                    f"{self.name}: the beam energy at entry ({E_entry:g} keV) is above the end "
+                    f"of the {reaction.label} Legendre data "
+                    f"({E_data_max / reaction.data_energy(1.0):.6g} keV)"
+                )
+
+    def check_channels(self):
+        """Warn about neutron-producing channels that are open but not modelled.
+
+        For every isotope in the target, the channels are: for a reaction target, the
+        reaction's competing channels (see nuclear.Reaction.competing_channels); for any
+        other isotope, the generic (b,n), (b,2n) and (b,np) channels of the beam b (see
+        nuclear.neutron_channels). A channel is warned about if the beam energy at entry is
+        above its threshold and the centre-of-mass energy is at least COULOMB_FRACTION of the
+        Coulomb barrier (below that, tunnelling makes it negligible). The case still runs;
+        those neutrons are missing from the results.
+
+        Sets self.warnings (list of messages, also logged as warnings and written to the
+        summary).
+        """
+        self.warnings = []
+        E = self.beam_energy_entry / 1000  # MeV
+        beam = BEAMS[self.beam]
+        where = {}  # (Z, A) -> names of the materials holding it
+        for material in self.unique_materials():
+            for za, fraction in material.isotope_fractions.items():
+                if fraction > 0:
+                    where.setdefault(za, []).append(material.name)
+        targets = {}
+        for reaction in self.reactions.values():
+            targets.setdefault(reaction.target, []).extend(reaction.competing_channels())
+        for za in sorted(where):
+            channels = targets[za] if za in targets else neutron_channels(self.beam, za)
+            barrier = coulomb_barrier(beam.Z, beam.A, *za)
+            fraction = cm_energy(self.beam, za, E) / barrier
+            seen = set()
+            for threshold, label in sorted(channels):
+                if label in seen or E <= threshold or fraction < COULOMB_FRACTION:
+                    continue
+                seen.add(label)
+                why = (
+                    f"its threshold is {threshold * 1000:.6g} keV"
+                    if threshold > 0
+                    else "it has no threshold"
+                )
+                if fraction < 1:
+                    why += f"; the beam is at {fraction:.0%} of the Coulomb barrier"
+                message = (
+                    f"{label} is open but not modelled, so its neutrons are missing ("
+                    f"{atom_name(*za)} in {', '.join(where[za])}): the beam enters at "
+                    f"{self.beam_energy_entry:g} keV and {why}"
+                )
+                self.warnings.append(message)
+                logger.warning(f"{self.name}: warning: {message}")
 
     def calculate_beam_energy(self):
         """Slow the beam down through the regions.
@@ -1123,7 +1181,10 @@ class ShineSource:
         midpoint and output-mesh versions (see slow_down).
         """
         self.beam_energy_grid = self._slow_down_regions(
-            self.voltage, range(self.num_regions), self.atom_density_per_region, self.length
+            self.beam_energy_entry,
+            range(self.num_regions),
+            self.atom_density_per_region,
+            self.length,
         )
         self.beam_energy_mids = (self.beam_energy_grid[:-1] + self.beam_energy_grid[1:]) / 2
         self.beam_energy_grid_out = np.array(self.beam_energy_grid[self.out_grid_inds])
@@ -1180,20 +1241,20 @@ class ShineSource:
         """Calculate the beam current [mA] that gives the requested total neutron yield.
 
         The yield is proportional to the current, so the current is the requested yield
-        divided by the yield per mA. The yield per mA is summed from the lab cross sections
-        the same way bin_neutrons sums the yield, so the final yield matches the request to
+        divided by the yield per mA. The yield per mA is summed from the cross sections the
+        same way bin_neutrons sums the yield, so the final yield matches the request to
         rounding error. Raises ValueError if the case produces no neutrons.
         """
-        deuterons_per_mA = 1e-3 / ee  # [1/s]
+        particles_per_mA = 1e-3 / (ee * BEAMS[self.beam].charge)  # [1/s]
         yield_per_mA = 0.0
-        for rxn in REACTIONS:
-            per_bin = np.sum(self.ddxs[rxn] * self.solid_angles[None, :], axis=1)
+        for rxn in self.reactions:
+            per_bin = np.sum(self.cm_xs[rxn] * self.solid_angles[None, :], axis=1)
             yield_per_mA += np.sum(
                 per_bin
                 * self.target_density_mids[rxn]
                 * 1e-24
                 * self.dx
-                * deuterons_per_mA
+                * particles_per_mA
                 * (1 - self.scrape_mids)
             )
         if yield_per_mA == 0:
@@ -1205,9 +1266,9 @@ class ShineSource:
         )
 
     def calculate_beam_current(self):
-        """Set the deuteron rate [1/s] and the beam current [mA] after scraping, on the
+        """Set the beam particle rate [1/s] and the beam current [mA] after scraping, on the
         internal and output meshes."""
-        self.deuteron_rate = self.current / 1000 / ee
+        self.particle_rate = self.current / 1000 / (ee * BEAMS[self.beam].charge)
         self.current_grid = self.current * (1 - self.scrape_grid)
         self.current_mids = (self.current_grid[:-1] + self.current_grid[1:]) / 2
         self.current_grid_out = np.array(self.current_grid[self.out_grid_inds])
@@ -1218,7 +1279,8 @@ class ShineSource:
     def calculate_beam_power(self):
         """Work out where the beam power goes: into the target material, onto the wall or to the backstop.
 
-        Beam power is beam energy times current (keV x mA = W). Along each bin, the beam
+        Beam power is beam energy times particle rate: beam energy / charge times current
+        (keV x mA = W), so the entry power is voltage times current. Along each bin, the beam
         still in it deposits the energy it loses in the target material (current x energy loss), and the
         beam scraped off hits the wall carrying its energy there (energy x current lost). Both
         use the bin averages of the other quantity, which makes the three parts add up to the
@@ -1229,72 +1291,88 @@ class ShineSource:
         output meshes (output bins are sums), and the totals self.deposited_power,
         self.wall_power and self.backstop_power [kW].
         """
+        charge = BEAMS[self.beam].charge
         beam_energy_mids = (self.beam_energy_grid[:-1] + self.beam_energy_grid[1:]) / 2
-        self.deposited_power_mids = self.current_mids * -np.diff(self.beam_energy_grid) / 1000
-        self.wall_power_mids = beam_energy_mids * -np.diff(self.current_grid) / 1000
+        self.deposited_power_mids = (
+            self.current_mids * -np.diff(self.beam_energy_grid) / 1000 / charge
+        )
+        self.wall_power_mids = beam_energy_mids * -np.diff(self.current_grid) / 1000 / charge
         self.deposited_power_mids_out = np.add.reduceat(
             self.deposited_power_mids, self.out_grid_inds[:-1]
         )
         self.wall_power_mids_out = np.add.reduceat(self.wall_power_mids, self.out_grid_inds[:-1])
         self.deposited_power = np.sum(self.deposited_power_mids)
         self.wall_power = np.sum(self.wall_power_mids)
-        self.backstop_power = self.beam_energy_grid[-1] * self.current_grid[-1] / 1000
+        self.backstop_power = self.beam_energy_grid[-1] * self.current_grid[-1] / 1000 / charge
         logger.debug(
             f"{self.name}: beam power {self.voltage * self.current / 1000:.4g} kW: "
             f"{self.deposited_power:.4g} kW deposited, {self.wall_power:.4g} kW onto the wall, "
             f"{self.backstop_power:.4g} kW to the backstop"
         )
 
-    def calculate_ddxs(self):
-        """Calculate lab-frame cross sections and neutron energies.
+    def calculate_reactions(self):
+        """Calculate the cross sections and neutron energies and directions.
 
-        For each reaction, sets self.ddxs[rxn], the double-differential cross section in the
-        lab frame [b/sr], and self.neutron_energy[rxn], the neutron energy [MeV], on the internal
-        (position, angle) mesh. Both use the beam energy at the bin midpoint and
-        relativistic kinematics (see two_body_kinematics).
+        The internal angle mesh is in the centre-of-mass (CM) frame: for each reaction and
+        each (position, CM angle) cell this sets self.cm_xs[rxn], the CM differential cross
+        section [b/sr] at the beam energy at the bin midpoint, and, from relativistic
+        two-body kinematics (see nuclear.cm_to_lab), self.neutron_energy[rxn], the neutron's
+        lab energy [MeV], and self.lab_cosine[rxn], the cosine of its lab angle. Every CM
+        angle has one lab angle and energy, so this also holds for endothermic reactions near
+        threshold, where neutrons at one lab angle have two energies. Cells below a
+        reaction's threshold have no neutrons (NaN energy and angle, zero cross section).
+
+        For an inverse reaction (data for the target as the beam), the data are evaluated at
+        the same CM energy and with the CM angle measured from the other particle, so the CM
+        cosine changes sign.
         """
-        self.ddxs = {}
+        self.cm_xs = {}
         self.neutron_energy = {}
+        self.lab_cosine = {}
 
-        for rxn, (M1, M2, M3, M4, _Q) in REACTIONS.items():
+        for rxn, reaction in self.reactions.items():
+            masses = reaction.masses()
             E_table = self.xs_data[rxn]["E"]
             coeff_table = self.xs_data[rxn]["coeffs"]
+            mu = -self.cosine_mids if reaction.inverse else self.cosine_mids
+            present = np.any(self._target_fractions(reaction) > 0)
 
-            # Double-differential cross sections [b/sr]: the CM angular distribution times
-            # the CM-to-lab solid angle factor; and neutron energies [MeV]. Both come from
-            # relativistic two-body kinematics at each lab angle.
-            self.ddxs[rxn] = np.zeros((self.num_x_bins_total, self.num_angle_bins))
-            self.neutron_energy[rxn] = np.zeros((self.num_x_bins_total, self.num_angle_bins))
+            shape = (self.num_x_bins_total, self.num_angle_bins)
+            self.cm_xs[rxn] = np.zeros(shape)
+            self.neutron_energy[rxn] = np.zeros(shape)
+            self.lab_cosine[rxn] = np.zeros(shape)
             for i, E in enumerate(self.beam_energy_mids):
-                neutron_energy, mu_cm, jacobian = two_body_kinematics(
-                    E / 1000, self.cosine_mids, M1, M2, M3, M4
-                )
-                self.neutron_energy[rxn][i, :] = neutron_energy
-                total = np.interp(E, E_table, self.xs_data[rxn]["total"], left=0, right=np.nan)
+                T3, cos_lab = cm_to_lab(E / 1000, self.cosine_mids, *masses)
+                self.neutron_energy[rxn][i, :] = T3
+                self.lab_cosine[rxn][i, :] = cos_lab
+                if not present or np.isnan(T3[0]):
+                    continue  # No target atoms, or below the threshold
+                E_data = reaction.data_energy(E)
+                total = np.interp(E_data, E_table, self.xs_data[rxn]["total"], left=0, right=np.nan)
                 coeffs = np.array(
                     [
-                        np.interp(E, E_table, coeff_table[:, j], left=0, right=np.nan)
+                        np.interp(E_data, E_table, coeff_table[:, j], left=0, right=np.nan)
                         for j in range(coeff_table.shape[1])
                     ]
                 )
                 # Evaluate the Legendre series only up to its last non-zero coefficient: the
-                # higher coefficients are zero at beam energies below about 400 keV
+                # higher coefficients are zero at low beam energies
                 nonzero = np.flatnonzero(coeffs)
                 coeffs = coeffs[: nonzero[-1] + 1] if len(nonzero) else coeffs[:1]
-                self.ddxs[rxn][i, :] = total * legval(mu_cm, coeffs) * jacobian
+                self.cm_xs[rxn][i, :] = total * legval(mu, coeffs)
 
     def bin_neutrons(self):
         """Tally neutrons onto the output (position, angle, energy) mesh.
 
-        The neutron rate from each internal (position, angle) cell is
-        sigma [b/sr] * 1e-24 [cm^2/b] * n_target [1/cm^3] * dx [cm] * dOmega [sr]
-        * deuteron rate [1/s], reduced by the scrape fraction. It is added to the output
-        cell containing that position, angle and neutron energy.
+        The neutron rate from each internal (position, CM angle) cell is
+        sigma_cm [b/sr] * 1e-24 [cm^2/b] * n_target [1/cm^3] * dx [cm] * dOmega_cm [sr]
+        * beam particle rate [1/s], reduced by the scrape fraction. It is added to the output
+        cell containing that position, the neutron's lab angle and its energy.
 
         Sets, for each reaction, self.neutrons[rxn] [n/s] with shape
         (num_x_bins_total_out, num_angle_bins_out, num_energy_bins[rxn]), its energy mesh
         self.neutron_energy_grid[rxn] [MeV], the yield self.yields[rxn] [n/s] and the fraction
-        of neutrons lost to scraping self.neutron_scrape_fractions[rxn]. The totals over both
+        of neutrons lost to scraping self.neutron_scrape_fractions[rxn]. The totals over the
         reactions are self.yield_total and self.neutron_scrape_fraction.
         """
         self.num_energy_bins = {}
@@ -1304,19 +1382,18 @@ class ShineSource:
         self.yields = {}
         self.neutron_scrape_fractions = {}
 
-        for rxn in REACTIONS:
+        for rxn in self.reactions:
             # Neutron energy mesh: spans this reaction's energies, aligned to energy_bin_width
-            energy_min = (
-                np.floor(np.min(self.neutron_energy[rxn]) / self.energy_bin_width)
-                * self.energy_bin_width
+            # (one bin from 0 if the reaction is below its threshold everywhere)
+            energies = self.neutron_energy[rxn][np.isfinite(self.neutron_energy[rxn])]
+            if len(energies) == 0:
+                energies = np.array([0.0])
+            energy_min = np.floor(np.min(energies) / self.energy_bin_width) * self.energy_bin_width
+            energy_max = np.ceil(np.max(energies) / self.energy_bin_width) * self.energy_bin_width
+            self.num_energy_bins[rxn] = max(
+                1, int(round((energy_max - energy_min) / self.energy_bin_width))
             )
-            energy_max = (
-                np.ceil(np.max(self.neutron_energy[rxn]) / self.energy_bin_width)
-                * self.energy_bin_width
-            )
-            self.num_energy_bins[rxn] = int(
-                round((energy_max - energy_min) / self.energy_bin_width)
-            )
+            energy_max = energy_min + self.num_energy_bins[rxn] * self.energy_bin_width
             self.neutron_energy_grid[rxn] = np.linspace(
                 energy_min, energy_max, self.num_energy_bins[rxn] + 1
             )
@@ -1335,23 +1412,35 @@ class ShineSource:
                 ],
                 axis=0,
             )
-            j_out = np.floor_divide(np.arange(self.num_angle_bins)[None, :], self.angle_ratio)
             i_out = np.repeat(i_out, self.num_angle_bins, axis=1).astype(int).ravel()
-            j_out = np.repeat(j_out, self.num_x_bins_total, axis=0).astype(int).ravel()
-            k_out = (
-                np.searchsorted(self.neutron_energy_grid[rxn], self.neutron_energy[rxn].ravel()) - 1
+            lab_angle = np.degrees(np.arccos(np.clip(self.lab_cosine[rxn].ravel(), -1, 1)))
+            valid = np.isfinite(lab_angle)
+            j_out = np.zeros(len(lab_angle), dtype=int)
+            j_out[valid] = np.minimum(
+                (lab_angle[valid] / self.angle_step_out).astype(int), self.num_angle_bins_out - 1
+            )
+            k_out = np.zeros(len(lab_angle), dtype=int)
+            k_out[valid] = np.clip(
+                np.searchsorted(
+                    self.neutron_energy_grid[rxn], self.neutron_energy[rxn].ravel()[valid]
+                )
+                - 1,
+                0,
+                self.num_energy_bins[rxn] - 1,
             )
 
             # Neutron rate in each internal cell [n/s], with and without scraping
             areas = np.tile(self.solid_angles, self.num_x_bins_total)
-            factor = (self.target_density_mids[rxn] * 1e-24 * self.dx * self.deuteron_rate)[:, None]
-            vals_scr = (self.ddxs[rxn] * factor * (1 - self.scrape_mids[:, None])).ravel() * areas
-            vals_tot = (self.ddxs[rxn] * factor).ravel() * areas
+            factor = (self.target_density_mids[rxn] * 1e-24 * self.dx * self.particle_rate)[:, None]
+            vals_scr = (self.cm_xs[rxn] * factor * (1 - self.scrape_mids[:, None])).ravel() * areas
+            vals_tot = (self.cm_xs[rxn] * factor).ravel() * areas
 
             self.neutrons[rxn] = np.zeros(
                 (self.num_x_bins_total_out, self.num_angle_bins_out, self.num_energy_bins[rxn])
             )
-            np.add.at(self.neutrons[rxn], (i_out, j_out, k_out), vals_scr)
+            np.add.at(
+                self.neutrons[rxn], (i_out[valid], j_out[valid], k_out[valid]), vals_scr[valid]
+            )
 
             self.yields[rxn] = np.sum(self.neutrons[rxn])
             logger.debug(f"{self.name}: {rxn} neutron yield = {self.yields[rxn]:.4e} n/s")
@@ -1361,13 +1450,13 @@ class ShineSource:
             else:
                 self.neutron_scrape_fractions[rxn] = 1 - np.sum(vals_scr) / np.sum(vals_tot)
 
-        self.yield_total = self.yields["DD"] + self.yields["DT"]
+        self.yield_total = sum(self.yields.values())
         if self.yield_total == 0:
             raise ValueError(f"{self.name}: {NO_NEUTRONS}")
         self.neutron_scrape_fraction = (
-            self.yields["DD"] * self.neutron_scrape_fractions["DD"]
-            + self.yields["DT"] * self.neutron_scrape_fractions["DT"]
-        ) / self.yield_total
+            sum(self.yields[rxn] * self.neutron_scrape_fractions[rxn] for rxn in self.reactions)
+            / self.yield_total
+        )
         logger.debug(
             f"{self.name}: total neutron yield = {self.yield_total:.4e} n/s, "
             f"{self.neutron_scrape_fraction * 100:.3f} % lost to beam scraping"
@@ -1411,6 +1500,7 @@ class ShineSource:
             requested = [("beam_energy_backstop", self.beam_energy_backstop, "keV, requested")]
         return (
             [
+                ("beam", self.beam, BEAMS[self.beam].description),
                 ("voltage", self.voltage, "kV"),
                 ("current", self.current, "mA, calculated" if self.current_calculated else "mA"),
             ]
@@ -1444,12 +1534,14 @@ class ShineSource:
 
         File attributes: format ("shine-neutron-source") and format_version (HDF5_FORMAT_VERSION,
         increased whenever the layout changes), name (case name), code_version (see
-        get_code_version), created (UTC time) and any run_info entries (such as the input
-        file). The inputs group holds every input parameter (see get_inputs) and the results
-        group the key results (see get_results), one dataset each with a "units" attribute.
+        get_code_version), created (UTC time), warnings (see check_channels; empty if none)
+        and any run_info entries (such as the input file). The inputs group holds every input
+        parameter (see get_inputs) and the results group the key results (see get_results),
+        one dataset each with a "units" attribute.
         The materials group has a group for each material used, whose attributes give its
         phase, density (solids), composition (composition_kind "atoms" or "molecules", with
-        composition_formulas and composition_amounts) and atom fractions.
+        composition_formulas and composition_amounts), atom fractions and isotope fractions
+        (natural elements split into their isotopes).
 
         Datasets, each with "units" and "description" attributes ("grid" arrays hold values at
         mesh boundaries, "mids" arrays one value per bin):
@@ -1460,10 +1552,11 @@ class ShineSource:
         - beam_energy_mids, radius_mids, scrape_mids, current_mids: the same per position bin, as
           used in the SDEF card and axial_profile.txt.
         - angle_grid: emission angle mesh, relative to the beam direction.
-        - neutron_energy_grid_DD, neutron_energy_grid_DT: neutron energy mesh for each reaction.
-        - neutrons_DD, neutrons_DT: neutron emission rate in each (position, angle, energy)
-          cell, with shape (len(x_grid) - 1, len(angle_grid) - 1, len(neutron_energy_grid_<rxn>) - 1); their
-          "dimensions" attribute names the axes.
+        - neutron_energy_grid_<rxn>: neutron energy mesh for each of the beam's reactions
+          (such as neutron_energy_grid_DD and neutron_energy_grid_DT for a deuteron beam).
+        - neutrons_<rxn>: neutron emission rate in each (position, angle, energy) cell, with
+          shape (len(x_grid) - 1, len(angle_grid) - 1, len(neutron_energy_grid_<rxn>) - 1);
+          the "dimensions" attribute names the axes and "reaction" gives the reaction.
         """
         _make_parent_dir(path)
         datasets = [
@@ -1483,19 +1576,21 @@ class ShineSource:
             ("current_mids", self.current_mids_out, "mA",
              "beam current, averaged over each position bin"),
             ("angle_grid", self.angle_grid_out, "deg", "emission angle mesh, from the beam direction"),
-            ("neutron_energy_grid_DD", self.neutron_energy_grid["DD"], "MeV", "neutron energy mesh for D(d,n)3He"),
-            ("neutron_energy_grid_DT", self.neutron_energy_grid["DT"], "MeV", "neutron energy mesh for T(d,n)4He"),
-            ("neutrons_DD", self.neutrons["DD"], "n/s",
-             "D(d,n)3He neutron emission rate in each (position, angle, energy) cell"),
-            ("neutrons_DT", self.neutrons["DT"], "n/s",
-             "T(d,n)4He neutron emission rate in each (position, angle, energy) cell"),
         ]  # fmt: skip
+        for rxn, reaction in self.reactions.items():
+            datasets.append((f"neutron_energy_grid_{rxn}", self.neutron_energy_grid[rxn], "MeV",
+                             f"neutron energy mesh for {reaction.label}"))  # fmt: skip
+        for rxn, reaction in self.reactions.items():
+            datasets.append((f"neutrons_{rxn}", self.neutrons[rxn], "n/s",
+                             f"{reaction.label} neutron emission rate in each (position, angle, "
+                             "energy) cell"))  # fmt: skip
         with h5py.File(path, "w") as hf:
             hf.attrs["format"] = "shine-neutron-source"
             hf.attrs["format_version"] = HDF5_FORMAT_VERSION
             hf.attrs["name"] = self.name
             hf.attrs["code_version"] = get_code_version()
             hf.attrs["created"] = self.created
+            hf.attrs["warnings"] = self.warnings  # Open neutron channels not modelled
             for key, value in (run_info or {}).items():
                 hf.attrs[key] = value
             for group_name, entries in [
@@ -1520,12 +1615,15 @@ class ShineSource:
                 g.attrs["composition_amounts"] = list(material.composition.values())
                 g.attrs["atoms"] = list(material.atom_fractions)
                 g.attrs["atom_fractions"] = list(material.atom_fractions.values())
+                g.attrs["isotopes"] = [atom_name(Z, A) for Z, A in material.isotope_fractions]
+                g.attrs["isotope_fractions"] = list(material.isotope_fractions.values())
             for key, data, units, description in datasets:
                 hf.create_dataset(key, data=data, compression="gzip")
                 hf[key].attrs["units"] = units
                 hf[key].attrs["description"] = description
-            for rxn in ("DD", "DT"):
+            for rxn, reaction in self.reactions.items():
                 hf[f"neutrons_{rxn}"].attrs["dimensions"] = ["position", "angle", "energy"]
+                hf[f"neutrons_{rxn}"].attrs["reaction"] = reaction.label
 
     def sdef_positions(self, direction="-z", entry_position=None, backstop_position=None):
         """Return (entry, backstop): the points [cm] where the beam enters the first region
@@ -1591,8 +1689,6 @@ class ShineSource:
         # The radius varies along the beam if it diverges or a narrower wall scrapes it
         divergent = np.ptp(self.radius_mids_out) > 0
         isotropic = self.angle_step_out == 180
-        has_DD = "DD" in self.reactions_present()
-        has_DT = "DT" in self.reactions_present()
         dashed_line = "c " + "-" * 78 + "\n"
 
         run = {
@@ -1643,7 +1739,7 @@ class ShineSource:
         s += dashed_line
 
         # Extent distribution: region boundaries, with interpolated points inside each region
-        ext = np.sum(self.neutrons["DD"], (1, 2)) + np.sum(self.neutrons["DT"], (1, 2))
+        ext = sum(np.sum(self.neutrons[rxn], (1, 2)) for rxn in self.reactions)
         nvals = self.num_x_bins_out
         Lvals = self.length
         if reverse_x:
@@ -1667,7 +1763,7 @@ class ShineSource:
 
         # Angular distribution. MCNP needs increasing cosines, so bins run from 180 to 0 deg.
         if not isotropic:
-            dir_vals = np.sum(self.neutrons["DD"], (0, 2)) + np.sum(self.neutrons["DT"], (0, 2))
+            dir_vals = sum(np.sum(self.neutrons[rxn], (0, 2)) for rxn in self.reactions)
             s += "c\n"
             s += "  sc2   Angular distribution\n"
             # Three cosines per line keeps the lines within 80 characters
@@ -1694,12 +1790,13 @@ class ShineSource:
         s += "c\n"
         s += dashed_line
 
-        # Energy distribution: DD and DT bins side by side, each starting with a zero bin
+        # Energy distribution: one segment of bins per group of reactions whose energies
+        # overlap (such as DD and DT side by side), each starting with a zero bin
         s += "c\n"
         s += "  sc4   Energy distribution\n"
         if isotropic:
-            spectra = [np.sum(self.neutrons[rxn], (0, 1)) for rxn in ["DD", "DT"]]
-            si, sp = self._sdef_energy_bins(spectra, has_DD, has_DT, trim=False)
+            spectra = {rxn: np.sum(self.neutrons[rxn], (0, 1)) for rxn in self.reactions}
+            si, sp = self._sdef_energy_bins(spectra, trim=False)
             s += f"  si4  {si}\n"
             s += "  sp4  " + _format_values(sp, ".5e", 6) + "\n"
             s += "c\n"
@@ -1711,11 +1808,18 @@ class ShineSource:
                 # Distribution i covers angle bin i counted from 180 degrees, matching si2; k is
                 # that bin's index in angle_grid_out, which runs from 0 degrees
                 k = self.num_angle_bins_out - 1 - i
-                spectra = [np.sum(self.neutrons[rxn][:, k, :], 0) for rxn in ["DD", "DT"]]
-                si, sp = self._sdef_energy_bins(spectra, has_DD, has_DT, trim=True)
+                spectra = {rxn: np.sum(self.neutrons[rxn][:, k, :], 0) for rxn in self.reactions}
+                note = ""
+                if not any(np.any(spectrum > 0) for spectrum in spectra.values()):
+                    # No neutrons at these angles (sp2 gives them zero probability), but the
+                    # distribution must still be valid: use the spectrum over all angles
+                    spectra = {rxn: np.sum(self.neutrons[rxn], (0, 1)) for rxn in self.reactions}
+                    note = "; no neutrons, never sampled"
+                si, sp = self._sdef_energy_bins(spectra, trim=True)
                 s += (
                     f"  sc{sid:<3d} Energy distribution "
-                    f"({self.angle_grid_out[k]:.12g} - {self.angle_grid_out[k + 1]:.12g} degrees)\n"
+                    f"({self.angle_grid_out[k]:.12g} - {self.angle_grid_out[k + 1]:.12g} degrees"
+                    f"{note})\n"
                 )
                 s += f"  si{sid:<3d}{si}\n"
                 s += f"  sp{sid:<3d}" + _format_values(sp, ".5e", 6) + "\n"
@@ -1738,25 +1842,44 @@ class ShineSource:
         s += dashed_line
         return s
 
-    def _sdef_energy_bins(self, spectra, has_DD, has_DT, trim):
+    def _sdef_energy_bins(self, spectra, trim):
         """Return the SI entries and SP values of an energy distribution.
 
-        spectra holds the DD and DT spectra on their own energy meshes. If trim is True,
-        empty bins at either end of each spectrum are dropped.
+        spectra holds {rxn: spectrum} on each reaction's own energy mesh; reactions with no
+        neutrons are left out. If trim is True, empty bins at either end of each spectrum are
+        dropped. Reactions whose energy ranges overlap or touch are added together on one
+        segment of bins (MCNP needs increasing energies); each segment starts with a zero bin.
         """
-        si = ""
-        sp = []
-        for rxn, spectrum, present in zip(["DD", "DT"], spectra, [has_DD, has_DT]):
-            if not present:
+        width = self.energy_bin_width
+        ranges = []  # (first bin, end bin, spectrum) in units of energy_bin_width from 0 MeV
+        for rxn, spectrum in spectra.items():
+            if rxn not in self.reactions_present() or not np.any(spectrum > 0):
                 continue
             ind_min, ind_max = 0, len(spectrum)
             if trim:
                 inds = np.nonzero(spectrum)[0]
                 ind_min, ind_max = inds[0], inds[-1] + 1
-            E_min = round(self.neutron_energy_grid[rxn][ind_min], 12)
-            E_max = round(self.neutron_energy_grid[rxn][ind_max], 12)
-            si += f" {E_min} {ind_max - ind_min - 1}i {E_max}"
-            sp = np.append(sp, np.append(0, spectrum[ind_min:ind_max]))
+            first = int(round(self.neutron_energy_grid[rxn][0] / width))
+            ranges.append((first + ind_min, first + ind_max, spectrum[ind_min:ind_max]))
+
+        groups = []
+        for lo, hi, values in sorted(ranges, key=lambda r: r[0]):
+            if groups and lo <= groups[-1][1]:
+                groups[-1][1] = max(groups[-1][1], hi)
+                groups[-1][2].append((lo, values))
+            else:
+                groups.append([lo, hi, [(lo, values)]])
+
+        si = ""
+        sp = []
+        for lo, hi, parts in groups:
+            combined = np.zeros(hi - lo)
+            for start, values in parts:
+                combined[start - lo : start - lo + len(values)] += values
+            E_min = round(lo * width, 12)
+            E_max = round(hi * width, 12)
+            si += f" {E_min} {hi - lo - 1}i {E_max}"
+            sp = np.append(sp, np.append(0, combined))
         return si, sp
 
     def write_mcnp_sdef(
@@ -1771,18 +1894,18 @@ class ShineSource:
             w.write(self.get_mcnp_sdef(direction, run_info, entry_position, backstop_position))
 
     def reactions_present(self):
-        """Return the reactions the target can produce: "DD" if any region contains deuterium,
-        "DT" if any contains tritium."""
-        return [rxn for rxn in REACTIONS if np.any(self.target_density_per_region[rxn] > 0)]
+        """Return the beam's reactions that produce neutrons in this case: their target
+        isotope is in some region, and the beam is above their threshold there."""
+        return [rxn for rxn in self.reactions if self.yields[rxn] > 0]
 
     def neutrons_by_angle_and_energy(self):
-        """Return the neutron source integrated over position, on one energy mesh for both
-        reactions.
+        """Return the neutron source integrated over position, on one energy mesh for all the
+        beam's reactions.
 
         Returns (neutron_energy_grid, neutrons): neutron_energy_grid [MeV] runs from the lowest to the highest neutron
         energy of the reactions present, in steps of energy_bin_width (the reactions' own meshes are
         aligned with it), and neutrons[rxn] [n/s] has shape (num_angle_bins_out, len(neutron_energy_grid) - 1) for
-        "DD" and "DT" (zero for a reaction the gas cannot produce).
+        each of the beam's reactions (zero for a reaction that produces no neutrons here).
         """
         present = self.reactions_present()
         # Each reaction's mesh starts and ends on a multiple of energy_bin_width: work in those indices
@@ -1796,7 +1919,7 @@ class ShineSource:
         )
         neutron_energy_grid = np.arange(i_lo, i_hi + 1) * self.energy_bin_width
         neutrons = {}
-        for rxn in ("DD", "DT"):
+        for rxn in self.reactions:
             neutrons[rxn] = np.zeros((self.num_angle_bins_out, i_hi - i_lo))
             if rxn in present:
                 by_angle = np.sum(self.neutrons[rxn], 0)
@@ -1806,12 +1929,14 @@ class ShineSource:
 
     def get_results(self):
         """Return the key results as a list of (name, value, units or description)."""
-        results = [
-            ("yield_total", self.yield_total, "n/s"),
-            ("yield_DD", self.yields["DD"], "n/s"),
-            ("yield_DT", self.yields["DT"], "n/s"),
-            ("fraction_DD", self.yields["DD"] / self.yield_total, "share of the total yield"),
-            ("fraction_DT", self.yields["DT"] / self.yield_total, "share of the total yield"),
+        results = [("yield_total", self.yield_total, "n/s")]
+        results += [
+            (f"yield_{rxn}", self.yields[rxn], f"n/s, {reaction.label}")
+            for rxn, reaction in self.reactions.items()
+        ]
+        results += [
+            (f"fraction_{rxn}", self.yields[rxn] / self.yield_total, "share of the total yield")
+            for rxn in self.reactions
         ]
         for rxn in self.reactions_present():
             spectrum = np.sum(self.neutrons[rxn], (0, 1))
@@ -1843,13 +1968,14 @@ class ShineSource:
     def get_summary(self, run_info=None, title=True):
         """Return the key inputs and results as TOML text (readable with tomllib).
 
-        Sections: [run] (case name, code version, creation time and any run_info entries, such
-        as the input file and SDEF direction), [inputs] (the ShineSource arguments, see
-        get_inputs; lists have one value per gas region in beam order) and [results] (see
-        get_results), followed by a [materials.<name>] table for each material used (phase,
-        density for a solid, and its atoms or molecules). Units are given in comments. title adds a first
-        comment line saying what the file is. The "=" signs are aligned across all sections, and so are the comments
-        (except after values too long for the comment column).
+        Sections: [run] (case name, code version, creation time, any run_info entries, such
+        as the input file and SDEF direction, and any warnings, see check_channels), [inputs]
+        (the ShineSource arguments, see get_inputs; lists have one value per region in beam
+        order) and [results] (see get_results), followed by a [materials.<name>] table for
+        each material used (phase, density for a solid, and its atoms or molecules). Units are
+        given in comments. title adds a first comment line saying what the file is. The "="
+        signs are aligned across all sections, and so are the comments (except after values
+        too long for the comment column).
         """
         sections = {
             "run": [
@@ -1857,7 +1983,12 @@ class ShineSource:
                 ("code_version", get_code_version(), ""),
                 ("created", self.created, ""),  # ISO 8601 with "+00:00": UTC
             ]
-            + [(name, value, "") for name, value in (run_info or {}).items()],
+            + [(name, value, "") for name, value in (run_info or {}).items()]
+            + (
+                [("warnings", self.warnings, "open neutron channels not modelled")]
+                if self.warnings
+                else []
+            ),
             "inputs": self.get_inputs(),
             "results": self.get_results(),
         }
@@ -1910,7 +2041,9 @@ class ShineSource:
             with open(os.path.join(directory, fname), "w", encoding="ascii", newline="\n") as w:
                 np.savetxt(w, np.column_stack(data), fmt="%13.6e", header=header, comments="#")
 
-        axial = {rxn: np.sum(self.neutrons[rxn], (1, 2)) for rxn in ("DD", "DT")}
+        rxns = list(self.reactions)
+        columns = [f"{rxn} neutrons [n/s] ({self.reactions[rxn].label})" for rxn in rxns]
+        axial = {rxn: np.sum(self.neutrons[rxn], (1, 2)) for rxn in rxns}
         write_table(
             "axial_profile.txt",
             "Neutron source along the beam, integrated over emission angle and neutron energy",
@@ -1920,8 +2053,7 @@ class ShineSource:
                 "beam energy at the bin centre [keV]",
                 "beam edge radius over the bin [cm] (root mean square; capped at the wall)",
                 "fraction of the beam scraped off, averaged over the bin",
-                "DD neutrons [n/s]",
-                "DT neutrons [n/s]",
+                *columns,
                 "total neutrons [n/s]",
                 "beam power deposited in the target material over the bin [kW]",
                 "beam power carried onto the wall by scraping over the bin [kW]",
@@ -1932,37 +2064,34 @@ class ShineSource:
                 (self.beam_energy_grid_out[:-1] + self.beam_energy_grid_out[1:]) / 2,
                 self.radius_mids_out,
                 self.scrape_mids_out,
-                axial["DD"],
-                axial["DT"],
-                axial["DD"] + axial["DT"],
+                *(axial[rxn] for rxn in rxns),
+                sum(axial.values()),
                 self.deposited_power_mids_out,
                 self.wall_power_mids_out,
             ],
         )
 
         neutron_energy_grid, by_angle_energy = self.neutrons_by_angle_and_energy()
-        energy = {rxn: np.sum(by_angle_energy[rxn], 0) for rxn in ("DD", "DT")}
+        energy = {rxn: np.sum(by_angle_energy[rxn], 0) for rxn in rxns}
         write_table(
             "energy_spectrum.txt",
             "Neutron energy spectrum, integrated over position and emission angle",
             [
                 "start of energy bin [MeV]",
                 "end of energy bin [MeV]",
-                "DD neutrons [n/s]",
-                "DT neutrons [n/s]",
+                *columns,
                 "total neutrons [n/s]",
             ],
             [
                 neutron_energy_grid[:-1],
                 neutron_energy_grid[1:],
-                energy["DD"],
-                energy["DT"],
-                energy["DD"] + energy["DT"],
+                *(energy[rxn] for rxn in rxns),
+                sum(energy.values()),
             ],
         )
 
-        angular = {rxn: np.sum(self.neutrons[rxn], (0, 2)) for rxn in ("DD", "DT")}
-        total = angular["DD"] + angular["DT"]
+        angular = {rxn: np.sum(self.neutrons[rxn], (0, 2)) for rxn in rxns}
+        total = sum(angular.values())
         write_table(
             "angular_distribution.txt",
             "Neutron angular distribution (angle from the beam direction), integrated over "
@@ -1971,8 +2100,7 @@ class ShineSource:
                 "start of angle bin [deg]",
                 "end of angle bin [deg]",
                 "solid angle of the bin [sr]",
-                "DD neutrons [n/s]",
-                "DT neutrons [n/s]",
+                *columns,
                 "total neutrons [n/s]",
                 "total neutrons per steradian [n/s/sr]",
             ],
@@ -1980,8 +2108,7 @@ class ShineSource:
                 self.angle_grid_out[:-1],
                 self.angle_grid_out[1:],
                 self.solid_angles_out,
-                angular["DD"],
-                angular["DT"],
+                *(angular[rxn] for rxn in rxns),
                 total,
                 total / self.solid_angles_out,
             ],
@@ -1995,8 +2122,9 @@ class ShineSource:
         - neutron_position.png, neutron_position_log.png: neutrons per unit length along the
           beam, on linear and log scales.
         - neutron_angle.png: neutrons per steradian against emission angle.
-        - neutron_energy_angle_DD.png, neutron_energy_angle_DT.png (for the reactions
-          present): neutron energy against emission angle, coloured by intensity.
+        - neutron_energy_angle_<rxn>.png (for each reaction present, such as
+          neutron_energy_angle_DD.png): neutron energy against emission angle, coloured by
+          intensity.
         - neutron_energy.png, neutron_energy_log.png: the neutron energy spectrum,
           integrated over angle, on linear and log scales.
 
@@ -2090,11 +2218,11 @@ class ShineSource:
         scale, unit = self._position_units()
         x = self.x_grid_out * scale
         lines = [
-            (rxn, np.sum(self.neutrons[rxn], (1, 2)) / (self.dx_out * scale))
+            (self.reactions[rxn].label, np.sum(self.neutrons[rxn], (1, 2)) / (self.dx_out * scale))
             for rxn in self.reactions_present()
         ]
         if len(lines) > 1:
-            lines.append(("Total", lines[0][1] + lines[1][1]))
+            lines.append(("Total", sum(values for _, values in lines)))
 
         fig, ax = plt.subplots(figsize=(8, 6))
         for label, per_cm in lines:
@@ -2118,11 +2246,11 @@ class ShineSource:
         The y axis is not forced to start at zero, so that small anisotropies show.
         """
         lines = [
-            (rxn, np.sum(self.neutrons[rxn], (0, 2)) / self.solid_angles_out)
+            (self.reactions[rxn].label, np.sum(self.neutrons[rxn], (0, 2)) / self.solid_angles_out)
             for rxn in self.reactions_present()
         ]
         if len(lines) > 1:
-            lines.append(("Total", lines[0][1] + lines[1][1]))
+            lines.append(("Total", sum(values for _, values in lines)))
 
         fig, ax = plt.subplots(figsize=(8, 6))
         for label, per_sr in lines:
@@ -2145,9 +2273,10 @@ class ShineSource:
         empty cells are left blank.
 
         The spectrum is integrated over angle and drawn on linear and log scales (the log
-        one covers five decades below the peak). DD and DT are shown separately, since their
-        energies do not overlap, and each drops to zero at the ends of its energy range. The
-        axes follow the neutron energies, so the plots suit any beam energy.
+        one covers five decades below the peak). Each reaction is shown separately and drops
+        to zero at the ends of its energy range; if the ranges of some overlap (such as the
+        two 7Li(p,n) lines), their total is shown too. The axes follow the neutron energies,
+        so the plots suit any beam energy.
         """
         present = self.reactions_present()
         for rxn in present:
@@ -2168,18 +2297,25 @@ class ShineSource:
             ax.set_xticks(np.arange(0, 181, 30))
             ax.set_xlabel("Emission angle from the beam direction [degrees]")
             ax.set_ylabel("Neutron energy [MeV]")
-            ax.set_title(f"{rxn} neutron energy against emission angle ({self.name})")
+            label = self.reactions[rxn].label
+            ax.set_title(f"{label} neutron energy against emission angle ({self.name})")
             _save_figure(fig, os.path.join(directory, f"neutron_energy_angle_{rxn}.png"))
 
         energy_grid, on_common_grid = self.neutrons_by_angle_and_energy()
         peak = 0.0
         fig, ax = plt.subplots(figsize=(8, 6))
-        for rxn in present:
-            spectrum = np.sum(on_common_grid[rxn], 0) / self.energy_bin_width
-            # Draw each reaction over its own energy range, dropping to zero at both ends
+        spectra = {rxn: np.sum(on_common_grid[rxn], 0) / self.energy_bin_width for rxn in present}
+        lines = [(self.reactions[rxn].label, spectra[rxn], {}) for rxn in present]
+        overlap = np.sum([spectrum > 0 for spectrum in spectra.values()], 0)
+        if np.any(overlap > 1):
+            # Wide and grey, underneath the reactions, so that they stay visible
+            style = {"color": "0.75", "linewidth": 3}
+            lines.insert(0, ("Total", sum(spectra.values()), style))
+        for label, spectrum, style in lines:
+            # Draw each line over its own energy range, dropping to zero at both ends
             filled = np.flatnonzero(spectrum)
             lo, hi = filled[0], filled[-1] + 1
-            ax.stairs(spectrum[lo:hi], energy_grid[lo : hi + 1], baseline=0, label=rxn)
+            ax.stairs(spectrum[lo:hi], energy_grid[lo : hi + 1], baseline=0, label=label, **style)
             peak = max(peak, np.max(spectrum))
         ax.set_xlim(0, energy_grid[-1] + 0.05 * (energy_grid[-1] - energy_grid[0]))
         ax.set_ylim(0, 1.05 * peak)

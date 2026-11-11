@@ -16,6 +16,7 @@ import re
 import time
 import tomllib
 
+from .nuclear import BEAMS
 from .source import PHASES, SDEF_DIRECTIONS, STOPPING_POWERS, Material, Region, ShineSource
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ BEAM_SETTINGS = {
 
 # Optional case settings and their defaults
 OPTIONAL_CASE_SETTINGS = {
+    "beam": "d",  # Beam particle, see nuclear.BEAMS: "p", "d" or "t"
     # Beam energy at the backstop [keV]; give it to calculate the one region value left out
     "beam_energy_backstop": None,
     "direction": "-z",  # MCNP SDEF beam direction, see SDEF_DIRECTIONS
@@ -257,8 +259,10 @@ def load_input(path):
                 f"{where}: give one of current and yield_total (the other is calculated)"
             )
         _check_type(where, given[0], s[given[0]], float)
-        beam = {key: s[key] if key in given else None for key in BEAM_SETTINGS}
+        rate = {key: s[key] if key in given else None for key in BEAM_SETTINGS}
 
+        if s["beam"] not in BEAMS:
+            raise InputError(f"{where}: beam must be one of {', '.join(BEAMS)}, got {s['beam']!r}")
         if s["beam_energy_backstop"] is not None:
             _check_type(where, "beam_energy_backstop", s["beam_energy_backstop"], float)
         if s["direction"] not in SDEF_DIRECTIONS:
@@ -291,9 +295,10 @@ def load_input(path):
         resolved[name] = {
             "source": {
                 "regions": regions,
+                "beam": s["beam"],
                 "voltage": s["voltage"],
-                "current": beam["current"],
-                "yield_total": beam["yield_total"],
+                "current": rate["current"],
+                "yield_total": rate["yield_total"],
                 "start_radius": s["start_radius"],
                 "angle_step": s["angle_step"],
                 "angle_step_out": s["angle_step_out"],
@@ -334,7 +339,8 @@ def run_case(name, settings, output_dir="output", input_file=None):
     else:
         beam = f"{s['current']:g} mA"
     logger.debug(
-        f"{name}: starting: {s['voltage']:g} kV, {beam}, {len(s['regions'])} region(s), "
+        f"{name}: starting: {BEAMS[s['beam']].description} beam, {s['voltage']:g} kV, {beam}, "
+        f"{len(s['regions'])} region(s), "
         f"last {s['regions'][-1].material.name}, stopping power {s['stopping_power']}"
     )
     source = ShineSource(name=name, **s)
