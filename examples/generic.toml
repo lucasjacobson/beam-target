@@ -42,6 +42,11 @@ backstop_position = [0.0, 0.0, 0.0]  # cm
 
 # Physics
 stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
+# Nuclear-data libraries, searched in order for each target isotope: "drosg" (the built-in
+# D(d,n), T(d,n), T(p,n) and 7Li(p,n) reactions) and directories of evaluated files, such as
+# ["drosg", "C:/data/ENDF-B-VIII.1", "C:/data/FENDL-3.2c", "C:/data/TENDL-2025"]
+# (see src/shine_neutron_source/data/README.md); relative directories are from this file's
+nuclear_data = ["drosg"]
 
 # --- Materials -------------------------------------------------------------------------------
 # A gas gives its molecules (mole fractions): its pressure counts molecules, so H2O vapour,
@@ -75,6 +80,11 @@ atoms   = { Ti = 1.0, D = 1.5 }
 phase   = "solid"
 density = 0.534  # g/cm3
 atoms   = { Li = 1.0 }  # Natural lithium
+
+[materials.Be]
+phase   = "solid"
+density = 1.848  # g/cm3
+atoms   = { Be = 1.0 }
 
 # --- Regions ---------------------------------------------------------------------------------
 
@@ -185,6 +195,15 @@ regions = ["Li_film"]
 [cases.t_D2]
 beam    = "t"
 regions = [{ use = "chamber", material = "D2" }]
+
+# 18 MeV protons stopping in beryllium, from evaluated data: every 9Be(p,xn) channel, from
+# the ENDF/B-VIII.1 file kept with the tests (point nuclear_data at a full library instead)
+[cases.p_Be_thick]
+beam         = "p"
+voltage      = 18000.0  # kV
+current      = 0.1      # mA
+nuclear_data = ["drosg", "../tests/data/endf/ENDF-B-VIII.1"]
+regions      = [{ material = "Be", length = 0.5, wall_radius = 4.1783, num_x_bins = 500, num_x_bins_out = 50 }]
 
 # --- Physics -------------------------------------------------------------------------------
 

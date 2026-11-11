@@ -234,6 +234,58 @@ masses less the electrons' rest mass, plus their binding energy (see `nuclear_ma
 agree with the CODATA 2022 masses of the neutron, proton, deuteron, triton, helion and alpha
 particle to within 0.2 eV (the neutron differs most: AME2020 predates CODATA 2022).
 
+## Evaluated nuclear data libraries (`nuclear_data`)
+
+Beyond the DROSG two-body reactions, the code reads evaluated data files (ENDF-6 format) for
+any beam particle (p, d, t, ³He, α) on any target isotope, from libraries the user downloads:
+not shipped here, because they are large (TENDL alone is tens of GB). The `nuclear_data`
+setting lists the libraries to search, in order: `"drosg"` for the built-in reactions, and
+directories of evaluated files. For each target isotope, the first library with data for the
+beam on it is used, as MCNP searches its xsdir; an evaluation that ends below the beam energy
+is skipped. A recommended order, which keeps the DROSG results for D, T and ⁷Li and prefers
+evaluations based on measurements to model calculations:
+
+    nuclear_data = ["drosg", ".../ENDF-B-VIII.1", ".../FENDL-3.2c", ".../TENDL-2025"]
+
+Each library is recognised by its file names: ENDF/B (`p-004_Be_009.endf`), FENDL
+(`p_0409_4-Be-9.endf`) and TENDL (`p-Be009-mt.tendl`; with several TENDL variants of one file
+in a directory, the one with every channel explicit is used). The evaluation used for each
+reaction, from the file's header, is recorded in the summary (`[reactions.<rxn>]`), the HDF5
+file (the `data` attribute of `neutrons_<rxn>`) and the SDEF header.
+
+**What is calculated.** Every neutron-producing channel of the evaluation is merged into one
+reaction (`p9Be_xn` for p + ⁹Be). At each beam energy, each channel's cross section times its
+neutron yield gives the neutron production, and its energy-angle distribution, converted from
+the centre-of-mass frame to the lab with relativistic kinematics where needed, gives the
+spectrum on the output (angle, energy) mesh, exactly conserving the total. Supported
+representations (ENDF-102): LAW=1 (continuum: Kalbach-Mann, with the slope from the
+systematics or given; Legendre; isotropic), LAW=2 (two-body reactions to one level, Legendre or
+tabulated) and LAW=7 (lab-frame tables), with linear or unit-base interpolation between
+incident energies. The beam also loses particles to nuclear reactions (the non-elastic cross
+section) on its way; their power is deposited in the target.
+
+**Validation.** For beams stopping in thick beryllium, the neutrons per beam particle agree
+with MCNP's neutrons created by charged-particle reactions, using the same data, to within
+1 %: protons 10-70 MeV (ENDF/B), deuterons 18-70 MeV (FENDL-3.2c, lab-frame tables) and
+alphas 18-70 MeV (TENDL-2021). MCNP's tally of neutrons escaping the target is higher, as it
+includes the target's own (n,2n) multiplication: a source term must not, because the transport
+code models the target.
+
+**Not modelled.** Neutrons made by secondary charged particles (protons, deuterons and alphas
+emitted in reactions, which can react again), a few percent at most at 70 MeV in the cases
+above; and charged-particle elastic scattering, which deflects the beam slightly.
+
+**Choosing data.** The libraries can differ a lot for light targets. For p + ⁹Be, ENDF/B-VIII.1,
+FENDL-3.2c and TENDL-2021 hold the same evaluation (LANL, 1988; TENDL-2021 adopted it), but
+TENDL-2025's model calculation gives only 44-62 % of its neutrons between 10 and 70 MeV. TENDL
+is the only library for most targets and for tritons, ³He and alphas, so it is a fallback: check
+its header (the `data` recorded with each reaction) to see whether a file is an adopted
+evaluation or a model calculation. TENDL's files with every channel explicit can also lack
+channels (the code warns when they cover less than 99 % of the non-elastic cross section).
+For D(d,n), T(d,n), T(p,n) and ⁷Li(p,n), DROSG and ENDF/B-VIII.1 agree for T(d,n), differ by
+up to 2 % in the D(d,n) cross section and by up to a factor of several in the ⁷Li(p,n)
+angular distributions near threshold.
+
 ## Licensing
 
 The MIT License in the repository's `LICENSE` file covers this project's code and

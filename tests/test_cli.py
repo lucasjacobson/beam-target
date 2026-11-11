@@ -78,6 +78,7 @@ EXAMPLE_CASES = [
     "TiD_find_thickness",
     "p_Li_thin",
     "t_D2",
+    "p_Be_thick",
     "DT50_icru49",
     "DT50_beam_stops",
     "DT50_find_length",
@@ -128,6 +129,8 @@ def test_example_cases_show_their_features(example_sources):
     assert s["TiD_find_thickness"].beam_energy_grid[-1] == pytest.approx(100.0, rel=1e-6)
     assert s["p_Li_thin"].reactions_present() == ["p7Li_n0", "p7Li_n1"]
     assert s["t_D2"].reactions_present() == ["tD"]
+    assert s["p_Be_thick"].reactions_present() == ["p9Be_xn"]
+    assert s["p_Be_thick"].beam_energy_grid[-1] == 0  # The protons stop in the beryllium
     assert s["DT50_icru49"].stopping_power == "icru49"
     assert s["DT50_beam_stops"].beam_energy_grid[-1] == 0
     assert s["DT50_beam_stops"].backstop_power == 0
