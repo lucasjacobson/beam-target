@@ -53,6 +53,7 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt  # Must follow matplotlib.use
 from matplotlib.colors import LogNorm
 
+from .config import DROSG, resolve_nuclear_data
 from .endf import EndfReaction, find_evaluation
 from .nuclear import (
     BEAMS,
@@ -71,9 +72,6 @@ from .nuclear import (
 PACKAGE_NAME = "shine-neutron-source"
 logger = logging.getLogger(__name__)
 
-# Nuclear-data entry for the built-in DROSG-2000 two-body reactions (nuclear.REACTIONS); the
-# other entries of nuclear_data are directories of evaluated files (see endf.py)
-DROSG = "drosg"
 # Beam-energy step [relative, and at least the absolute value in MeV] of the grid on which
 # the spectra of evaluated (ENDF) reactions are calculated and then interpolated
 ENDF_ENERGY_STEP = (0.02, 0.005)
@@ -655,8 +653,9 @@ class ShineSource:
         beam: Beam particle, one of nuclear.BEAMS: "p", "d" (default), "t", "h" (3He) or
             "a" (alpha).
         nuclear_data: Nuclear-data libraries, searched in order: "drosg" (DROSG) for the
-            built-in two-body reactions, or directories of evaluated files. Default
-            ("drosg",).
+            built-in two-body reactions, names of libraries defined in the user's
+            configuration file, or directories of evaluated files (see config.py). None
+            (default) uses the configuration's [defaults] nuclear_data, or ["drosg"].
     """
 
     def __init__(
@@ -674,7 +673,7 @@ class ShineSource:
         beam_energy_backstop=None,
         yield_total=None,
         beam="d",
-        nuclear_data=(DROSG,),
+        nuclear_data=None,
     ):
         t0 = time.time()
 
@@ -691,9 +690,11 @@ class ShineSource:
         self.data_dir = DEFAULT_DATA_DIR if data_dir is None else str(data_dir)
         self.stopping_power = str(stopping_power)
         self.beam = str(beam)
-        if isinstance(nuclear_data, (str, os.PathLike)):
-            nuclear_data = [nuclear_data]
-        self.nuclear_data = [str(entry) for entry in nuclear_data]
+        # The entries as given (names or directories) and what each resolves to
+        try:
+            self.nuclear_data_given, self.nuclear_data = resolve_nuclear_data(nuclear_data)
+        except ValueError as e:
+            raise ValueError(f"{self.name}: {e}") from None
         self.beam_energy_backstop = (
             None if beam_energy_backstop is None else float(beam_energy_backstop)
         )
@@ -786,11 +787,6 @@ class ShineSource:
         )
         require(self.voltage > 0, "voltage must be positive")
         require(len(self.nuclear_data) > 0, "nuclear_data must list at least one library")
-        for entry in self.nuclear_data:
-            require(
-                entry == DROSG or os.path.isdir(entry),
-                f"nuclear_data entry {entry!r} is neither {DROSG!r} nor a directory",
-            )
         for r, material in enumerate(self.materials):
             where = self.region_label(r)
             given = {
@@ -1793,7 +1789,8 @@ class ShineSource:
                 ("angle_step_out", self.angle_step_out, "deg"),
                 ("energy_bin_width", self.energy_bin_width, "MeV"),
                 ("stopping_power", self.stopping_power, ""),
-                ("nuclear_data", self.nuclear_data, "libraries, searched in order"),
+                ("nuclear_data", self.nuclear_data_given, "libraries, searched in order"),
+                ("nuclear_data_dirs", self.nuclear_data, "where they were found"),
             ]
         )
 

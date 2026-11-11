@@ -247,6 +247,24 @@ evaluations based on measurements to model calculations:
 
     nuclear_data = ["drosg", ".../ENDF-B-VIII.1", ".../FENDL-3.2c", ".../TENDL-2025"]
 
+Where the libraries are belongs to the machine, not to a case, so define them once, by name,
+in your configuration file, `~/.shine-neutron-source.toml` (or the file named by the
+`SHINE_NEUTRON_SOURCE_CONFIG` environment variable), and name them in input files, which then
+work on any machine that defines the same names:
+
+    [libraries]
+    endfb81   = "C:/data/ENDF-B-VIII.1"
+    fendl32c  = "C:/data/FENDL-3.2c"
+    tendl2025 = "C:/data/TENDL-2025"
+
+    [defaults]
+    nuclear_data = ["drosg", "endfb81", "fendl32c", "tendl2025"]  # When a case sets none
+
+A `nuclear_data` entry is `"drosg"`, a name from `[libraries]`, or a directory (relative to
+the input file). Cases that do not set `nuclear_data` use the configuration's default, or
+`["drosg"]` without one. The summary records both the entries as given (`nuclear_data`) and
+the directories they resolved to (`nuclear_data_dirs`).
+
 Each library is recognised by its file names: ENDF/B (`p-004_Be_009.endf`), FENDL
 (`p_0409_4-Be-9.endf`) and TENDL (`p-Be009-mt.tendl`; with several TENDL variants of one file
 in a directory, the one with every channel explicit is used). The evaluation used for each

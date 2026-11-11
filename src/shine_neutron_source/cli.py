@@ -16,8 +16,9 @@ import re
 import time
 import tomllib
 
+from .config import DROSG, ConfigError, load_config, resolve_nuclear_data
 from .nuclear import BEAMS
-from .source import DROSG, PHASES, SDEF_DIRECTIONS, STOPPING_POWERS, Material, Region, ShineSource
+from .source import PHASES, SDEF_DIRECTIONS, STOPPING_POWERS, Material, Region, ShineSource
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +48,10 @@ OPTIONAL_CASE_SETTINGS = {
     "direction": "-z",  # MCNP SDEF beam direction, see SDEF_DIRECTIONS
     "stopping_power": "srim",  # Stopping-power set, see STOPPING_POWERS
     # Nuclear-data libraries, searched in order for each target isotope: "drosg" (the built-in
-    # two-body reactions) or directories of evaluated files (ENDF/B, FENDL, TENDL), relative
-    # to the input file's directory unless absolute
-    "nuclear_data": ["drosg"],
+    # two-body reactions), names of libraries defined in the user's configuration file (see
+    # config.py), or directories of evaluated files (relative to the input file's directory).
+    # None: the configuration's [defaults] nuclear_data, or ["drosg"].
+    "nuclear_data": None,
 }
 
 # MCNP SDEF placement: give at most one (with neither, the beam enters at the origin). If a
@@ -190,26 +192,28 @@ def _read_regions(where, items, named, materials):
     return regions
 
 
-def _read_nuclear_data(where, entries, input_path):
-    """Check a nuclear_data list and return it with relative directories resolved against
-    the input file's directory."""
+def _read_nuclear_data(where, entries, input_path, config):
+    """Check a nuclear_data list (None: the configuration's default) and return the entries
+    to give ShineSource: "drosg" and library names (from the configuration) as they are,
+    directories made absolute (relative ones are taken from the input file's directory)."""
+    if entries is None:
+        return None
     if isinstance(entries, str):
         entries = [entries]
     if not isinstance(entries, list) or not entries or not all(isinstance(e, str) for e in entries):
         raise InputError(
-            f'{where}: nuclear_data must be a list of "drosg" and directories, got {entries!r}'
+            f'{where}: nuclear_data must be a list of "drosg", library names and directories, '
+            f"got {entries!r}"
         )
     base = os.path.dirname(os.path.abspath(input_path))
-    resolved = []
-    for entry in entries:
-        if entry == DROSG:
-            resolved.append(entry)
-            continue
-        directory = entry if os.path.isabs(entry) else os.path.join(base, entry)
-        if not os.path.isdir(directory):
-            raise InputError(f"{where}: nuclear_data directory not found: {directory}")
-        resolved.append(os.path.normpath(directory))
-    return resolved
+    try:
+        _, directories = resolve_nuclear_data(entries, base_dir=base, config=config)
+    except ConfigError as e:
+        raise InputError(f"{where}: {e}") from None
+    return [
+        entry if entry == DROSG or entry in config["libraries"] else directory
+        for entry, directory in zip(entries, directories)
+    ]
 
 
 def load_input(path):
@@ -261,6 +265,10 @@ def load_input(path):
     if not cases:
         raise InputError(f"{path}: no [cases.<name>] tables")
 
+    try:
+        config = load_config()
+    except ConfigError as e:
+        raise InputError(str(e)) from None
     resolved = {}
     for name, case in cases.items():
         where = f"{path} [cases.{name}]"
@@ -318,7 +326,7 @@ def load_input(path):
                 f"{where}: stopping_power must be one of {', '.join(STOPPING_POWERS)}, "
                 f"got {s['stopping_power']!r}"
             )
-        nuclear_data = _read_nuclear_data(where, s["nuclear_data"], path)
+        nuclear_data = _read_nuclear_data(where, s["nuclear_data"], path, config)
         resolved[name] = {
             "source": {
                 "regions": regions,

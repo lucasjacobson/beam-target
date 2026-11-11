@@ -51,7 +51,7 @@ def thick_be(beam, energy_MeV, nuclear_data, length=1.0, num_x_bins=600, **kw):
         angle_step_out=10.0,
         energy_bin_width=0.1,
         beam=beam,
-        nuclear_data=[str(d) for d in nuclear_data],
+        nuclear_data=None if nuclear_data is None else [str(d) for d in nuclear_data],
         **kw,
     )
 
@@ -225,10 +225,77 @@ def test_input_file_nuclear_data(tmp_path):
     assert s.yield_total / s.particle_rate == pytest.approx(MCNP_PROTONS[18], rel=0.02)
 
     path.write_text(INPUT.replace("LIBRARY", "nowhere"))
-    with pytest.raises(ValueError, match="nuclear_data directory not found"):
+    with pytest.raises(ValueError, match="'nowhere' is not 'drosg', a library defined in"):
         load_input(path)
+    # Not set: left to the configuration's default (none here), which is DROSG alone
     path.write_text(INPUT.replace('nuclear_data = ["drosg", "LIBRARY"]\n', ""))
-    assert load_input(path)["p18"]["source"]["nuclear_data"] == ["drosg"]
+    source = load_input(path)["p18"]["source"]
+    assert source["nuclear_data"] is None
+    with pytest.raises(ValueError, match="no neutrons are produced"):  # DROSG has no 9Be
+        ShineSource(name="p18", **source)
+
+
+# --- The user's configuration file: named libraries ----------------------------------------
+
+
+def write_config(tmp_path, monkeypatch, text):
+    path = tmp_path / "config.toml"
+    path.write_text(text)
+    monkeypatch.setenv("SHINE_NEUTRON_SOURCE_CONFIG", str(path))
+    return path
+
+
+def test_named_libraries(tmp_path, monkeypatch):
+    """Input files name libraries defined in the configuration (relative directories there
+    are from the configuration file's directory); outputs record the names and directories;
+    the configuration's default list is used where a case sets none."""
+    data = tmp_path / "data"
+    data.mkdir()
+    relative = os.path.relpath(ENDFB, data).replace("\\", "/")
+    write_config(
+        data,
+        monkeypatch,
+        f'[libraries]\nendfb81 = "{relative}"\ntendl21 = "{TENDL21.as_posix()}"\n\n'
+        '[defaults]\nnuclear_data = ["drosg", "endfb81", "tendl21"]\n',
+    )
+    path = tmp_path / "input.toml"
+    path.write_text(INPUT.replace('"LIBRARY"', '"endfb81"'))
+    source = load_input(path)["p18"]["source"]
+    assert source["nuclear_data"] == ["drosg", "endfb81"]
+    s = ShineSource(name="p18", **source)
+    assert s.nuclear_data == ["drosg", os.path.normpath(str(ENDFB))]
+    summary = tomllib.loads(s.get_summary())["inputs"]
+    assert summary["nuclear_data"] == ["drosg", "endfb81"]
+    assert summary["nuclear_data_dirs"] == ["drosg", os.path.normpath(str(ENDFB))]
+    assert s.yield_total / s.particle_rate == pytest.approx(MCNP_PROTONS[18], rel=0.02)
+
+    # No nuclear_data in the case: the configuration's default list
+    path.write_text(INPUT.replace('nuclear_data = ["drosg", "LIBRARY"]\n', ""))
+    s = ShineSource(name="p18", **load_input(path)["p18"]["source"])
+    assert s.nuclear_data_given == ["drosg", "endfb81", "tendl21"]
+    assert "p9Be_xn" in s.reactions_present()
+
+
+def test_unknown_library_name(tmp_path, monkeypatch):
+    write_config(tmp_path, monkeypatch, f'[libraries]\nendfb81 = "{ENDFB.as_posix()}"\n')
+    with pytest.raises(ValueError, match=r"'fendl' is not 'drosg'.*\(defined: endfb81\)"):
+        thick_be("p", 18, ["drosg", "fendl"])
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        ("[library]\n", "unknown table"),
+        ('[libraries]\ndrosg = "x"\n', "cannot define 'drosg'"),
+        ("[libraries]\nendf = 3\n", "must be a directory"),
+        ('[defaults]\nnuclear_data = "drosg"\n', "must be a list"),
+        ('[defaults]\nbeam = "p"\n', "unknown setting"),
+    ],
+)
+def test_invalid_configuration(tmp_path, monkeypatch, text, message):
+    write_config(tmp_path, monkeypatch, text)
+    with pytest.raises(ValueError, match=message):
+        thick_be("p", 18, None)
 
 
 # --- Lab-frame tables (LAW=7), with a local FENDL library ----------------------------------

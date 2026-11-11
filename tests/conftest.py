@@ -10,6 +10,11 @@ from shine_neutron_source import Region, ShineSource
 from shine_neutron_source.source import DEFAULT_DATA_DIR, dt_gas
 
 REPO_DIR = Path(__file__).resolve().parents[1]
+
+# Ignore the user's own configuration file (their nuclear-data libraries), so the results do
+# not depend on the machine: point it at a file that does not exist. Set before any source is
+# made; tests of the configuration set it themselves (monkeypatch).
+os.environ["SHINE_NEUTRON_SOURCE_CONFIG"] = str(REPO_DIR / "tests" / "no-user-config.toml")
 EXAMPLE_INPUT = REPO_DIR / "examples" / "generic.toml"
 
 

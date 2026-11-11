@@ -43,9 +43,9 @@ backstop_position = [0.0, 0.0, 0.0]  # cm
 # Physics
 stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
 # Nuclear-data libraries, searched in order for each target isotope: "drosg" (the built-in
-# D(d,n), T(d,n), T(p,n) and 7Li(p,n) reactions) and directories of evaluated files, such as
-# ["drosg", "C:/data/ENDF-B-VIII.1", "C:/data/FENDL-3.2c", "C:/data/TENDL-2025"]
-# (see src/shine_neutron_source/data/README.md); relative directories are from this file's
+# D(d,n), T(d,n), T(p,n) and 7Li(p,n) reactions), names of libraries defined in your
+# ~/.shine-neutron-source.toml, such as ["drosg", "endfb81", "fendl32c", "tendl2025"], or
+# directories (relative to this file). See src/shine_neutron_source/data/README.md.
 nuclear_data = ["drosg"]
 
 # --- Materials -------------------------------------------------------------------------------
