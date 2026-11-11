@@ -15,7 +15,9 @@ import logging
 from .cli import InputError, load_input, main, run_case, setup_logging
 from .source import (
     Material,
+    Region,
     ShineSource,
+    dt_gas,
     get_atom_density,
     get_code_version,
     get_package_version,
@@ -29,8 +31,10 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 __all__ = [
     "InputError",
     "Material",
+    "Region",
     "ShineSource",
     "__version__",
+    "dt_gas",
     "get_atom_density",
     "get_code_version",
     "load_input",

@@ -5,63 +5,44 @@
 # Memory use is roughly 2.5 GB per case at the mesh below, so limit the number of cases run
 # in parallel with -j (the default is one per CPU). Run a single case with -c NAME.
 #
-# Settings in [defaults] apply to every case unless the case sets them itself. Every case
-# needs all of the settings below, either directly or from [defaults]. Here [defaults] holds
-# a 50/50 D/T gas target, and each case changes only what it demonstrates.
+# Each case lists the regions the beam passes through, in order, in regions = [...]: names
+# of [regions.<name>] tables, or inline tables. An inline table can start from a named region
+# with use = "<name>" and change some of its settings; setting = false leaves one of them
+# out. Each region holds a material from a [materials.<name>] table and has its own length,
+# wall radius, divergence and position mesh; a gas region also has its state, pressure with
+# temperature or density. The last region ends at the backstop.
 #
-# The target chamber holds the material named by material = "<name>", from a
-# [materials.<name>] table: a gas or a solid (such as a metal hydride); see [materials] below.
-# A gas region has a state, set in each case (never in [defaults]): pressure with
-# temperature, or density. For a gas target chamber, give two of its state, its length and
-# the beam energy at the backstop (beam_energy_backstop), and the third is calculated; with
-# no state given, a case with a temperature calculates its pressure and one without
-# calculates its density. A solid target chamber has no state and needs its length or
-# beam_energy_backstop.
-#
+# Leave exactly one value to be calculated: the beam energy at the backstop, or (giving
+# beam_energy_backstop) one region's length, pressure (keeping its temperature) or density.
 # Likewise give either the beam current or the total neutron yield (yield_total), and the
-# other is calculated. When [defaults] and a case together give too many, the ones the case
-# sets itself are used.
+# other is calculated.
 #
-# A case can put gas regions in front of the target chamber (for example differential-
-# pumping stages) by naming an [upstream.<name>] table; see [upstream.stages] below. If
-# [defaults] names one, a case can remove it with upstream = false.
+# Settings in [defaults] apply to every case unless the case sets them itself. Here they hold
+# a 50/50 D/T gas target chamber, and each case changes only what it demonstrates.
 
 [defaults]
-# Beam and target
-material     = "DT50"  # see [materials] below
-voltage      = 280.0   # kV
-current      = 50.0    # mA
-length       = 137.0   # cm, target chamber
-start_radius = 0.2     # cm, beam radius at entry
-wall_radius  = 4.1783  # cm, target chamber wall
-divergence   = 36.0    # mrad
+regions      = ["chamber"]
+voltage      = 280.0  # kV
+current      = 50.0   # mA
+start_radius = 0.2    # cm, beam radius where it enters the first region
 
-# Mesh
-num_x_bins       = 1370  # position bins in the target chamber, internal calculation
-num_x_bins_out   = 137   # position bins in the target chamber, output
+# Angle and energy mesh (the position mesh belongs to each region)
 angle_step       = 0.01  # deg, internal calculation
 angle_step_out   = 3.0   # deg, output (180 gives an isotropic source)
 energy_bin_width = 0.01  # MeV, width of the output neutron energy bins
 
 # MCNP SDEF card: where the source goes in the MCNP geometry
 direction      = "-z"             # beam direction: -x, +x, -y, +y, -z or +z
-entry_position = [0.0, 0.0, 0.0]  # cm, where the beam enters the first gas region
+entry_position = [0.0, 0.0, 0.0]  # cm, where the beam enters the first region
 
 # Physics
 stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
 
-# Two differential-pumping stages in front of the target chamber (illustrative values)
-[upstream.stages]
-material       = "DT50"        # gas in every stage (or a list, one per stage)
-pressure       = [0.05, 0.5]   # torr, one per stage, in beam order (or density, g/cm3)
-length         = [50.0, 50.0]  # cm
-num_x_bins     = 10            # optional (default 10): internal bins per stage
-num_x_bins_out = 1             # optional (default 1): output bins per stage
-divergence     = 0.0           # optional (default 0): mrad
+# --- Materials -------------------------------------------------------------------------------
+# A gas gives its molecules (mole fractions): its pressure counts molecules, so H2O vapour,
+# H2 + O2, and atomic H and O are different gases. A solid gives its atoms (atom ratios) and
+# its mass density. D, T and 3He are the isotopes.
 
-# Materials. A gas gives its molecules (mole fractions): its pressure counts molecules, so
-# H2O vapour, H2 + O2, and atomic H and O are different gases. A solid gives its atoms (atom
-# ratios) and its mass density. D, T and 3He are the isotopes.
 [materials.D2]
 phase     = "gas"
 molecules = { D2 = 1.0 }
@@ -75,111 +56,148 @@ phase     = "gas"
 molecules = { D2 = 0.5, T2 = 0.5 }  # DT molecules would give the same atoms
 
 # Illustrative values
+[materials.DT_argon]
+phase     = "gas"
+molecules = { D2 = 0.49, T2 = 0.49, Ar = 0.02 }
+
 [materials."TiD1.5"]
 phase   = "solid"
 density = 3.9  # g/cm3
 atoms   = { Ti = 1.0, D = 1.5 }
 
-[materials.DT_argon]
-phase     = "gas"
-molecules = { D2 = 0.49, T2 = 0.49, Ar = 0.02 }
+# --- Regions ---------------------------------------------------------------------------------
+
+# The target chamber: 50/50 D/T gas at 38 torr and 1800 degC
+[regions.chamber]
+material       = "DT50"
+length         = 137.0   # cm
+pressure       = 38.0    # torr
+temperature    = 1800.0  # degC
+wall_radius    = 4.1783  # cm; the beam outside it is scraped off
+divergence     = 36.0    # mrad
+num_x_bins     = 1370    # position bins, internal calculation
+num_x_bins_out = 137     # position bins, output
+
+# Two differential-pumping stages in front of the chamber (illustrative values)
+[regions.stage1]
+material       = "DT50"
+length         = 50.0
+pressure       = 0.05
+temperature    = 25.0
+wall_radius    = 1.0
+num_x_bins     = 10
+num_x_bins_out = 1
+
+[regions.stage2]
+material       = "DT50"
+length         = 50.0
+pressure       = 0.5
+temperature    = 25.0
+wall_radius    = 1.0
+num_x_bins     = 10
+num_x_bins_out = 1
+
+# A 1 cm aperture with a 2 cm radius inside the chamber gas (illustrative)
+[regions.aperture]
+material       = "DT50"
+length         = 1.0
+pressure       = 38.0
+temperature    = 1800.0
+wall_radius    = 2.0
+divergence     = 36.0
+num_x_bins     = 10
+num_x_bins_out = 1
+
+# A titanium deuteride film 5 micrometres thick. Divergence means nothing over micrometres,
+# so it is left at its default of 0 (a constant beam radius).
+[regions.TiD_film]
+material       = "TiD1.5"
+length         = 5e-4    # cm
+wall_radius    = 4.1783
+num_x_bins     = 1370
+num_x_bins_out = 137
 
 # --- Gas mixtures ----------------------------------------------------------------------------
 
 # Pure deuterium: DD neutrons only
 [cases.DD]
-material    = "D2"
-pressure    = 38.0    # torr
-temperature = 1800.0  # degC
+regions = [{ use = "chamber", material = "D2" }]
 
 # Pure tritium: DT neutrons only
 [cases.DT]
-material    = "T2"
-pressure    = 38.0
-temperature = 1800.0
+regions = [{ use = "chamber", material = "T2" }]
 
-# 50/50 D/T: the DT50_ cases below change one thing each
+# 50/50 D/T: everything from [defaults]. The DT50_ cases below change one thing each.
 [cases.DT50]
-pressure    = 38.0
-temperature = 1800.0
 
 # 50/50 D/T with 2 % argon (by molecule): same pressure, fewer D and T atoms, more stopping
 [cases.DT50_argon]
-material    = "DT_argon"
-pressure    = 38.0
-temperature = 1800.0
+regions = [{ use = "chamber", material = "DT_argon" }]
 
 # The same gas as DT50 given by its density (that of 38 torr at 1800 degC) instead of its
 # pressure and temperature: the same results
 [cases.DT50_by_density]
-density = 1.478437e-6  # g/cm3
+regions = [{ use = "chamber", pressure = false, temperature = false, density = 1.478437e-6 }]
 
 # --- Solid targets ---------------------------------------------------------------------------
 
-# A titanium deuteride target 5 micrometres thick: the beam stops in about 2 micrometres.
-# Divergence means nothing over micrometres, so it is 0 (a constant beam radius).
+# The beam stops in about 2 micrometres of the film
 [cases.TiD_thick]
-material   = "TiD1.5"
-length     = 5e-4  # cm
-current    = 1.0   # mA
-divergence = 0.0   # mrad
+regions = ["TiD_film"]
+current = 1.0  # mA
 
-# The TiD1.5 thickness that leaves the beam with 100 keV
+# The film thickness that leaves the beam with 100 keV
 [cases.TiD_find_thickness]
-material             = "TiD1.5"
+regions              = [{ use = "TiD_film", length = false }]
 beam_energy_backstop = 100.0  # keV
 current              = 1.0    # mA
-divergence           = 0.0    # mrad
 
 # --- Physics -------------------------------------------------------------------------------
 
 # ICRU 49 electronic stopping instead of SRIM
 [cases.DT50_icru49]
-pressure       = 38.0
-temperature    = 1800.0
 stopping_power = "icru49"
 
 # A denser target: the beam stops about 117 cm in, so no beam power reaches the backstop
 [cases.DT50_beam_stops]
-pressure    = 50.0  # torr
-temperature = 1800.0
+regions = [{ use = "chamber", pressure = 50.0 }]
 
 # --- Calculated settings -------------------------------------------------------------------
 
-# Calculate the target chamber length that leaves the beam with 30 keV at the backstop
+# Calculate the chamber length that leaves the beam with 30 keV at the backstop
 [cases.DT50_find_length]
-pressure             = 38.0
-temperature          = 1800.0
-beam_energy_backstop = 30.0   # keV
+regions              = [{ use = "chamber", length = false }]
+beam_energy_backstop = 30.0  # keV
 
 # Calculate the pressure instead (no pressure, but a temperature), for the same backstop
 # energy
 [cases.DT50_find_pressure]
-temperature          = 1800.0
-length               = 137.0  # cm
-beam_energy_backstop = 30.0   # keV
+regions              = [{ use = "chamber", pressure = false }]
+beam_energy_backstop = 30.0  # keV
 
 # Calculate the beam current that gives a total neutron yield of 1e13 n/s
 [cases.DT50_find_current]
-pressure    = 38.0
-temperature = 1800.0
 yield_total = 1e13  # n/s
 
 # --- Geometry and MCNP output ----------------------------------------------------------------
 
-# Upstream pumping stages (at this case's temperature), with the beam travelling along +x
-# from x = -100 cm
+# Pumping stages in front of the chamber, with the beam travelling along +x from x = -100 cm
 [cases.DT50_upstream]
-pressure       = 38.0
-temperature    = 1800.0
-upstream       = "stages"
+regions        = ["stage1", "stage2", "chamber"]
 direction      = "+x"
 entry_position = [-100.0, 0.0, 0.0]  # cm
+
+# A narrower aperture halfway along the chamber scrapes the beam there (each region has its
+# own wall radius)
+[cases.DT50_aperture]
+regions = [
+    { use = "chamber", length = 68.0, num_x_bins = 680, num_x_bins_out = 68 },
+    "aperture",
+    { use = "chamber", length = 68.0, num_x_bins = 680, num_x_bins_out = 68 },
+]
 
 # No divergence (a constant beam radius, so no scraping) and one output angle bin (an
 # isotropic source)
 [cases.DT50_isotropic]
-pressure       = 38.0
-temperature    = 1800.0
-divergence     = 0.0    # mrad
+regions        = [{ use = "chamber", divergence = 0.0 }]
 angle_step_out = 180.0  # deg

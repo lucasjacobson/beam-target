@@ -10,8 +10,8 @@ from conftest import EXAMPLE_INPUT
 
 from shine_neutron_source import InputError, ShineSource, load_input, main
 
-# Settings for a small, fast case; the tests below add cases and tables to these. The
-# materials come first, so that text added to BASE goes into [defaults].
+# Settings for a small, fast case; the tests below add cases and tables to these. [defaults]
+# comes last, so that text added to BASE goes into it.
 BASE = """
 [materials.D2]
 phase = "gas"
@@ -21,19 +21,38 @@ molecules = { D2 = 1 }
 phase = "gas"
 molecules = { D2 = 0.5, T2 = 0.5 }
 
-[defaults]
+[materials."TiD1.5"]
+phase = "solid"
+density = 3.9
+atoms = { Ti = 1, D = 1.5 }
+
+[regions.gas]
+material = "DT50"
+length = 50.0
+pressure = 5.0
+temperature = 25.0
+wall_radius = 1.0
+divergence = 30.0
 num_x_bins = 20
 num_x_bins_out = 10
+
+[regions.stage]
+material = "DT50"
+length = 10.0
+pressure = 1e-3
+temperature = 25.0
+wall_radius = 0.5
+num_x_bins = 4
+num_x_bins_out = 1
+
+[defaults]
+regions = ["gas"]
 angle_step = 1.0
 angle_step_out = 10.0
 energy_bin_width = 0.01
-material = "DT50"
 voltage = 280.0
 current = 10.0
-length = 50.0
 start_radius = 0.2
-wall_radius = 1.0
-divergence = 30.0
 """
 
 
@@ -43,8 +62,11 @@ def write_input(tmp_path, text, name="input.toml"):
     return path
 
 
-# --- load_input ------------------------------------------------------------------------------
+def regions_of(path, case="a"):
+    return load_input(path)[case]["source"]["regions"]
 
+
+# --- The example input -----------------------------------------------------------------------
 
 EXAMPLE_CASES = [
     "DD",
@@ -60,6 +82,7 @@ EXAMPLE_CASES = [
     "DT50_find_pressure",
     "DT50_find_current",
     "DT50_upstream",
+    "DT50_aperture",
     "DT50_isotropic",
 ]
 
@@ -69,26 +92,22 @@ def test_example_input():
     assert list(cases) == EXAMPLE_CASES
     dd = cases["DD"]
     assert dd["direction"] == "-z"
-    assert [m.name for m in dd["source"]["material"]] == ["D2"]
     assert dd["source"]["stopping_power"] == "srim"
-    assert dd["source"]["num_x_bins"] == [1370]
     assert dd["source"]["angle_step"] == 0.01
+    (chamber,) = dd["source"]["regions"]
+    assert chamber.name == "chamber" and chamber.material.name == "D2"
+    assert chamber.num_x_bins == 1370 and chamber.pressure == 38.0
 
 
 @pytest.fixture(scope="module")
 def example_sources():
-    """Every example case, run on a coarse mesh (1 degree, 137 bins in the target chamber)."""
+    """Every example case, run on a coarse mesh (1 degree, one internal bin per output bin)."""
     sources = {}
     for name, settings in load_input(EXAMPLE_INPUT).items():
         s = settings["source"]
-        regions = len(s["pressure"])
-        s = {
-            **s,
-            "angle_step": 1.0,
-            "num_x_bins": [10] * (regions - 1) + [137],
-            "num_x_bins_out": [1] * (regions - 1) + [137],
-        }
-        sources[name] = ShineSource(name=name, **s)
+        for region in s["regions"]:
+            region.num_x_bins = region.num_x_bins_out
+        sources[name] = ShineSource(name=name, **{**s, "angle_step": 1.0})
     return sources
 
 
@@ -99,6 +118,7 @@ def test_example_cases_show_their_features(example_sources):
     assert s["DT"].yields["DD"] == 0 and s["DT"].yields["DT"] > 0
     assert s["DT50_argon"].materials[0].atom_fractions["Ar"] > 0
     assert s["DT50_argon"].yield_total < s["DT50"].yield_total
+    assert s["DT50_by_density"].yield_total == pytest.approx(s["DT50"].yield_total, rel=1e-5)
     assert s["TiD_thick"].materials[0].phase == "solid"
     assert s["TiD_thick"].beam_energy_grid[-1] == 0 and s["TiD_thick"].reactions_present() == ["DD"]
     assert s["TiD_find_thickness"].calculated == "length"
@@ -106,8 +126,6 @@ def test_example_cases_show_their_features(example_sources):
     assert s["DT50_icru49"].stopping_power == "icru49"
     assert s["DT50_beam_stops"].beam_energy_grid[-1] == 0
     assert s["DT50_beam_stops"].backstop_power == 0
-    assert s["DT50_by_density"].density[0] == pytest.approx(1.478437e-6)
-    assert s["DT50_by_density"].yield_total == pytest.approx(s["DT50"].yield_total, rel=1e-5)
     assert s["DT50_find_length"].calculated == "length"
     assert s["DT50_find_length"].beam_energy_grid[-1] == pytest.approx(30.0, rel=1e-6)
     assert s["DT50_find_pressure"].calculated == "pressure"
@@ -115,6 +133,8 @@ def test_example_cases_show_their_features(example_sources):
     assert s["DT50_find_current"].current_calculated
     assert s["DT50_find_current"].yield_total == pytest.approx(1e13, rel=1e-9)
     assert s["DT50_upstream"].num_regions == 3
+    # The aperture scrapes more of the beam than the chamber wall alone
+    assert s["DT50_aperture"].current_grid[-1] < s["DT50"].current_grid[-1]
     assert s["DT50_isotropic"].wall_power == 0
     assert s["DT50_isotropic"].num_angle_bins_out == 1
     for name in ["DT50", "DT50_upstream", "DT50_isotropic"]:
@@ -122,278 +142,140 @@ def test_example_cases_show_their_features(example_sources):
         assert not s[name].current_calculated
 
 
-def test_defaults_and_overrides(tmp_path):
+# --- Regions ---------------------------------------------------------------------------------
+
+
+def test_regions_by_name_inline_and_use(tmp_path):
+    """Regions come from named tables, inline tables, or inline tables that use a named one;
+    false there leaves one of its settings out."""
     path = write_input(
         tmp_path,
         BASE
         + """
-[cases.a]
-pressure = 5.0
-temperature = 25.0
+[cases.named]
+regions = ["stage", "gas"]
 
-[cases.b]
-pressure = 5.0
-temperature = 25.0
-material = "D2"
-direction = "+x"
-stopping_power = "icru49"
+[cases.inline]
+regions = [{ material = "D2", length = 5.0, density = 1e-6, wall_radius = 2.0, num_x_bins = 4, num_x_bins_out = 2 }]
+
+[cases.use]
+regions = [{ use = "gas", material = "D2", length = false }]
+beam_energy_backstop = 200.0
+
+[cases.defaults]
 """,
     )
-    cases = load_input(path)
-    assert cases["a"]["source"]["material"][0].name == "DT50"
-    assert cases["a"]["direction"] == "-z"  # Built-in default
-    assert cases["a"]["source"]["stopping_power"] == "srim"  # Built-in default
-    assert cases["b"]["source"]["material"][0].name == "D2"
-    assert cases["b"]["direction"] == "+x"
-    assert cases["b"]["source"]["stopping_power"] == "icru49"
-
-
-MATERIALS = """
-[materials."TiD1.5"]
-phase = "solid"
-density = 3.9
-atoms = { Ti = 1, D = 1.5 }
-
-[materials.D2Ar]
-phase = "gas"
-molecules = { D2 = 0.98, Ar = 0.02 }
-"""
-
-
-def test_materials(tmp_path):
-    """A solid target chamber takes no pressure, temperature or density: values from
-    [defaults] are ignored. A gas keeps the pressure and temperature, or takes a density."""
-    path = write_input(
-        tmp_path,
-        BASE
-        + MATERIALS
-        + """
-[cases.solid]
-material = "TiD1.5"
-length = 5e-4
-
-[cases.solid_find_thickness]
-material = "TiD1.5"
-beam_energy_backstop = 100.0
-
-[cases.gas_mix]
-material = "D2Ar"
-pressure = 5.0
-temperature = 25.0
-
-[cases.gas_by_density]
-density = 1e-6
-""",
+    cases = {name: c["source"]["regions"] for name, c in load_input(path).items()}
+    stage, gas = cases["named"]
+    assert (stage.name, stage.pressure, stage.wall_radius, stage.divergence) == (
+        "stage",
+        1e-3,
+        0.5,
+        0.0,
     )
-    cases = {name: c["source"] for name, c in load_input(path).items()}
-    solid = cases["solid"]
-    assert solid["material"][0].name == "TiD1.5" and solid["material"][0].density == 3.9
-    assert solid["pressure"] == [None] and solid["temperature"] == [None]
-    assert solid["density"] == [None] and solid["length"] == [5e-4]
-    assert cases["solid_find_thickness"]["length"] == [None]  # Length from [defaults] ignored
-    gas = cases["gas_mix"]
-    assert gas["material"][0].phase == "gas" and gas["temperature"] == [25.0]
-    by_density = cases["gas_by_density"]  # Replaces the pressure from [defaults]
-    assert by_density["density"] == [1e-6] and by_density["pressure"] == [None]
-    assert by_density["temperature"] == [None]
-
-
-def test_material_in_upstream_stages(tmp_path):
-    path = write_input(
-        tmp_path,
-        BASE
-        + MATERIALS
-        + """
-[upstream.stages]
-pressure = [1e-3, 1e-2]
-length = [10.0, 20.0]
-material = ["D2Ar", "D2Ar"]
-
-[cases.a]
-material = "TiD1.5"
-upstream = "stages"
-temperature = 25.0
-length = 5e-4
-""",
-    )
-    source = load_input(path)["a"]["source"]
-    assert [m.name for m in source["material"]] == ["D2Ar", "D2Ar", "TiD1.5"]
-    assert source["pressure"] == [1e-3, 1e-2, None]
-    assert source["temperature"] == [25.0, 25.0, None]
+    assert gas.name == "gas" and gas.material.name == "DT50" and gas.divergence == 30.0
+    (inline,) = cases["inline"]
+    assert inline.name == "" and inline.density == 1e-6 and inline.pressure is None
+    (used,) = cases["use"]
+    assert used.name == "gas" and used.material.name == "D2" and used.length is None
+    assert used.pressure == 5.0  # Everything else from the named region
+    assert [r.name for r in cases["defaults"]] == ["gas"]
 
 
 @pytest.mark.parametrize(
-    "extra, message",
+    "case, message",
     [
-        (
-            '[cases.a]\nmaterial = "TiD1.5"\npressure = 5.0\ntemperature = 25.0\n',
-            "pressure does not apply",
-        ),
-        ('[cases.a]\nmaterial = "TiD1.5"\ndensity = 1.0\n', "density does not apply"),
-        ('[cases.a]\nmaterial = "TiD1.5"\ntemperature = 20.0\n', "temperature does not apply"),
-        ("[cases.a]\ndensity = 1e-6\ntemperature = 20.0\n", "temperature goes with pressure"),
-        (
-            "[cases.a]\npressure = 5.0\ntemperature = 25.0\ndensity = 1e-6\n",
-            "give pressure or density, not both",
-        ),
-        (
-            "[cases.a]\nT_frac = 0.5\npressure = 5.0\ntemperature = 25.0\n",
-            r"unknown setting\(s\) T_frac",
-        ),
-        (
-            '[cases.a]\nmaterial = "nope"\npressure = 5.0\ntemperature = 25.0\n',
-            r"no \[materials.nope\] table",
-        ),
-        ("[cases.a]\nmaterial = 3\npressure = 5.0\ntemperature = 25.0\n", "material must be str"),
-        (
-            '[cases.a]\nmaterial = "TiD1.5"\nlength = 5e-4\nbeam_energy_backstop = 100.0\n',
-            "length, beam_energy_backstop are all set",
-        ),
-        (
-            '[upstream.u]\npressure = [1e-3]\nlength = [1.0]\nmaterial = "TiD1.5"\n'
-            "[cases.a]\npressure = 5.0\ntemperature = 25.0\n",
-            "is a solid; upstream stages hold gas",
-        ),
-        (
-            "[materials.m]\natoms = { D = 1 }\n[cases.a]\npressure = 5.0\ntemperature = 25.0\n",
-            "missing phase",
-        ),
-        (
-            '[materials.m]\nphase = "solid"\natoms = { Ti = 1 }\n[cases.a]\npressure = 5.0\ntemperature = 25.0\n',
-            "a solid needs a positive density",
-        ),
-        (
-            '[materials.m]\nphase = "gas"\nmolecules = { D2 = "a" }\n[cases.a]\npressure = 5.0\ntemperature = 25.0\n',
-            "molecules D2 must be float",
-        ),
-        (
-            '[materials.m]\nphase = "solid"\ndensity = 1.0\natoms = { d = 1 }\n'
-            "[cases.a]\npressure = 5.0\ntemperature = 25.0\n",
-            "cannot read the chemical formula",
-        ),
+        ('regions = ["nope"]', r"no \[regions.nope\] table"),
+        ('regions = [{ use = "nope" }]', r"use = 'nope': no \[regions.<name>\] table"),
+        ("regions = [3]", "each region is the name of"),
+        ("regions = []", "regions must list at least one region"),
+        ('regions = "gas"', "regions must be list"),
+        ('regions = [{ use = "gas", colour = "red" }]', r"unknown setting\(s\) colour"),
+        ('regions = [{ use = "gas", material = "nope" }]', r"no \[materials.nope\] table"),
+        ('regions = [{ use = "gas", length = "long" }]', "length must be float"),
+        ('regions = [{ use = "gas", density = false }]', "density must be float"),
+        ('regions = [{ material = "DT50", length = 1.0 }]', "missing wall_radius"),
     ],
     ids=[
-        "solid pressure",
-        "solid density",
-        "solid temperature",
-        "density temperature",
-        "pressure and density",
-        "T_frac",
+        "unknown name",
+        "unknown use",
+        "item type",
+        "empty",
+        "not a list",
+        "unknown setting",
         "unknown material",
-        "material type",
-        "solid too many",
-        "solid upstream",
-        "material phase",
-        "solid without density",
-        "composition type",
-        "formula",
+        "wrong type",
+        "false for a setting not in the named region",
+        "missing setting",
     ],
 )
-def test_invalid_materials_rejected(tmp_path, extra, message):
+def test_invalid_regions_rejected(tmp_path, case, message):
     with pytest.raises(InputError, match=message):
-        load_input(write_input(tmp_path, BASE + MATERIALS + extra))
+        load_input(write_input(tmp_path, BASE + f"\n[cases.a]\n{case}\n"))
 
 
-def test_upstream_false_overrides_defaults(tmp_path):
-    """upstream = false in a case removes the upstream stages set in [defaults]."""
+def test_named_region_checked_even_if_unused(tmp_path):
+    text = BASE + '\n[regions.bad]\nmaterial = "DT50"\n\n[cases.a]\n'
+    with pytest.raises(InputError, match=r"\[regions.bad\]: missing wall_radius"):
+        load_input(write_input(tmp_path, text))
+
+
+# --- Materials -------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "table, message",
+    [
+        ('phase = "gas"\natoms = { D = 1 }', "give a gas's composition as molecules"),
+        ('phase = "gas"\nmolecules = { D = 1 }', "D on its own is a lone atom"),
+        ('phase = "solid"\ndensity = 4.0\nmolecules = { TiD2 = 1 }', "give a solid's composition"),
+        ("atoms = { D = 1 }", "missing phase"),
+        ('phase = "solid"\natoms = { Ti = 1 }', "a solid needs a positive density"),
+        ('phase = "gas"\nmolecules = { D2 = "a" }', "molecules D2 must be float"),
+        ('phase = "solid"\ndensity = 1.0\natoms = { d = 1 }', "cannot read the chemical formula"),
+        ('phase = "plasma"\natoms = { D = 1 }', "phase must be one of"),
+    ],
+)
+def test_invalid_materials_rejected(tmp_path, table, message):
+    text = BASE + f"\n[materials.m]\n{table}\n\n[cases.a]\n"
+    with pytest.raises(InputError, match=message):
+        load_input(write_input(tmp_path, text))
+
+
+def test_solid_region(tmp_path):
     path = write_input(
         tmp_path,
         BASE
-        + """upstream = "stages"
-
-[upstream.stages]
-material = "DT50"
-pressure = [1e-3]
-length = [10.0]
-
-[cases.with_stages]
-pressure = 5.0
-temperature = 25.0
-
-[cases.without]
-pressure = 5.0
-temperature = 25.0
-upstream = false
+        + """
+[cases.a]
+regions = [{ material = "TiD1.5", length = 5e-4, wall_radius = 1.0, num_x_bins = 40, num_x_bins_out = 10 }]
 """,
+    )
+    (film,) = regions_of(path)
+    assert film.material.phase == "solid" and film.pressure is None and film.temperature is None
+
+
+# --- Case settings ---------------------------------------------------------------------------
+
+
+def test_defaults_and_overrides(tmp_path):
+    path = write_input(
+        tmp_path,
+        BASE + '\n[cases.a]\n\n[cases.b]\ndirection = "+x"\nstopping_power = "icru49"\n',
     )
     cases = load_input(path)
-    assert cases["with_stages"]["source"]["pressure"] == [1e-3, 5.0]
-    assert cases["without"]["source"]["pressure"] == [5.0]
-    assert cases["without"]["source"]["length"] == [50.0]
-
-
-@pytest.mark.parametrize("value", ["true", "3"])
-def test_upstream_invalid_value(tmp_path, value):
-    path = write_input(
-        tmp_path, BASE + f"\n[cases.a]\npressure = 5.0\ntemperature = 25.0\nupstream = {value}\n"
-    )
-    with pytest.raises(InputError, match="upstream must be the name of"):
-        load_input(path)
-
-
-def test_upstream_stages(tmp_path):
-    path = write_input(
-        tmp_path,
-        BASE
-        + """
-[upstream.stages]
-material = "DT50"
-pressure = [1e-3, 1e-2]
-length = [10.0, 20.0]
-num_x_bins = [4, 6]
-
-[cases.a]
-pressure = 5.0
-temperature = 25.0
-upstream = "stages"
-""",
-    )
-    source = load_input(path)["a"]["source"]
-    assert source["pressure"] == [1e-3, 1e-2, 5.0]
-    assert source["length"] == [10.0, 20.0, 50.0]
-    assert source["num_x_bins"] == [4, 6, 20]
-    assert source["num_x_bins_out"] == [1, 1, 10]  # Default: 1 per stage
-    assert source["divergence"] == [0.0, 0.0, 30.0]  # Default: 0 per stage
-    assert source["temperature"] == [25.0, 25.0, 25.0]
-
-
-def test_two_of_three_target_settings(tmp_path):
-    """A case gives two of pressure, length and beam_energy_backstop; the third is None and
-    is calculated. Two set in the case itself override a third from [defaults]."""
-    path = write_input(
-        tmp_path,
-        BASE
-        + """
-[cases.fixed_length]
-pressure = 5.0
-temperature = 25.0
-
-[cases.find_length]
-pressure = 5.0
-temperature = 25.0
-beam_energy_backstop = 100.0
-
-[cases.find_pressure]
-length = 20.0
-beam_energy_backstop = 100.0
-""",
-    )
-    cases = {name: c["source"] for name, c in load_input(path).items()}
-    assert cases["fixed_length"]["length"] == [50.0]
-    assert cases["fixed_length"]["beam_energy_backstop"] is None
-    assert cases["find_length"]["length"] == [None]  # Length from [defaults] is overridden
-    assert cases["find_length"]["beam_energy_backstop"] == 100.0
-    assert cases["find_pressure"]["pressure"] == [None]
-    assert cases["find_pressure"]["length"] == [20.0]
+    assert cases["a"]["direction"] == "-z"  # Built-in default
+    assert cases["a"]["source"]["stopping_power"] == "srim"  # Built-in default
+    assert cases["a"]["source"]["beam_energy_backstop"] is None
+    assert cases["b"]["direction"] == "+x"
+    assert cases["b"]["source"]["stopping_power"] == "icru49"
 
 
 def test_current_or_yield(tmp_path):
     """A case gives the current or the yield; one set in the case overrides the other from
     [defaults]."""
     path = write_input(
-        tmp_path,
-        BASE + "\n[cases.by_current]\npressure = 5.0\ntemperature = 25.0\n\n"
-        "[cases.by_yield]\npressure = 5.0\ntemperature = 25.0\nyield_total = 1e10\n",
+        tmp_path, BASE + "\n[cases.by_current]\n\n[cases.by_yield]\nyield_total = 1e10\n"
     )
     cases = {name: c["source"] for name, c in load_input(path).items()}
     assert cases["by_current"]["current"] == 10.0
@@ -405,84 +287,29 @@ def test_current_or_yield(tmp_path):
 @pytest.mark.parametrize(
     "extra, message",
     [
-        (
-            "[cases.a]\n",
-            r"give two of the gas state \(pressure with temperature, or density\).*got length",
-        ),
-        (
-            "[cases.a]\npressure = 5.0\ntemperature = 25.0\nlength = 9.0\nbeam_energy_backstop = 100.0\n",
-            "are all set",
-        ),
-        (
-            '[cases.a]\npressure = 5.0\ntemperature = 25.0\nbeam_energy_backstop = "low"\n',
-            "must be float",
-        ),
-        (
-            "[cases.a]\npressure = 5.0\ntemperature = 25.0\ncurrent = 5.0\nyield_total = 1e10\n",
-            "current, yield_total are all set",
-        ),
-        (
-            '[cases.a]\npressure = 5.0\ntemperature = 25.0\nyield_total = "many"\n',
-            "yield_total must be float",
-        ),
-        ("[cases.a]\npressure = 5.0\ntemperature = 25.0\nvoltge = 3\n", "unknown setting"),
-        ('[cases.a]\npressure = "high"\n', "pressure must be float"),
-        (
-            "[cases.a]\npressure = 5.0\ntemperature = 25.0\nnum_x_bins = 2.5\n",
-            "num_x_bins must be int",
-        ),
-        (
-            '[cases.a]\npressure = 5.0\ntemperature = 25.0\nupstream = "nope"\n',
-            r"no \[upstream.nope\] table",
-        ),
-        (
-            '[upstream.u]\nmaterial = "DT50"\npressure = [1e-3, 1e-2]\nlength = [10.0]\n'
-            '[cases.a]\npressure = 5.0\ntemperature = 25.0\nupstream = "u"\n',
-            "length has 1 entries, expected 2",
-        ),
-        (
-            "[upstream.u]\npressure = [1e-3]\nlength = [10.0]\n[cases.a]\npressure = 5.0\ntemperature = 25.0\n",
-            "missing material",
-        ),
-        (
-            '[upstream.u]\nmaterial = "DT50"\npressure = [1e-3]\ndensity = [1e-9]\n'
-            "length = [10.0]\n[cases.a]\npressure = 5.0\ntemperature = 25.0\n",
-            "give pressure or density for the stages",
-        ),
-        (
-            '[cases.a]\npressure = 5.0\ntemperature = 25.0\ndirection = "z"\n',
-            "direction must be one of",
-        ),
-        (
-            '[cases.a]\npressure = 5.0\ntemperature = 25.0\nstopping_power = "pstar"\n',
-            "stopping_power must be one of",
-        ),
-        (
-            "[cases.a]\npressure = 5.0\ntemperature = 25.0\nentry_position = [1.0, 2.0]\n",
-            "entry_position must be",
-        ),
-        (
-            '[cases.a]\npressure = 5.0\ntemperature = 25.0\nentry_position = [1, 2, "z"]\n',
-            "entry_position must be",
-        ),
-        ('[cases."a/b"]\npressure = 5.0\ntemperature = 25.0\n', "case names may only use"),
+        ("[cases.a]\ncurrent = 5.0\nyield_total = 1e10\n", "current and yield_total are both set"),
+        ('[cases.a]\nyield_total = "many"\n', "yield_total must be float"),
+        ('[cases.a]\nbeam_energy_backstop = "low"\n', "beam_energy_backstop must be float"),
+        ("[cases.a]\nvoltge = 3\n", "unknown setting"),
+        ("[cases.a]\npressure = 5.0\n", r"unknown setting\(s\) pressure"),
+        ('[cases.a]\nvoltage = "high"\n', "voltage must be float"),
+        ('[cases.a]\ndirection = "z"\n', "direction must be one of"),
+        ('[cases.a]\nstopping_power = "pstar"\n', "stopping_power must be one of"),
+        ("[cases.a]\nentry_position = [1.0, 2.0]\n", "entry_position must be"),
+        ('[cases.a]\nentry_position = [1, 2, "z"]\n', "entry_position must be"),
+        ('[cases."a/b"]\n', "case names may only use"),
         ("", r"no \[cases.<name>\] tables"),
-        ("[case.a]\npressure = 5.0\ntemperature = 25.0\n", "unknown table"),
+        ("[case.a]\n", "unknown table"),
+        ("[upstream.a]\n", "unknown table"),
         ("[cases.a\n", "Expected"),
     ],
     ids=[
-        "missing",
-        "all three target settings",
-        "backstop energy type",
         "current and yield",
         "yield type",
+        "backstop energy type",
         "misspelt",
+        "region setting in a case",
         "wrong type",
-        "float for int",
-        "unknown upstream",
-        "stage count",
-        "upstream material",
-        "upstream state",
         "direction",
         "stopping power",
         "entry position length",
@@ -490,6 +317,7 @@ def test_current_or_yield(tmp_path):
         "case name",
         "no cases",
         "unknown table",
+        "no more upstream tables",
         "TOML syntax",
     ],
 )
@@ -501,11 +329,7 @@ def test_invalid_input_rejected(tmp_path, extra, message):
 
 # --- Command line ----------------------------------------------------------------------------
 
-TWO_CASES = (
-    BASE
-    + "\n[cases.mix]\npressure = 5.0\ntemperature = 25.0\n\n"
-    + '[cases.pureD]\npressure = 5.0\ntemperature = 25.0\nmaterial = "D2"\n'
-)
+TWO_CASES = BASE + '\n[cases.mix]\n\n[cases.pureD]\nregions = [{ use = "gas", material = "D2" }]\n'
 
 
 def test_main_runs_cases(tmp_path):
@@ -525,11 +349,13 @@ def test_main_runs_cases(tmp_path):
         assert not (case_dir / "input.toml").exists()  # The summary records the inputs instead
         assert len(list((case_dir / "plots").glob("*.png"))) in (7, 8)
         with open(case_dir / "summary.toml", "rb") as f:
-            run = tomllib.load(f)["run"]
+            summary = tomllib.load(f)
+        run = summary["run"]
         assert run["name"] == case
         assert run["input_file"] == str(path)
         assert run["sdef_direction"] == "-z"
         assert run["sdef_entry_position"] == [0.0, 0.0, 0.0]  # Default
+        assert summary["inputs"]["region"] == ["gas"]
         assert re.search(r"^c input_file +=", (case_dir / "source.sdef").read_text(), re.M)
         with h5py.File(case_dir / "source.h5") as f:
             assert f.attrs["name"] == case
@@ -579,7 +405,7 @@ def test_main_verbose_messages(tmp_path, caplog):
     """With -v: also each case's settings and detailed results."""
     main([str(write_input(tmp_path, TWO_CASES)), "-o", str(tmp_path / "out"), "-j", "1", "-v"])
     text = "\n".join(r.getMessage() for r in caplog.records)
-    assert "mix: starting: 280 kV, 10 mA, 1 region(s), target DT50, stopping power srim" in text
+    assert "mix: starting: 280 kV, 10 mA, 1 region(s), last DT50, stopping power srim" in text
     for detail in ["beam energy at the end of the target", "DT neutron yield", "total neutron"]:
         assert f"mix: {detail}" in text
     assert "% lost to beam scraping" in text
@@ -587,34 +413,12 @@ def test_main_verbose_messages(tmp_path, caplog):
 
 @pytest.mark.parametrize(
     "args, message",
-    [(["-c", "nope"], "no case(s) named nope"), (["--list"], "give two of the gas state")],
+    [(["-c", "nope"], "no case(s) named nope"), (["--list"], "missing wall_radius")],
     ids=["unknown case", "bad input file"],
 )
 def test_main_errors(tmp_path, capsys, args, message):
-    text = TWO_CASES if "-c" in args else BASE + "[cases.a]\n"
+    text = TWO_CASES if "-c" in args else BASE + '\n[cases.a]\nregions = [{ material = "D2" }]\n'
     with pytest.raises(SystemExit) as exit_info:
         main([str(write_input(tmp_path, text))] + args)
     assert exit_info.value.code == 2
     assert message in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("key", ["pressure = 5.0", "temperature = 25.0", "density = 1e-6"])
-def test_gas_state_not_in_defaults(tmp_path, key):
-    """The gas state is set in each case, so what a case calculates is all in the case."""
-    text = BASE + key + "\n[cases.a]\npressure = 5.0\ntemperature = 25.0\n"
-    with pytest.raises(InputError, match="must be set in each case"):
-        load_input(write_input(tmp_path, text))
-
-
-@pytest.mark.parametrize(
-    "table, message",
-    [
-        ('phase = "gas"\natoms = { D = 1 }', "give a gas's composition as molecules"),
-        ('phase = "gas"\nmolecules = { D = 1 }', "D on its own is a lone atom"),
-        ('phase = "solid"\ndensity = 4.0\nmolecules = { TiD2 = 1 }', "give a solid's composition"),
-    ],
-)
-def test_material_composition_kind(tmp_path, table, message):
-    text = BASE + f"\n[materials.m]\n{table}\n[cases.a]\npressure = 5.0\ntemperature = 25.0\n"
-    with pytest.raises(InputError, match=message):
-        load_input(write_input(tmp_path, text))

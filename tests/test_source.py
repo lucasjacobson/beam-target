@@ -115,7 +115,7 @@ def test_calculate_pressure_or_length(calculated, stopping_power):
     assert s.yield_total == pytest.approx(forward.yield_total, rel=1e-8)
     inputs = {name: (value, units) for name, value, units in s.get_inputs()}
     assert inputs["beam_energy_backstop"] == (E_end, "keV, requested")
-    assert inputs[calculated][1].endswith("target chamber value calculated")
+    assert inputs[calculated][1].endswith("calculated for region 1")
     assert "beam_energy_backstop" not in [name for name, _, _ in forward.get_inputs()]
     assert forward.calculated == "beam_energy_backstop"
 
@@ -144,7 +144,7 @@ def test_target_chamber_needs_two_of_three():
         dict(pressure=None, length=None, beam_energy_backstop=100.0),  # Only one
         dict(pressure=None),  # Only length
     ]:
-        with pytest.raises(ValueError, match="give exactly two"):
+        with pytest.raises(ValueError, match="nothing is left|only one value can be"):
             make_source(**overrides)
 
 
@@ -164,7 +164,7 @@ def test_target_chamber_needs_two_of_three():
                 num_x_bins_out=[1, 10],
                 beam_energy_backstop=100.0,
             ),
-            "region 1 .* needs its pressure",
+            "only one value can be calculated.*the pressure of region 1",
         ),
         (
             dict(
@@ -176,7 +176,7 @@ def test_target_chamber_needs_two_of_three():
                 num_x_bins_out=[1, 10],
                 beam_energy_backstop=100.0,
             ),
-            "enters the target chamber with",
+            "even without region 2 .*the beam reaches the backstop with",
         ),
     ],
     ids=["at entry energy", "zero", "below the stopping table", "upstream missing", "upstream"],
@@ -296,7 +296,6 @@ def test_reference_results(T_frac, stopping_power):
         (dict(T_frac=1.5), "T_frac must be between 0 and 1"),
         (dict(current=0.0), "current must be positive"),
         (dict(pressure=[0.0]), "pressures must be positive"),
-        (dict(temperature=[25.0, 25.0]), "temperature has 2 entries"),
         (dict(angle_step_out=7.0), "angle_step_out must divide 180"),
         (dict(angle_step=4.0), "multiple of angle_step"),
         (dict(num_x_bins_out=[7]), "must divide num_x_bins"),
@@ -658,3 +657,63 @@ def test_plots_and_sdef_at_any_energy(tmp_path, overrides):
     source.get_mcnp_sdef()
     source.make_plots(tmp_path / "plots")
     assert len(list((tmp_path / "plots").glob("*.png"))) == 8
+
+
+# --- Regions: per-region walls and values calculated in any region ----------------------------
+
+TWO_REGIONS = dict(
+    pressure=[5.0, 5.0],
+    temperature=[25.0, 25.0],
+    length=[25.0, 25.0],
+    divergence=[30.0, 30.0],
+    num_x_bins=[20, 20],
+    num_x_bins_out=[5, 5],
+)
+
+
+def test_single_wall_scraping_formula(mixed_source):
+    """With one wall radius, the scraped fraction is the flat-beam 1 - (wall / r)^2."""
+    s = mixed_source
+    free = s.start_radius + np.append(0, np.cumsum(s.divergence_mids / 1000 * s.dx))
+    expected = np.clip(1 - (1.0 / free) ** 2, 0, None)
+    np.testing.assert_allclose(s.scrape_grid, expected, rtol=1e-12, atol=1e-15)
+    np.testing.assert_allclose(s.radius_grid, np.minimum(free, 1.0), rtol=1e-12)
+
+
+def test_narrow_aperture_scrapes():
+    """A narrow first region scrapes the beam; the wider region after it does not give the
+    scraped beam back."""
+    narrow = make_source(**TWO_REGIONS, wall_radius=[0.5, 1.0])
+    wide = make_source(**TWO_REGIONS, wall_radius=[1.0, 1.0])
+    assert np.all(np.diff(narrow.scrape_grid) >= 0)  # Scraping never goes back
+    assert narrow.scrape_grid[-1] > wide.scrape_grid[-1]
+    assert narrow.wall_power > wide.wall_power
+    # The beam left after the aperture: (0.5 / r)^2 at the end of the first region
+    r_end_first = 0.2 + 30e-3 * 25.0
+    i = narrow.num_x_bins[0]
+    assert narrow.scrape_grid[i] == pytest.approx(1 - (0.5 / r_end_first) ** 2, rel=1e-12)
+    # The beam edge is clipped to the aperture there, then grows from it
+    assert narrow.radius_grid[i] == pytest.approx(0.5, rel=1e-12)
+    assert narrow.radius_grid[-1] > 0.5
+
+
+def test_first_wall_must_hold_the_beam():
+    with pytest.raises(ValueError, match="the first region's wall_radius must not be smaller"):
+        make_source(**TWO_REGIONS, wall_radius=[0.1, 1.0])
+
+
+@pytest.mark.parametrize("quantity", ["length", "pressure"])
+def test_value_calculated_in_first_region(quantity):
+    """The one missing value can be in any region, not only the last."""
+    forward = make_source(**TWO_REGIONS)
+    values = {quantity: [None, TWO_REGIONS[quantity][1]]}
+    s = make_source(**{**TWO_REGIONS, **values}, beam_energy_backstop=forward.beam_energy_grid[-1])
+    assert (s.calculated, s.calculated_region) == (quantity, 0)
+    assert getattr(s, quantity)[0] == pytest.approx(TWO_REGIONS[quantity][0], rel=1e-8)
+    inputs = {name: units for name, _, units in s.get_inputs()}
+    assert inputs[quantity].endswith("calculated for region 1")
+
+
+def test_only_one_value_calculated():
+    with pytest.raises(ValueError, match="the length of region 1 .*the length of region 2"):
+        make_source(**{**TWO_REGIONS, "length": [None, None]}, beam_energy_backstop=150.0)

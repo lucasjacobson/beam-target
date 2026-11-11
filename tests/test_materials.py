@@ -192,7 +192,7 @@ def test_solid_outputs_record_material(tmp_path):
         (dict(pressure=[5.0]), "is a solid, so it takes no pressure"),
         (dict(temperature=[25.0]), "is a solid, so it takes no pressure, temperature or density"),
         (dict(stopping_power="icru49"), "icru49 is for hydrogen gas only"),
-        (dict(length=[None]), "give exactly one of the target chamber's length"),
+        (dict(length=[None]), "only one value can be calculated"),
     ],
 )
 def test_solid_rejects(overrides, message):
@@ -206,7 +206,7 @@ def test_unknown_element_rejected():
 
 
 def test_material_required():
-    with pytest.raises(ValueError, match="material must be a Material for each region"):
+    with pytest.raises(ValueError, match="every region needs a Material"):
         make_source(material=[None])
     with pytest.raises(ValueError, match="T_frac must be between 0 and 1"):
         dt_gas(1.5)
@@ -252,7 +252,7 @@ def test_gas_density_calculated():
         (dict(temperature=[None]), "a pressure needs a temperature"),
         (
             dict(pressure=[None], temperature=[None]),
-            "give exactly two of the target chamber's density",
+            "only one value can be calculated.*the density of region 1",
         ),
         (dict(density=[-1.0], pressure=[None], temperature=[None]), "densities must be positive"),
     ],

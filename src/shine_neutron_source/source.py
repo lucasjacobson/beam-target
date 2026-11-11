@@ -75,7 +75,7 @@ DIATOMIC_ELEMENTS = ("H", "D", "T", "N", "O", "F", "Cl", "Br", "I")
 SDEF_RADIUS_DECIMALS = 5
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
-HDF5_FORMAT_VERSION = 3
+HDF5_FORMAT_VERSION = 4
 
 # Error message when a case produces no neutrons
 NO_NEUTRONS = (
@@ -126,7 +126,7 @@ REACTION_TARGETS = {"DD": "D", "DT": "T"}
 # For "-z" the extent runs along +z and the position-dependent distributions are written
 # in reverse order instead of using AXS = 0 0 -1, which ADVANTG does not handle correctly.
 # As a result, for "-z" POS is the downstream (backstop) end of the source; for every other
-# direction POS is the point where the beam enters the first gas region. get_mcnp_sdef takes
+# direction POS is the point where the beam enters the first region. get_mcnp_sdef takes
 # the beam entry point for every direction and sets POS accordingly.
 SDEF_DIRECTIONS = {
     "-x": ("-1 0 0", "-1 0 0", False),
@@ -319,6 +319,69 @@ def dt_gas(T_frac, name="D/T gas"):
     if not 0 <= T_frac <= 1:
         raise ValueError(f"T_frac must be between 0 and 1, got {T_frac}")
     return Material(name, "gas", molecules={"D2": 1 - T_frac, "T2": T_frac})
+
+
+class Region:
+    """One region the beam passes through: a length of one material, inside a wall.
+
+    Args:
+        material: The Material filling the region.
+        length: Length along the beam [cm]; None to calculate it (see ShineSource).
+        pressure, temperature: For a gas given by pressure [torr] and temperature [degC].
+            None for a solid, or for a gas given by density. A gas with a temperature but no
+            pressure has its pressure calculated.
+        density: For a gas given by density instead [g/cm^3]. A gas with neither pressure,
+            temperature nor density has its density calculated.
+        wall_radius: Radius of the wall around the region [cm]; the part of the beam outside
+            it is scraped off.
+        divergence: Beam divergence in the region (growth in radius per unit length) [mrad].
+        num_x_bins: Number of position bins, internal mesh.
+        num_x_bins_out: Number of position bins, output mesh. Must divide num_x_bins.
+        name: Optional name, used in messages and outputs.
+    """
+
+    def __init__(
+        self,
+        material,
+        length=None,
+        *,
+        pressure=None,
+        temperature=None,
+        density=None,
+        wall_radius,
+        divergence=0.0,
+        num_x_bins,
+        num_x_bins_out,
+        name="",
+    ):
+        self.material = material
+        self.length = length
+        self.pressure = pressure
+        self.temperature = temperature
+        self.density = density
+        self.wall_radius = wall_radius
+        self.divergence = divergence
+        self.num_x_bins = num_x_bins
+        self.num_x_bins_out = num_x_bins_out
+        self.name = str(name)
+
+    def __repr__(self):
+        fields = ", ".join(
+            f"{key}={getattr(self, key)!r}"
+            for key in (
+                "length",
+                "pressure",
+                "temperature",
+                "density",
+                "wall_radius",
+                "divergence",
+                "num_x_bins",
+                "num_x_bins_out",
+                "name",
+            )
+            if getattr(self, key) is not None and getattr(self, key) != ""
+        )
+        return f"Region({getattr(self.material, 'name', self.material)!r}, {fields})"
 
 
 @functools.lru_cache(maxsize=4)
@@ -558,49 +621,27 @@ class ShineSource:
     values are logged at DEBUG level to the "shine_neutron_source" logger (silent unless
     logging is configured).
 
-    material, pressure, temperature, density, length, divergence, num_x_bins and
-    num_x_bins_out take one value per region, in the order the beam passes through them; a
-    scalar is treated as a single region. The last region is the target chamber (a gas, or a
-    solid target such as a metal hydride); earlier regions are normally upstream
-    differential-pumping stages.
-
-    Each region is filled with a Material. A gas region gives its state: pressure and
-    temperature (ideal gas), or density. A solid region gives none of these (None), since
-    its density is part of the material. Neutrons come from the deuterium (D(d,n)3He) and
-    tritium (T(d,n)4He) atoms; other atoms only slow the beam. dt_gas makes a D/T gas.
+    The beam passes through a list of regions (see Region), in order; the last one ends at
+    the backstop. Each region holds a Material: a gas, given by pressure and temperature or
+    by density, or a solid, whose density is part of the material. Neutrons come from the
+    deuterium (D(d,n)3He) and tritium (T(d,n)4He) atoms; other atoms only slow the beam.
+    dt_gas makes a D/T gas.
 
     Give either the beam current or the total neutron yield (yield_total), and the other is
     calculated: the yield is proportional to the current. Give None for the current to
     calculate it.
 
-    Of the target chamber's gas state (its pressure, or its density if it has no
-    temperature), its length and the beam energy at the backstop, give any two and the third
-    is calculated (see solve_target_chamber); for a solid target chamber, give its length or
-    the backstop energy. To calculate the pressure, density or length, give None as the
-    target chamber's value (the last entry, or the whole argument for a single region) and
-    set beam_energy_backstop. Every upstream region needs its length and, if it is a gas,
-    its state.
+    Leave exactly one value to be calculated: the beam energy at the backstop
+    (beam_energy_backstop None), or one region's length, gas pressure or gas density (None
+    there), which is then solved to give beam_energy_backstop (see solve_region).
 
     Args:
         name: Case name, used in output file names and titles.
-        material: The Material filling each region (one Material for a single region).
+        regions: The Regions the beam passes through, in order (one Region for a single one).
         voltage: Beam voltage [kV]. The beam starts with this energy in keV. At most
             MAX_VOLTAGE (40 MeV), the upper limit of the Legendre cross-section data.
         current: Beam current [mA]; None to calculate it from yield_total.
-        pressure: Gas pressure in each region [torr]; None for a solid region or a gas given
-            by density, or for the target chamber to calculate it.
-        temperature: Gas temperature in each region [degC]; None for a solid region or a gas
-            given by density.
-        length: Length of each region along the beam [cm]; None for the target chamber to
-            calculate it.
         start_radius: Beam radius where it enters the first region [cm].
-        wall_radius: Radius of the target chamber wall [cm]. Beam outside this radius is
-            scraped.
-        divergence: Beam divergence (growth in radius per unit length) in each
-            region [mrad].
-        num_x_bins: Number of position bins in each region, internal mesh.
-        num_x_bins_out: Number of position bins in each region, output mesh.
-            Must divide num_x_bins.
         angle_step: Width of the emission-angle bins of the internal mesh [deg].
         angle_step_out: Width of the emission-angle bins of the output mesh [deg]. Must
             divide 180 and be a multiple of angle_step. 180 gives an isotropic source.
@@ -609,29 +650,20 @@ class ShineSource:
             data directory next to this file.
         stopping_power: Stopping-power set, one of STOPPING_POWERS: "srim" (default) or
             "icru49". See read_stopping_power.
-        beam_energy_backstop: Beam energy wanted at the backstop, the end of the target
-            chamber [keV]; give it to calculate the target chamber's pressure, density or
-            length. None (default) calculates the beam energy from the others.
+        beam_energy_backstop: Beam energy wanted at the backstop, the end of the last region
+            [keV]; give it to calculate a region's pressure, density or length. None (default)
+            calculates the beam energy.
         yield_total: Total neutron yield wanted [n/s]; give it, with current None, to
             calculate the current. None (default) calculates the yield from the current.
-        density: Mass density of a gas in each region given by density instead of pressure
-            and temperature [g/cm^3]; None elsewhere (default: None everywhere).
     """
 
     def __init__(
         self,
         name,
-        material,
+        regions,
         voltage,
         current,
-        pressure,
-        temperature,
-        length,
         start_radius,
-        wall_radius,
-        divergence,
-        num_x_bins,
-        num_x_bins_out,
         angle_step,
         angle_step_out,
         energy_bin_width,
@@ -639,7 +671,6 @@ class ShineSource:
         stopping_power="srim",
         beam_energy_backstop=None,
         yield_total=None,
-        density=None,
     ):
         t0 = time.time()
 
@@ -649,15 +680,7 @@ class ShineSource:
         self.current = None if current is None else float(current)
         self.requested_yield_total = None if yield_total is None else float(yield_total)
         self.current_calculated = self.current is None
-        self.pressure = np.atleast_1d(np.array(pressure, dtype=float))
-        self.temperature = np.atleast_1d(np.array(temperature, dtype=float))
-        self.length = np.atleast_1d(np.array(length, dtype=float))
         self.start_radius = float(start_radius)
-        self.wall_radius = float(wall_radius)
-        self.divergence = np.atleast_1d(np.array(divergence, dtype=float))
-        # Bin counts are converted to int after check_input confirms they are whole numbers
-        self.num_x_bins = np.atleast_1d(np.array(num_x_bins, dtype=float))
-        self.num_x_bins_out = np.atleast_1d(np.array(num_x_bins_out, dtype=float))
         self.angle_step = float(angle_step)
         self.angle_step_out = float(angle_step_out)
         self.energy_bin_width = float(energy_bin_width)
@@ -667,32 +690,48 @@ class ShineSource:
             None if beam_energy_backstop is None else float(beam_energy_backstop)
         )
 
-        self.num_regions = len(self.length)
-        if isinstance(material, Material):
-            material = [material] * self.num_regions
-        self.materials = list(material)
-        if density is None:
-            density = [None] * self.num_regions
-        self.density = np.atleast_1d(np.array(density, dtype=float))
+        # Regions, as one array (or list) per property, in beam order (None is NaN)
+        self.regions = [regions] if isinstance(regions, Region) else list(regions)
+        if not self.regions or not all(isinstance(r, Region) for r in self.regions):
+            raise ValueError(f"{self.name}: regions must be a list of Region")
+        self.num_regions = len(self.regions)
+
+        def column(key):
+            return np.array(
+                [np.nan if getattr(r, key) is None else getattr(r, key) for r in self.regions],
+                dtype=float,
+            )
+
+        self.region_names = [r.name for r in self.regions]
+        self.materials = [r.material for r in self.regions]
+        self.length = column("length")
+        self.pressure = column("pressure")
+        self.temperature = column("temperature")
+        self.density = column("density")
+        self.wall_radius = column("wall_radius")
+        self.divergence = column("divergence")
+        # Bin counts are converted to int after check_input confirms they are whole numbers
+        self.num_x_bins = column("num_x_bins")
+        self.num_x_bins_out = column("num_x_bins_out")
         self.solid = np.array([getattr(m, "phase", None) == "solid" for m in self.materials])
         # A gas region with a temperature is given by pressure; without one, by density
-        self.by_pressure = ~self.solid & ~np.isnan(np.resize(self.temperature, self.num_regions))
+        self.by_pressure = ~self.solid & ~np.isnan(self.temperature)
 
-        # Which of the target chamber's gas state (pressure or density), its length and the
-        # backstop beam energy is calculated from the other two (a missing value is NaN here).
-        # A solid target chamber has no gas state.
-        state = "pressure" if self.by_pressure[-1] else "density"
-        state_missing = not self.solid[-1] and np.isnan(getattr(self, state)[-1])
-        unknown = [
-            name
-            for name, missing in [
-                (state, state_missing),
-                ("length", np.isnan(self.length[-1])),
-                ("beam_energy_backstop", self.beam_energy_backstop is None),
-            ]
-            if missing
-        ]
-        self.calculated = unknown[0] if len(unknown) == 1 else None
+        # The value to calculate: (quantity, region index), or ("beam_energy_backstop", None)
+        self.unknowns = []
+        for r in range(self.num_regions):
+            if not self.solid[r]:
+                if self.by_pressure[r] and np.isnan(self.pressure[r]):
+                    self.unknowns.append(("pressure", r))
+                elif np.all(np.isnan([self.temperature[r], self.pressure[r], self.density[r]])):
+                    self.unknowns.append(("density", r))
+            if np.isnan(self.length[r]):
+                self.unknowns.append(("length", r))
+        if self.beam_energy_backstop is None:
+            self.unknowns.append(("beam_energy_backstop", None))
+        self.calculated, self.calculated_region = (
+            self.unknowns[0] if len(self.unknowns) == 1 else (None, None)
+        )
 
         self.check_input()
         self.num_x_bins = self.num_x_bins.astype(int)
@@ -701,7 +740,7 @@ class ShineSource:
         self.read_stopping_power()
         self.read_cross_sections()
         if self.calculated != "beam_energy_backstop":
-            self.solve_target_chamber()
+            self.solve_region()
 
         self.setup_meshes()
         self.setup_regions()
@@ -726,26 +765,12 @@ class ShineSource:
             if not condition:
                 raise ValueError(f"{self.name}: {message}")
 
-        for attr in [
-            "pressure",
-            "temperature",
-            "density",
-            "divergence",
-            "num_x_bins",
-            "num_x_bins_out",
-            "materials",
-        ]:
-            require(
-                len(getattr(self, attr)) == self.num_regions,
-                f"{attr} has {len(getattr(self, attr))} entries, expected {self.num_regions}",
-            )
         require(
             all(isinstance(m, Material) for m in self.materials),
-            "material must be a Material for each region",
+            "every region needs a Material",
         )
-        last = self.num_regions - 1
         for r, material in enumerate(self.materials):
-            where = f"region {r + 1} ({material.name})"
+            where = self.region_label(r)
             given = {
                 key: not np.isnan(getattr(self, key)[r])
                 for key in ("pressure", "temperature", "density")
@@ -761,36 +786,26 @@ class ShineSource:
                     not given["density"],
                     f"{where}: give pressure and temperature, or density, not both",
                 )
-                require(
-                    given["pressure"] or r == last,  # The chamber's state: see below
-                    f"{where} needs its pressure (with its temperature), or its density",
-                )
             else:
                 require(
                     not given["pressure"],
                     f"{where}: a pressure needs a temperature (or give density instead)",
                 )
-                require(
-                    given["density"] or r == last,
-                    f"{where} needs its pressure and temperature, or its density",
-                )
+
+        def describe(unknown):
+            quantity, r = unknown
+            return quantity if r is None else f"the {quantity} of {self.region_label(r)}"
+
         require(
-            not np.any(np.isnan(self.length[:-1])),
-            "every region before the target chamber needs its length",
+            len(self.unknowns) > 0,
+            "nothing is left to calculate: leave out beam_energy_backstop, or one region's "
+            "length, pressure (keeping its temperature) or density",
         )
-        if self.solid[-1]:
-            require(
-                self.calculated is not None,
-                "give exactly one of the target chamber's length and beam_energy_backstop (it "
-                "is a solid); the other is calculated",
-            )
-        else:
-            state = "pressure" if self.by_pressure[-1] else "density"
-            require(
-                self.calculated is not None,
-                f"give exactly two of the target chamber's {state} and length and "
-                "beam_energy_backstop; the third is calculated",
-            )
+        require(
+            len(self.unknowns) == 1,
+            "only one value can be calculated, but these are missing: "
+            + "; ".join(describe(u) for u in self.unknowns),
+        )
         if self.beam_energy_backstop is not None:
             require(
                 0 < self.beam_energy_backstop < self.voltage,
@@ -820,10 +835,11 @@ class ShineSource:
         temperatures = self.temperature[~np.isnan(self.temperature)]
         require(np.all(temperatures > -273.15), "temperatures must be above 0 K")
         require(self.start_radius > 0, "start_radius must be positive")
-        require(self.wall_radius > 0, "wall_radius must be positive")
+        require(np.all(self.wall_radius > 0), "every region needs a positive wall_radius")
         require(
-            self.wall_radius >= self.start_radius,
-            "wall_radius must not be smaller than start_radius (the beam radius at entry)",
+            self.wall_radius[0] >= self.start_radius,
+            "the first region's wall_radius must not be smaller than start_radius (the beam "
+            "radius at entry)",
         )
         require(np.all(self.divergence >= 0), "divergences must not be negative")
         for attr in ["num_x_bins", "num_x_bins_out"]:
@@ -848,29 +864,31 @@ class ShineSource:
             "num_x_bins_out must divide num_x_bins in every region",
         )
 
-    def solve_target_chamber(self):
-        """Calculate the target chamber's pressure, density or length (whichever is None)
-        that gives beam_energy_backstop at the backstop.
+    def region_label(self, r):
+        """Return "region <n>" for region index r, with its name or material in brackets."""
+        name = self.region_names[r] or getattr(self.materials[r], "name", "")
+        return f"region {r + 1}" + (f" ({name})" if name else "")
 
-        The beam is slowed down through the upstream regions once, then through the target
-        chamber on its internal mesh (num_x_bins), exactly as the full calculation does, for
-        trial values. The backstop energy falls steadily as any of them grows, so the value is
-        bracketed by doubling and then found by bisection, to a relative precision of 1e-12.
-        The result replaces the NaN in self.pressure, self.density or self.length.
+    def solve_region(self):
+        """Calculate the one missing region value (self.calculated in region
+        self.calculated_region: its pressure, density or length) that gives
+        beam_energy_backstop at the backstop.
 
-        Raises ValueError if the beam is already at or below beam_energy_backstop when it
-        enters the target chamber, or if that energy cannot be reached because it is below
-        the bottom of the stopping-power table (where the beam is treated as stopped).
+        The beam is slowed down through the regions before that one once, then through the
+        rest on their internal meshes, exactly as the full calculation does, for trial values.
+        The backstop energy falls steadily as the value grows, so it is bracketed by doubling
+        and then found by bisection, to a relative precision of 1e-12. The result replaces the
+        NaN in self.pressure, self.density or self.length.
+
+        Raises ValueError if the backstop energy cannot be reached: if the beam is already at
+        or below it without the region at all, or if it is below the bottom of the
+        stopping-power table (where the beam is treated as stopped).
         """
         target = self.beam_energy_backstop
-        last = self.num_regions - 1
-        atom_density = self._atom_densities(self.pressure, self.density)  # NaN if unknown
-        E_in = self._slow_down_regions(self.voltage, range(last), atom_density, self.length)[-1]
-        if not E_in > target:
-            raise ValueError(
-                f"{self.name}: the beam enters the target chamber with {E_in:g} keV, not above "
-                f"beam_energy_backstop ({target:g} keV)"
-            )
+        k = self.calculated_region
+        rest = range(k, self.num_regions)
+        atom_density = self._atom_densities(self.pressure, self.density)  # NaN at k
+        E_in = self._slow_down_regions(self.voltage, range(k), atom_density, self.length)[-1]
 
         def backstop_energy(value):
             trial = {
@@ -878,9 +896,17 @@ class ShineSource:
                 "density": self.density.copy(),
                 "length": self.length.copy(),
             }
-            trial[self.calculated][last] = value
+            trial[self.calculated][k] = value
             atoms = self._atom_densities(trial["pressure"], trial["density"])
-            return self._slow_down_regions(E_in, [last], atoms, trial["length"])[-1]
+            return self._slow_down_regions(E_in, rest, atoms, trial["length"])[-1]
+
+        E_without = backstop_energy(0.0)
+        if not E_without > target:
+            raise ValueError(
+                f"{self.name}: even without {self.region_label(k)}, the beam reaches the "
+                f"backstop with {E_without:g} keV, not above beam_energy_backstop "
+                f"({target:g} keV)"
+            )
 
         # Bracket the value (torr, g/cm3 or cm), then bisect
         lo, hi = 0.0, 1.0
@@ -896,14 +922,14 @@ class ShineSource:
         if abs(backstop_energy(value) - target) > 1e-6 * target:
             raise ValueError(
                 f"{self.name}: cannot reach beam_energy_backstop = {target:g} keV: below about "
-                f"{self.stopping_per_region[last][0][0]:g} keV the beam is treated as stopped"
+                f"{self.stopping_per_region[k][0][0]:g} keV the beam is treated as stopped"
             )
 
-        getattr(self, self.calculated)[-1] = value
+        getattr(self, self.calculated)[k] = value
         units = {"pressure": "torr", "density": "g/cm3", "length": "cm"}[self.calculated]
         logger.debug(
-            f"{self.name}: target chamber {self.calculated} = {value:.6g} {units} for a beam "
-            f"energy of {target:g} keV at the backstop"
+            f"{self.name}: {self.region_label(k)} {self.calculated} = {value:.6g} {units} for "
+            f"a beam energy of {target:g} keV at the backstop"
         )
 
     def setup_regions(self):
@@ -1100,24 +1126,34 @@ class ShineSource:
     def calculate_scraping(self, use_atan=False):
         """Grow the beam radius with divergence and work out how much is scraped.
 
-        The beam profile is assumed flat, so the fraction scraped at radius r > wall_radius
-        is 1 - (wall_radius / r)^2. This is conservative. Divergence is used as
-        dr/dx = divergence / 1000 (small-angle approximation) unless use_atan is True.
+        The beam profile is assumed flat and to expand self-similarly: a particle at a
+        fraction f of the beam radius r stays at f r. It is scraped off where f r exceeds the
+        wall radius, so the fraction of the beam still left at a point is m^2, where m is the
+        smallest wall radius / r met so far along the path (at most 1). With one wall radius
+        and a growing beam this is (wall radius / r)^2, the usual flat-beam result; walls
+        that narrow and widen again (each region has its own) are handled the same way. This
+        is conservative. Divergence is used as dr/dx = divergence / 1000 (small-angle
+        approximation) unless use_atan is True.
 
-        Sets the beam radius [cm] and scrape fraction on the internal and output meshes.
-        Radii are capped at wall_radius after the scrape fraction is found.
+        Sets the beam edge radius (m r: the edge of the part left) [cm] and scrape fraction
+        on the internal and output meshes.
         """
         if use_atan:
             divergence_mids = np.arctan(self.divergence_mids / 1000)
         else:
             divergence_mids = self.divergence_mids / 1000
-        self.radius_grid = self.start_radius + np.append(0, np.cumsum(divergence_mids * self.dx))
+        free_radius = self.start_radius + np.append(0, np.cumsum(divergence_mids * self.dx))
 
-        self.scrape_grid = 1 - (self.wall_radius / self.radius_grid) ** 2
-        self.scrape_grid[self.scrape_grid < 0] = 0
+        # Wall radius at each grid point: that of the bin ending there, so that the beam
+        # scraped off by a narrower wall is scraped (and its power deposited) inside the
+        # region with that wall, starting one bin in
+        wall_mids = np.repeat(self.wall_radius, self.num_x_bins)
+        self.wall_grid = np.append(wall_mids[0], wall_mids)
+        kept = np.minimum.accumulate(np.minimum(1.0, self.wall_grid / free_radius))
+        self.scrape_grid = 1 - kept**2
         self.scrape_mids = (self.scrape_grid[:-1] + self.scrape_grid[1:]) / 2
 
-        self.radius_grid[self.radius_grid > self.wall_radius] = self.wall_radius
+        self.radius_grid = free_radius * kept
         rsq_mids = (self.radius_grid[:-1] ** 2 + self.radius_grid[1:] ** 2) / 2
         self.radius_mids = np.sqrt(rsq_mids)  # RMS radius in each bin
 
@@ -1338,13 +1374,18 @@ class ShineSource:
     def get_inputs(self):
         """Return the input parameters as a list of (name, value, units).
 
-        A calculated target chamber pressure or length is given as calculated, and its units
-        say so, as does a calculated current. beam_energy_backstop and yield_total are
+        A calculated region pressure, density or length is given as calculated, and its
+        units say so, as does a calculated current. The region values are lists, one entry
+        per region in beam order. beam_energy_backstop and yield_total are
         included only if they were given, and density only if some gas is given by density.
         material lists each region's material by name (see unique_materials).
         """
         calculated = {
-            name: ", target chamber value calculated" if self.calculated == name else ""
+            name: (
+                f", calculated for region {self.calculated_region + 1}"
+                if self.calculated == name
+                else ""
+            )
             for name in ("pressure", "density", "length")
         }
         unused = "; nan where unused" if not np.all(self.by_pressure) else ""
@@ -1365,6 +1406,7 @@ class ShineSource:
             ]
             + requested_yield
             + [
+                ("region", self.region_names, "per region: names (if any)"),
                 ("material", material_names, "per region; see [materials]"),
                 ("pressure", self.pressure, "torr" + calculated["pressure"] + unused),
                 ("temperature", self.temperature, "degC" + unused),
@@ -1497,7 +1539,7 @@ class ShineSource:
         Args:
             direction: Beam direction, one of SDEF_DIRECTIONS ("-x", "+x", ..., "+z").
             run_info: Optional extra entries for the summary's [run] section.
-            entry_position: Point where the beam enters the first gas region, (x, y, z) [cm].
+            entry_position: Point where the beam enters the first region, (x, y, z) [cm].
         """
         if direction not in SDEF_DIRECTIONS:
             raise ValueError(
@@ -1516,7 +1558,8 @@ class ShineSource:
         def point(p):
             return " ".join(f"{v + 0.0:.12g}" for v in p)  # + 0.0 turns -0.0 into 0
 
-        divergent = not np.all(self.divergence == 0)
+        # The radius varies along the beam if it diverges or a narrower wall scrapes it
+        divergent = np.ptp(self.radius_mids_out) > 0
         isotropic = self.angle_step_out == 180
         has_DD = "DD" in self.reactions_present()
         has_DT = "DT" in self.reactions_present()
@@ -1612,7 +1655,7 @@ class ShineSource:
                     s += f"  $ ({scraped * 100:.2f}% scraped)"
                 s += "\n"
         else:
-            s += f"  si3   0 {self.start_radius:.{SDEF_RADIUS_DECIMALS}f}\n"
+            s += f"  si3   0 {self.radius_mids_out[0]:.{SDEF_RADIUS_DECIMALS}f}\n"
         s += "c\n"
         s += dashed_line
 
@@ -1920,7 +1963,7 @@ class ShineSource:
         - neutron_energy.png, neutron_energy_log.png: the neutron energy spectrum,
           integrated over angle, on linear and log scales.
 
-        Position plots run from where the beam enters the first gas region, with dashed lines
+        Position plots run from where the beam enters the first region, with dashed lines
         at the boundaries between regions. File names do not include the case name, so use a
         separate directory per case.
         """
@@ -1969,9 +2012,12 @@ class ShineSource:
         ax_energy.set_ylim(bottom=0)
 
         ax_radius.plot(x, self.radius_grid_out, label="Beam edge")
-        ax_radius.axhline(self.wall_radius, color="k", linewidth=1.5, label="Wall")
+        region_edges = np.append(0, np.cumsum(self.length)) * scale
+        ax_radius.stairs(
+            self.wall_radius, region_edges, baseline=None, color="k", linewidth=1.5, label="Wall"
+        )
         ax_radius.set_ylabel("Radius [cm]")
-        ax_radius.set_ylim(0, 1.1 * self.wall_radius)
+        ax_radius.set_ylim(0, 1.1 * np.max(self.wall_radius))
         ax_radius.legend(loc="lower right")
 
         ax_current.plot(x, self.current_grid_out)

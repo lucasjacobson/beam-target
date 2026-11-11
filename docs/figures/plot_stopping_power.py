@@ -13,7 +13,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 from shine_neutron_source import ShineSource
-from shine_neutron_source.source import dt_gas
+from shine_neutron_source.source import Region, dt_gas
 
 plt.rcParams["font.family"] = "serif"
 plt.rcParams["mathtext.default"] = "regular"
@@ -22,10 +22,13 @@ plt.rcParams["mathtext.default"] = "regular"
 def stopping_per_atom(stopping_power):
     """Return (E [keV], stopping [eV/(1e15 atoms/cm^2)]) for deuterons in tritium."""
     # A minimal pure-tritium case; only its stopping-power table is used
-    source = ShineSource(
-        "plot", dt_gas(1.0), 280.0, 1.0, 10.0, 20.0, 1.0, 0.2, 4.0, 0.0, 2, 1, 90.0, 90.0, 0.5,
-        stopping_power=stopping_power,
+    region = Region(
+        dt_gas(1.0), 20.0, pressure=10.0, temperature=1.0, wall_radius=4.0, num_x_bins=2,
+        num_x_bins_out=1,
     )  # fmt: skip
+    source = ShineSource(
+        "plot", [region], 280.0, 1.0, 0.2, 90.0, 90.0, 0.5, stopping_power=stopping_power
+    )
     E, eps = source.stopping_per_region[0]
     return E, eps * 1e18  # keV cm^2 -> eV/(1e15 atoms/cm^2)
 
