@@ -31,9 +31,10 @@ angle_step       = 0.01  # deg, internal calculation
 angle_step_out   = 3.0   # deg, output (180 gives an isotropic source)
 energy_bin_width = 0.01  # MeV, width of the output neutron energy bins
 
-# MCNP SDEF card: where the source goes in the MCNP geometry
-direction      = "-z"             # beam direction: -x, +x, -y, +y, -z or +z
-entry_position = [0.0, 0.0, 0.0]  # cm, where the beam enters the first region
+# MCNP SDEF card: where the source goes in the MCNP geometry. With the beam along -z, the
+# beam enters at z = 137 cm (the chamber's length), so the backstop is at the origin.
+direction      = "-z"               # beam direction: -x, +x, -y, +y, -z or +z
+entry_position = [0.0, 0.0, 137.0]  # cm, where the beam enters the first region
 
 # Physics
 stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
@@ -143,10 +144,12 @@ regions = [{ use = "chamber", pressure = false, temperature = false, density = 1
 
 # The beam stops in about 2 micrometres of the film
 [cases.TiD_thick]
-regions = ["TiD_film"]
-current = 1.0  # mA
+regions        = ["TiD_film"]
+current        = 1.0                 # mA
+entry_position = [0.0, 0.0, 5e-4]   # cm: the backstop at the origin
 
-# The film thickness that leaves the beam with 100 keV
+# The film thickness that leaves the beam with 100 keV. The thickness is calculated, so the
+# entry position cannot put the backstop exactly at the origin; it is left at the default.
 [cases.TiD_find_thickness]
 regions              = [{ use = "TiD_film", length = false }]
 beam_energy_backstop = 100.0  # keV
@@ -164,7 +167,8 @@ regions = [{ use = "chamber", pressure = 50.0 }]
 
 # --- Calculated settings -------------------------------------------------------------------
 
-# Calculate the chamber length that leaves the beam with 30 keV at the backstop
+# Calculate the chamber length that leaves the beam with 30 keV at the backstop. The length is
+# calculated, so the backstop is not at the origin: the beam still enters at z = 137 cm.
 [cases.DT50_find_length]
 regions              = [{ use = "chamber", length = false }]
 beam_energy_backstop = 30.0  # keV

@@ -422,3 +422,17 @@ def test_main_errors(tmp_path, capsys, args, message):
         main([str(write_input(tmp_path, text))] + args)
     assert exit_info.value.code == 2
     assert message in capsys.readouterr().err
+
+
+def test_simple_example():
+    """examples/simple.toml, the smallest input file, holds one case that runs."""
+    cases = load_input(EXAMPLE_INPUT.with_name("simple.toml"))
+    assert list(cases) == ["DT90"]
+    s = cases["DT90"]["source"]
+    (chamber,) = s["regions"]
+    assert chamber.material.atom_fractions["T"] == pytest.approx(0.9)
+    assert chamber.pressure == 38.0 and s["current"] == 50.0
+    chamber.num_x_bins = chamber.num_x_bins_out  # A coarse mesh, for speed
+    source = ShineSource(name="DT90", **{**s, "angle_step": 1.0})
+    assert source.calculated == "beam_energy_backstop"
+    assert source.yields["DT"] > 10 * source.yields["DD"] > 0
