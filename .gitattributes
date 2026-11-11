@@ -3,3 +3,4 @@
 src/shine_neutron_source/data/*.koe -text
 src/shine_neutron_source/data/mass_1.mas20.txt -text
 src/shine_neutron_source/data/nist_isotopic_compositions.txt -text
+tests/data/endf/** -text

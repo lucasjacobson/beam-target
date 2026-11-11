@@ -17,12 +17,15 @@ available.
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
 from conftest import MAX_Z, assert_counts_match, assert_mean_matches, make_source
 
 from shine_neutron_source import Material
+
+ENDF_DIR = Path(__file__).parent / "data" / "endf" / "ENDF-B-VIII.1"
 
 mcnptools = pytest.importorskip("mcnptools")
 MCNP = os.environ.get("MCNP_EXE") or shutil.which("mcnp6")
@@ -90,6 +93,24 @@ CASES = {
     "triton_cone": (
         dict(beam="t", material=_gas("1H2"), voltage=3300.0, length=[1.0]),
         "-z", "backstop_position", (0.0, 0.0, 0.0),
+    ),
+    # 18 MeV protons stopping in beryllium, from evaluated data (ENDF/B-VIII.1): continuum
+    # spectra from 0 to 18 MeV, plus two-body lines
+    "p_Be_endf": (
+        dict(
+            beam="p",
+            material=Material("Be", "solid", atoms={"Be": 1}, density=1.848),
+            voltage=18000.0,
+            pressure=[None],
+            temperature=[None],
+            length=[0.5],
+            divergence=[0.0],
+            num_x_bins=[100],
+            num_x_bins_out=[10],
+            energy_bin_width=0.1,
+            nuclear_data=["drosg", str(ENDF_DIR)],
+        ),
+        "+x", "entry_position", (0.0, 0.0, 0.0),
     ),
 }  # fmt: skip
 
@@ -187,6 +208,8 @@ def test_radius_and_azimuth(sampled):
 
     for k in range(s.num_x_bins_total_out):
         in_bin = sampled["i"] == k
+        if not np.any(in_bin):  # No neutrons there (past where the beam stops, for example)
+            continue
         R = round(s.radius_mids_out[k], SDEF_RADIUS_DECIMALS)
         rho = sampled["rho"][in_bin]
         assert np.all(rho <= R * (1 + 1e-9)), f"{sampled['name']}: outside the beam radius"
@@ -244,4 +267,6 @@ def test_energy_does_not_depend_on_position(sampled):
     variance -= mean**2
     for k in range(s.num_x_bins_total_out):
         energies = sampled["E"][sampled["i"] == k]
+        if len(energies) == 0:  # No neutrons there (the axial check covers that)
+            continue
         assert_mean_matches(energies, mean, variance, f"{sampled['name']}: energy, bin {k}")
