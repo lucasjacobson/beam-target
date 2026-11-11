@@ -102,7 +102,13 @@ def test_abundance_table_complete():
 
 def test_reactions_per_beam():
     by_beam = {b: [k for k, r in REACTIONS.items() if r.beam == b] for b in BEAMS}
-    assert by_beam == {"p": ["pT", "p7Li_n0", "p7Li_n1"], "d": ["DD", "DT"], "t": ["tD", "tH"]}
+    assert by_beam == {
+        "p": ["pT", "p7Li_n0", "p7Li_n1"],
+        "d": ["DD", "DT"],
+        "t": ["tD", "tH"],
+        "h": [],  # 3He and alpha beams only have evaluated (ENDF) data
+        "a": [],
+    }
 
 
 @pytest.mark.parametrize(

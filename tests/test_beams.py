@@ -166,5 +166,5 @@ def test_proton_stopping_in_hydrogen_icru49():
 
 
 def test_unknown_beam_rejected():
-    with pytest.raises(ValueError, match="beam must be one of p, d, t"):
-        make_source(beam="a")
+    with pytest.raises(ValueError, match="beam must be one of p, d, t, h, a"):
+        make_source(beam="x")

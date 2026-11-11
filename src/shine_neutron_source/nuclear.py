@@ -179,6 +179,8 @@ BEAMS = {
     "p": Beam("p", "proton", 1, 1),
     "d": Beam("d", "deuteron", 1, 2),
     "t": Beam("t", "triton", 1, 3),
+    "h": Beam("h", "helion (3He)", 2, 3, charge=2),
+    "a": Beam("a", "alpha", 2, 4, charge=2),
 }
 
 # Particles in final states: (Z, A, excitation energy [MeV])
