@@ -31,10 +31,12 @@ angle_step       = 0.01  # deg, internal calculation
 angle_step_out   = 3.0   # deg, output (180 gives an isotropic source)
 energy_bin_width = 0.01  # MeV, width of the output neutron energy bins
 
-# MCNP SDEF card: where the source goes in the MCNP geometry. With the beam along -z, the
-# beam enters at z = 137 cm (the chamber's length), so the backstop is at the origin.
-direction      = "-z"               # beam direction: -x, +x, -y, +y, -z or +z
-entry_position = [0.0, 0.0, 137.0]  # cm, where the beam enters the first region
+# MCNP SDEF card: where the source goes in the MCNP geometry. Place it by where the beam
+# reaches the backstop (backstop_position) or where it enters the first region
+# (entry_position); a case may set either. Here the backstop is at the origin, whatever the
+# case's length (even a calculated one).
+direction         = "-z"             # beam direction: -x, +x, -y, +y, -z or +z
+backstop_position = [0.0, 0.0, 0.0]  # cm
 
 # Physics
 stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
@@ -144,12 +146,10 @@ regions = [{ use = "chamber", pressure = false, temperature = false, density = 1
 
 # The beam stops in about 2 micrometres of the film
 [cases.TiD_thick]
-regions        = ["TiD_film"]
-current        = 1.0                 # mA
-entry_position = [0.0, 0.0, 5e-4]   # cm: the backstop at the origin
+regions = ["TiD_film"]
+current = 1.0  # mA
 
-# The film thickness that leaves the beam with 100 keV. The thickness is calculated, so the
-# entry position cannot put the backstop exactly at the origin; it is left at the default.
+# The film thickness that leaves the beam with 100 keV
 [cases.TiD_find_thickness]
 regions              = [{ use = "TiD_film", length = false }]
 beam_energy_backstop = 100.0  # keV
@@ -167,8 +167,7 @@ regions = [{ use = "chamber", pressure = 50.0 }]
 
 # --- Calculated settings -------------------------------------------------------------------
 
-# Calculate the chamber length that leaves the beam with 30 keV at the backstop. The length is
-# calculated, so the backstop is not at the origin: the beam still enters at z = 137 cm.
+# Calculate the chamber length that leaves the beam with 30 keV at the backstop
 [cases.DT50_find_length]
 regions              = [{ use = "chamber", length = false }]
 beam_energy_backstop = 30.0  # keV
@@ -186,6 +185,7 @@ yield_total = 1e13  # n/s
 # --- Geometry and MCNP output ----------------------------------------------------------------
 
 # Pumping stages in front of the chamber, with the beam travelling along +x from x = -100 cm
+# (entry_position set in the case replaces backstop_position from [defaults])
 [cases.DT50_upstream]
 regions        = ["stage1", "stage2", "chamber"]
 direction      = "+x"

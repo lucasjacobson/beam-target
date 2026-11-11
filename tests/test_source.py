@@ -373,7 +373,11 @@ def test_sdef_file(mixed_source, tmp_path):
     dashed = "c " + "-" * 78 + "\n"
     block = text.split(dashed)[2]
     header = tomllib.loads("\n".join(line[2:] for line in block.splitlines()))
-    run = {"sdef_direction": "-z", "sdef_entry_position": [0.0, 0.0, 0.0]}
+    run = {
+        "sdef_direction": "-z",
+        "sdef_entry_position": [0.0, 0.0, 0.0],
+        "sdef_backstop_position": [0.0, 0.0, -50.0],  # 50 cm along -z from the entry
+    }
     summary = tomllib.loads(mixed_source.get_summary(run))
     assert header == summary
     assert header["run"]["sdef_direction"] == "-z"

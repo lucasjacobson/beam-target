@@ -1517,13 +1517,40 @@ class ShineSource:
             for rxn in ("DD", "DT"):
                 hf[f"neutrons_{rxn}"].attrs["dimensions"] = ["position", "angle", "energy"]
 
-    def get_mcnp_sdef(self, direction="-z", run_info=None, entry_position=(0.0, 0.0, 0.0)):
+    def sdef_positions(self, direction="-z", entry_position=None, backstop_position=None):
+        """Return (entry, backstop): the points [cm] where the beam enters the first region
+        and where it reaches the backstop, from one of them (the source's total length apart
+        along the beam direction). Give entry_position or backstop_position, not both; with
+        neither, the beam enters at the origin. backstop_position places the source by its
+        backstop end, which stays put even when a length is calculated.
+        """
+        if direction not in SDEF_DIRECTIONS:
+            raise ValueError(
+                f"direction must be one of {', '.join(SDEF_DIRECTIONS)}, got {direction!r}"
+            )
+        if entry_position is not None and backstop_position is not None:
+            raise ValueError("give entry_position or backstop_position, not both")
+        given = backstop_position if entry_position is None else entry_position
+        name = "entry_position" if backstop_position is None else "backstop_position"
+        point = np.array((0.0, 0.0, 0.0) if given is None else given, dtype=float)
+        if point.shape != (3,) or not np.all(np.isfinite(point)):
+            raise ValueError(f"{name} must be three numbers (x, y, z), got {given!r}")
+        _, vec, _ = SDEF_DIRECTIONS[direction]
+        along = self.x_grid_out[-1] * np.array(vec.split(), dtype=float)
+        if backstop_position is None:
+            return point, point + along
+        return point - along, point
+
+    def get_mcnp_sdef(
+        self, direction="-z", run_info=None, entry_position=None, backstop_position=None
+    ):
         """Return an MCNP SDEF source definition as a string.
 
         The source is a cylinder along the beam axis, starting where the beam enters the first
-        gas region (entry_position) and extending along the beam direction. POS is set from
-        entry_position for every direction, including -z, whose card runs along +z with POS at
-        the backstop end (see SDEF_DIRECTIONS). Distributions:
+        region and extending along the beam direction to the backstop. Place it by its entry
+        point (entry_position) or its backstop end (backstop_position); see sdef_positions.
+        For -z the card runs along +z with POS at the backstop end (see SDEF_DIRECTIONS); for
+        every other direction POS is the entry point. Distributions:
 
         - d1: position along the axis (EXT).
         - d2: emission direction relative to VEC (omitted for an isotropic source).
@@ -1533,26 +1560,19 @@ class ShineSource:
           ...) unless the source is isotropic.
 
         The comments at the top are the case summary (see get_summary), including the
-        direction and entry position, then notes on using the source: how to normalize tallies,
-        where the source lies, and that neutron energy does not depend on position.
+        direction and both ends of the source, then notes on using the source: how to
+        normalize tallies, where the source lies, and that neutron energy does not depend on
+        position.
 
         Args:
             direction: Beam direction, one of SDEF_DIRECTIONS ("-x", "+x", ..., "+z").
             run_info: Optional extra entries for the summary's [run] section.
             entry_position: Point where the beam enters the first region, (x, y, z) [cm].
+            backstop_position: Point where the beam reaches the backstop, instead.
         """
-        if direction not in SDEF_DIRECTIONS:
-            raise ValueError(
-                f"direction must be one of {', '.join(SDEF_DIRECTIONS)}, got {direction!r}"
-            )
-        entry = np.array(entry_position, dtype=float)
-        if entry.shape != (3,) or not np.all(np.isfinite(entry)):
-            raise ValueError(
-                f"entry_position must be three numbers (x, y, z), got {entry_position!r}"
-            )
+        entry, backstop = self.sdef_positions(direction, entry_position, backstop_position)
         axs, vec, reverse_x = SDEF_DIRECTIONS[direction]
         length = self.x_grid_out[-1]
-        backstop = entry + length * np.array(vec.split(), dtype=float)
         pos = backstop if reverse_x else entry  # For -z the card runs along +z from the backstop
 
         def point(p):
@@ -1565,7 +1585,12 @@ class ShineSource:
         has_DT = "DT" in self.reactions_present()
         dashed_line = "c " + "-" * 78 + "\n"
 
-        run = {**(run_info or {}), "sdef_direction": direction, "sdef_entry_position": entry}
+        run = {
+            **(run_info or {}),
+            "sdef_direction": direction,
+            "sdef_entry_position": entry,
+            "sdef_backstop_position": backstop,
+        }
         s = self._sdef_header(dashed_line, run)
 
         # Notes on using the source
@@ -1724,14 +1749,16 @@ class ShineSource:
             sp = np.append(sp, np.append(0, spectrum[ind_min:ind_max]))
         return si, sp
 
-    def write_mcnp_sdef(self, path, direction="-z", run_info=None, entry_position=(0.0, 0.0, 0.0)):
+    def write_mcnp_sdef(
+        self, path, direction="-z", run_info=None, entry_position=None, backstop_position=None
+    ):
         """Write the MCNP SDEF card (see get_mcnp_sdef) to a text file at path.
 
         The file is ASCII with Unix (LF) line endings on every platform.
         """
         _make_parent_dir(path)
         with open(path, "w", encoding="ascii", newline="\n") as w:
-            w.write(self.get_mcnp_sdef(direction, run_info, entry_position))
+            w.write(self.get_mcnp_sdef(direction, run_info, entry_position, backstop_position))
 
     def reactions_present(self):
         """Return the reactions the target can produce: "DD" if any region contains deuterium,

@@ -44,7 +44,13 @@ OPTIONAL_CASE_SETTINGS = {
     "beam_energy_backstop": None,
     "direction": "-z",  # MCNP SDEF beam direction, see SDEF_DIRECTIONS
     "stopping_power": "srim",  # Stopping-power set, see STOPPING_POWERS
-    "entry_position": [0.0, 0.0, 0.0],  # cm, where the beam enters (MCNP coordinates)
+}
+
+# MCNP SDEF placement: give at most one (with neither, the beam enters at the origin). If a
+# case and [defaults] give both, the one the case sets itself is used.
+PLACEMENT_SETTINGS = {
+    "entry_position": list,  # [x, y, z] cm, where the beam enters the first region
+    "backstop_position": list,  # [x, y, z] cm, where it reaches the backstop, instead
 }
 
 # Region settings: name -> (type, default); None means required. A region is a
@@ -196,7 +202,8 @@ def load_input(path):
     the case sets itself is used.
 
     Each returned settings dict has "source", the keyword arguments for ShineSource
-    (without name), "direction", the MCNP SDEF beam direction, and "entry_position".
+    (without name), "direction", the MCNP SDEF beam direction, and "entry_position" and
+    "backstop_position" (one of them None, or both for the default placement).
     """
     with open(path, "rb") as f:
         try:
@@ -204,7 +211,12 @@ def load_input(path):
         except tomllib.TOMLDecodeError as e:
             raise InputError(f"{path}: {e}") from None
     _check_keys(path, data, ["defaults", "materials", "regions", "cases"], what="table")
-    allowed = list(CASE_SETTINGS) + list(BEAM_SETTINGS) + list(OPTIONAL_CASE_SETTINGS)
+    allowed = (
+        list(CASE_SETTINGS)
+        + list(BEAM_SETTINGS)
+        + list(OPTIONAL_CASE_SETTINGS)
+        + list(PLACEMENT_SETTINGS)
+    )
 
     defaults = data.get("defaults", {})
     _check_keys(f"{path} [defaults]", defaults, allowed)
@@ -254,15 +266,23 @@ def load_input(path):
                 f"{where}: direction must be one of {', '.join(SDEF_DIRECTIONS)}, "
                 f"got {s['direction']!r}"
             )
-        entry = s["entry_position"]
-        if not (
-            isinstance(entry, list)
-            and len(entry) == 3
-            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in entry)
-        ):
-            raise InputError(
-                f"{where}: entry_position must be a list of three numbers [x, y, z], got {entry!r}"
-            )
+        placement = [key for key in PLACEMENT_SETTINGS if key in s]
+        if len(placement) > 1:  # The case's own setting overrides the other from [defaults]
+            placement = [key for key in PLACEMENT_SETTINGS if key in case]
+            if len(placement) != 1:
+                raise InputError(f"{where}: give entry_position or backstop_position, not both")
+        positions = {key: None for key in PLACEMENT_SETTINGS}
+        for key in placement:
+            point = s[key]
+            if not (
+                isinstance(point, list)
+                and len(point) == 3
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in point)
+            ):
+                raise InputError(
+                    f"{where}: {key} must be a list of three numbers [x, y, z], got {point!r}"
+                )
+            positions[key] = [float(v) for v in point]
         if s["stopping_power"] not in STOPPING_POWERS:
             raise InputError(
                 f"{where}: stopping_power must be one of {', '.join(STOPPING_POWERS)}, "
@@ -282,7 +302,7 @@ def load_input(path):
                 "beam_energy_backstop": s["beam_energy_backstop"],
             },
             "direction": s["direction"],
-            "entry_position": [float(v) for v in entry],
+            **positions,
         }
     return resolved
 
@@ -320,11 +340,18 @@ def run_case(name, settings, output_dir="output", input_file=None):
     source = ShineSource(name=name, **s)
     case_dir = os.path.join(output_dir, name)
     run_info = {} if input_file is None else {"input_file": str(input_file)}
-    direction, entry = settings["direction"], settings["entry_position"]
+    direction = settings["direction"]
+    entry, backstop = source.sdef_positions(
+        direction, settings["entry_position"], settings["backstop_position"]
+    )
     source.write_hdf5(os.path.join(case_dir, "source.h5"), run_info)
     source.write_mcnp_sdef(os.path.join(case_dir, "source.sdef"), direction, run_info, entry)
     source.make_plots(os.path.join(case_dir, "plots"))
-    sdef_info = {"sdef_direction": direction, "sdef_entry_position": entry}
+    sdef_info = {
+        "sdef_direction": direction,
+        "sdef_entry_position": entry,
+        "sdef_backstop_position": backstop,
+    }
     source.write_text_files(case_dir, {**run_info, **sdef_info})
     logger.info(
         f"{name}: {source.yield_total:.3e} n/s in {time.time() - t0:.1f} s "

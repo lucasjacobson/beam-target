@@ -20,13 +20,13 @@ num_x_bins     = 1370    # position bins, internal calculation
 num_x_bins_out = 137     # position bins, output
 
 [cases.DT90]
-regions          = ["chamber"]
-voltage          = 280.0   # kV
-current          = 50.0    # mA
-start_radius     = 0.2     # cm, beam radius at entry
-angle_step       = 0.01    # deg, internal calculation
-angle_step_out   = 3.0     # deg, output
-energy_bin_width = 0.01    # MeV, output
-stopping_power   = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
-direction        = "-z"    # MCNP SDEF beam direction: -x, +x, -y, +y, -z or +z
-entry_position   = [0.0, 0.0, 137.0]  # cm, where the beam enters: (0, 0, 0) is the backstop
+regions           = ["chamber"]
+voltage           = 280.0   # kV
+current           = 50.0    # mA
+start_radius      = 0.2     # cm, beam radius at entry
+angle_step        = 0.01    # deg, internal calculation
+angle_step_out    = 3.0     # deg, output
+energy_bin_width  = 0.01    # MeV, output
+stopping_power    = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
+direction         = "-z"    # MCNP SDEF beam direction: -x, +x, -y, +y, -z or +z
+backstop_position = [0.0, 0.0, 0.0]  # cm, where the beam reaches the backstop

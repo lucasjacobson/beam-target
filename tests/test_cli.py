@@ -436,3 +436,66 @@ def test_simple_example():
     source = ShineSource(name="DT90", **{**s, "angle_step": 1.0})
     assert source.calculated == "beam_energy_backstop"
     assert source.yields["DT"] > 10 * source.yields["DD"] > 0
+
+
+# --- SDEF placement --------------------------------------------------------------------------
+
+
+def test_backstop_position(tmp_path):
+    """backstop_position places the source by its backstop end, even when its length is
+    calculated; entry_position set in a case replaces it from [defaults]."""
+    text = BASE.replace("[defaults]\n", "[defaults]\nbackstop_position = [0.0, 0.0, 0.0]\n") + (
+        '\n[cases.fixed]\n\n[cases.find_length]\nregions = [{ use = "gas", length = false }]\n'
+        "beam_energy_backstop = 200.0\n\n"
+        "[cases.by_entry]\nentry_position = [0, 0, 7]\n"
+    )
+    path = write_input(tmp_path, text)
+    cases = load_input(path)
+    assert cases["fixed"]["backstop_position"] == [0.0, 0.0, 0.0]
+    assert cases["fixed"]["entry_position"] is None
+    assert cases["by_entry"]["entry_position"] == [0.0, 0.0, 7.0]
+    assert cases["by_entry"]["backstop_position"] is None
+    out = tmp_path / "out"
+    main([str(path), "-o", str(out), "-j", "1", "-c", "find_length"])
+    with open(out / "find_length" / "summary.toml", "rb") as f:
+        summary = tomllib.load(f)
+    length = summary["inputs"]["length"][0]
+    assert length != 50.0  # Calculated
+    run = summary["run"]
+    assert run["sdef_backstop_position"] == [0.0, 0.0, 0.0]
+    assert run["sdef_entry_position"] == pytest.approx([0.0, 0.0, length], rel=1e-6)
+    sdef = (out / "find_length" / "source.sdef").read_text()
+    assert "        pos = 0 0 0\n" in sdef  # -z: POS is the backstop end
+
+
+@pytest.mark.parametrize(
+    "case, message",
+    [
+        (
+            "entry_position = [0, 0, 1]\nbackstop_position = [0, 0, 0]\n",
+            "give entry_position or backstop_position, not both",
+        ),
+        ("backstop_position = [0, 0]\n", "backstop_position must be a list of three numbers"),
+    ],
+)
+def test_placement_rejected(tmp_path, case, message):
+    with pytest.raises(InputError, match=message):
+        load_input(write_input(tmp_path, BASE + f"\n[cases.a]\n{case}"))
+
+
+@pytest.mark.parametrize(
+    "direction, backstop, entry",
+    [
+        ("-z", (0, 0, 0), (0, 0, 50)),
+        ("+x", (10, 0, 0), (-40, 0, 0)),
+        ("+y", (1, 2, 3), (1, -48, 3)),
+    ],
+)
+def test_sdef_positions(mixed_source, direction, backstop, entry):
+    """Either end gives the other, the source's length (50 cm) apart along the beam."""
+    e, b = mixed_source.sdef_positions(direction, backstop_position=backstop)
+    assert list(e) == pytest.approx(entry) and list(b) == pytest.approx(backstop)
+    e2, b2 = mixed_source.sdef_positions(direction, entry_position=entry)
+    assert list(b2) == pytest.approx(backstop)
+    with pytest.raises(ValueError, match="not both"):
+        mixed_source.sdef_positions(direction, entry_position=entry, backstop_position=backstop)
