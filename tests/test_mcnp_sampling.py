@@ -63,50 +63,50 @@ CASES = {
             length=[10.0, 20.0, 30.0],
             pressure=[5.0, 5.0, 5.0],
             temperature=[25.0, 25.0, 25.0],
-            num_x_bins=[2, 4, 6],
-            num_x_bins_out=[1, 2, 3],
+            position_bins=[2, 4, 6],
+            position_bins_out=[1, 2, 3],
             divergence=[30.0, 30.0, 30.0],
         ),
         "-z", "backstop_position", (0.0, 0.0, 0.0),
     ),
     # One angle bin: an isotropic source (no d2, one energy distribution)
-    "isotropic": (dict(angle_step_out=180.0), "-z", "backstop_position", (0.0, 0.0, 0.0)),
+    "isotropic": (dict(angle_bin_width_out=180.0), "-z", "backstop_position", (0.0, 0.0, 0.0)),
     # No divergence: one radius (rad = d3, no fext)
     "parallel": (dict(divergence=[0.0], wall_radius=1.0), "+x", "entry_position", (0.0, 0.0, 0.0)),
     # 2.5 MeV protons on 7Li: the n0 and n1 lines overlap, so their energies share segments
     "lithium": (
         dict(
-            beam="p",
+            beam="proton",
             material=Material("7Li", "solid", atoms={"7Li": 1}, density=0.534),
-            voltage=2500.0,
+            beam_energy_entry=2500.0,
             pressure=[None],
             temperature=[None],
             length=[1e-3],
             divergence=[0.0],
-            num_x_bins=[20],
-            num_x_bins_out=[5],
+            position_bins=[20],
+            position_bins_out=[5],
         ),
         "+y", "backstop_position", (0.0, 0.0, 0.0),
     ),
     # H(t,n)3He near threshold: a forward cone, so most angle bins are empty (their energy
     # distributions are never sampled)
     "triton_cone": (
-        dict(beam="t", material=_gas("1H2"), voltage=3300.0, length=[1.0]),
+        dict(beam="triton", material=_gas("1H2"), beam_energy_entry=3300.0, length=[1.0]),
         "-z", "backstop_position", (0.0, 0.0, 0.0),
     ),
     # 18 MeV protons stopping in beryllium, from evaluated data (ENDF/B-VIII.1): continuum
     # spectra from 0 to 18 MeV, plus two-body lines
     "p_Be_endf": (
         dict(
-            beam="p",
+            beam="proton",
             material=Material("Be", "solid", atoms={"Be": 1}, density=1.848),
-            voltage=18000.0,
+            beam_energy_entry=18000.0,
             pressure=[None],
             temperature=[None],
             length=[0.5],
             divergence=[0.0],
-            num_x_bins=[100],
-            num_x_bins_out=[10],
+            position_bins=[100],
+            position_bins_out=[10],
             energy_bin_width=0.1,
             nuclear_data=["drosg", str(ENDF_DIR)],
         ),
@@ -178,7 +178,7 @@ def sampled(request, tmp_path_factory):
         "mu": mu,
         "E": E,
         "i": np.searchsorted(s.x_grid_out, along, side="right") - 1,
-        "j": np.minimum((angle / s.angle_step_out).astype(int), s.num_angle_bins_out - 1),
+        "j": np.minimum((angle / s.angle_bin_width_out).astype(int), s.num_angle_bins_out - 1),
         "across_unit": across / np.maximum(rho, 1e-300)[:, None],
         "u_across_unit": u_across / np.linalg.norm(u_across, axis=1)[:, None],
     }
@@ -206,7 +206,7 @@ def test_radius_and_azimuth(sampled):
     s = sampled["source"]
     from beamtarget.source import SDEF_RADIUS_DECIMALS
 
-    for k in range(s.num_x_bins_total_out):
+    for k in range(s.position_bins_total_out):
         in_bin = sampled["i"] == k
         if not np.any(in_bin):  # No neutrons there (past where the beam stops, for example)
             continue
@@ -231,7 +231,7 @@ def test_angles(sampled):
     angular = _total(s, (0, 2))
     counts = np.bincount(sampled["j"], minlength=s.num_angle_bins_out)
     assert_counts_match(counts, angular, f"{name}: angles")
-    joint = np.zeros((s.num_x_bins_total_out, s.num_angle_bins_out))
+    joint = np.zeros((s.position_bins_total_out, s.num_angle_bins_out))
     np.add.at(joint, (sampled["i"], sampled["j"]), 1)
     independent = np.outer(_total(s, (1, 2)), angular)
     assert_counts_match(joint, independent, f"{name}: position x angle (independent)")
@@ -265,7 +265,7 @@ def test_energy_does_not_depend_on_position(sampled):
     mean = np.sum(spectrum * mids) / spectrum.sum()
     variance = np.sum(spectrum * (mids**2 + s.energy_bin_width**2 / 12)) / spectrum.sum()
     variance -= mean**2
-    for k in range(s.num_x_bins_total_out):
+    for k in range(s.position_bins_total_out):
         energies = sampled["E"][sampled["i"] == k]
         if len(energies) == 0:  # No neutrons there (the axial check covers that)
             continue

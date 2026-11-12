@@ -29,7 +29,7 @@ Naming conventions used throughout:
 - An ``_out`` suffix marks the coarser output mesh; no suffix is the fine internal mesh the
   calculation runs on. Each output bin is a whole number of internal bins (a "ratio").
 - ``*_per_region`` arrays have one entry per gas region. The region inputs (pressure,
-  temperature, length, divergence, num_x_bins, num_x_bins_out) are also per region.
+  temperature, length, divergence, position_bins, position_bins_out) are also per region.
 - Beam energies are in keV; neutron energies are in MeV.
 - ``rxn`` is a reaction key (see nuclear.REACTIONS), such as "DD" for D(d,n)3He.
 """
@@ -59,6 +59,7 @@ from .nuclear import (
     BEAMS,
     REACTIONS,
     atom_name,
+    beam_key,
     cm_energy,
     cm_to_lab,
     coulomb_barrier,
@@ -106,7 +107,7 @@ SRIM_ISOTOPE_TABLES = {(1, 2): "D", (1, 3): "T", (2, 3): "He3"}
 SDEF_RADIUS_DECIMALS = 5
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
-HDF5_FORMAT_VERSION = 8
+HDF5_FORMAT_VERSION = 9
 
 # Error message when a case produces no neutrons
 NO_NEUTRONS = (
@@ -328,8 +329,8 @@ class Region:
         wall_radius: Radius of the wall around the region [cm]; the part of the beam outside
             it is scraped off.
         divergence: Beam divergence in the region (growth in radius per unit length) [mrad].
-        num_x_bins: Number of position bins, internal mesh.
-        num_x_bins_out: Number of position bins, output mesh. Must divide num_x_bins.
+        position_bins: Number of position bins, internal mesh.
+        position_bins_out: Number of position bins, output mesh. Must divide position_bins.
         name: Optional name, used in messages and outputs.
     """
 
@@ -343,8 +344,8 @@ class Region:
         density=None,
         wall_radius,
         divergence=0.0,
-        num_x_bins,
-        num_x_bins_out,
+        position_bins,
+        position_bins_out,
         name="",
     ):
         self.material = material
@@ -354,8 +355,8 @@ class Region:
         self.density = density
         self.wall_radius = wall_radius
         self.divergence = divergence
-        self.num_x_bins = num_x_bins
-        self.num_x_bins_out = num_x_bins_out
+        self.position_bins = position_bins
+        self.position_bins_out = position_bins_out
         self.name = str(name)
 
     def __repr__(self):
@@ -368,8 +369,8 @@ class Region:
                 "density",
                 "wall_radius",
                 "divergence",
-                "num_x_bins",
-                "num_x_bins_out",
+                "position_bins",
+                "position_bins_out",
                 "name",
             )
             if getattr(self, key) is not None and getattr(self, key) != ""
@@ -635,14 +636,14 @@ class BeamTarget:
     Args:
         name: Case name, used in output file names and titles.
         regions: The Regions the beam passes through, in order (one Region for a single one).
-        voltage: Beam voltage [kV]. The beam starts with voltage times its charge in keV,
-            which must be within the data of each reaction used (DROSG Legendre tables, or
-            the top energy of an evaluation).
-        current: Beam current [mA]; None to calculate it from yield_total.
-        start_radius: Beam radius where it enters the first region [cm].
-        angle_step: Width of the emission-angle bins of the internal mesh [deg].
-        angle_step_out: Width of the emission-angle bins of the output mesh [deg]. Must
-            divide 180 and be a multiple of angle_step. 180 gives an isotropic source.
+        beam_energy_entry: Beam energy where the beam enters the first region [keV] (its
+            kinetic energy, not per nucleon or per charge), which must be within the data of
+            each reaction used (DROSG Legendre tables, or the top energy of an evaluation).
+        beam_current: Beam current [mA]; None to calculate it from yield_total.
+        beam_radius_entry: Beam radius where it enters the first region [cm].
+        angle_bin_width: Width of the emission-angle bins of the internal mesh [deg].
+        angle_bin_width_out: Width of the emission-angle bins of the output mesh [deg]. Must
+            divide 180 and be a multiple of angle_bin_width. 180 gives an isotropic source.
         energy_bin_width: Width of the neutron energy bins of the output mesh [MeV].
         data_dir: Directory holding the data files (see data/README.md). Defaults to the
             data directory next to this file.
@@ -651,10 +652,10 @@ class BeamTarget:
         beam_energy_backstop: Beam energy wanted at the backstop, the end of the last region
             [keV]; give it to calculate a region's pressure, density, or length. None (default)
             calculates the beam energy.
-        yield_total: Total neutron yield wanted [n/s]; give it, with current None, to
+        yield_total: Total neutron yield wanted [n/s]; give it, with beam_current None, to
             calculate the current. None (default) calculates the yield from the current.
-        beam: Beam particle, one of nuclear.BEAMS: "p", "d" (default), "t", "h" (3He) or
-            "a" (alpha).
+        beam: Beam particle, named as in nuclear.BEAM_NAMES: "proton" or "1H", "deuteron" or
+            "2H" (default), "triton" or "3H", "helion" or "3He", "alpha" or "4He".
         nuclear_data: Nuclear-data libraries, searched in order: "drosg" (DROSG) for the
             built-in two-body reactions, names of libraries defined in the user's
             configuration file, or directories of evaluated files (see config.py). None
@@ -665,34 +666,37 @@ class BeamTarget:
         self,
         name,
         regions,
-        voltage,
-        current,
-        start_radius,
-        angle_step,
-        angle_step_out,
+        beam_energy_entry,
+        beam_current,
+        beam_radius_entry,
+        angle_bin_width,
+        angle_bin_width_out,
         energy_bin_width,
         data_dir=None,
         stopping_power="srim",
         beam_energy_backstop=None,
         yield_total=None,
-        beam="d",
+        beam="deuteron",
         nuclear_data=None,
     ):
         t0 = time.time()
 
         # Input parameters
         self.name = str(name)
-        self.voltage = float(voltage)
-        self.current = None if current is None else float(current)
+        self.beam_energy_entry = float(beam_energy_entry)
+        self.beam_current = None if beam_current is None else float(beam_current)
         self.requested_yield_total = None if yield_total is None else float(yield_total)
-        self.current_calculated = self.current is None
-        self.start_radius = float(start_radius)
-        self.angle_step = float(angle_step)
-        self.angle_step_out = float(angle_step_out)
+        self.beam_current_calculated = self.beam_current is None
+        self.beam_radius_entry = float(beam_radius_entry)
+        self.angle_bin_width = float(angle_bin_width)
+        self.angle_bin_width_out = float(angle_bin_width_out)
         self.energy_bin_width = float(energy_bin_width)
         self.data_dir = DEFAULT_DATA_DIR if data_dir is None else str(data_dir)
         self.stopping_power = str(stopping_power)
-        self.beam = str(beam)
+        try:
+            self.beam = beam_key(beam)  # The BEAMS key, such as "d"
+        except ValueError as e:
+            raise ValueError(f"{self.name}: {e}") from None
         # The entries as given (names or directories) and what each resolves to
         try:
             self.nuclear_data_given, self.nuclear_data = resolve_nuclear_data(nuclear_data)
@@ -723,8 +727,8 @@ class BeamTarget:
         self.wall_radius = column("wall_radius")
         self.divergence = column("divergence")
         # Bin counts are converted to int after check_input confirms they are whole numbers
-        self.num_x_bins = column("num_x_bins")
-        self.num_x_bins_out = column("num_x_bins_out")
+        self.position_bins = column("position_bins")
+        self.position_bins_out = column("position_bins_out")
         self.solid = np.array([getattr(m, "phase", None) == "solid" for m in self.materials])
         # A gas region with a temperature is given by pressure; without one, by density
         self.by_pressure = ~self.solid & ~np.isnan(self.temperature)
@@ -746,8 +750,8 @@ class BeamTarget:
         )
 
         self.check_input()
-        self.num_x_bins = self.num_x_bins.astype(int)
-        self.num_x_bins_out = self.num_x_bins_out.astype(int)
+        self.position_bins = self.position_bins.astype(int)
+        self.position_bins_out = self.position_bins_out.astype(int)
         self.select_reactions()
 
         self.read_stopping_power()
@@ -763,7 +767,7 @@ class BeamTarget:
         self.calculate_scraping()
         self.calculate_attenuation()
         self.calculate_reactions()
-        if self.current_calculated:
+        if self.beam_current_calculated:
             self.solve_current()
         self.calculate_beam_current()
         self.calculate_beam_power()
@@ -784,11 +788,7 @@ class BeamTarget:
             all(isinstance(m, Material) for m in self.materials),
             "every region needs a Material",
         )
-        require(
-            self.beam in BEAMS,
-            f"beam must be one of {', '.join(BEAMS)}, got {self.beam!r}",
-        )
-        require(self.voltage > 0, "voltage must be positive")
+        require(self.beam_energy_entry > 0, "beam_energy_entry must be positive")
         require(len(self.nuclear_data) > 0, "nuclear_data must list at least one library")
         for r, material in enumerate(self.materials):
             where = self.region_label(r)
@@ -834,11 +834,11 @@ class BeamTarget:
                 f"({self.beam_energy_entry:g} keV)",
             )
         require(
-            (self.current is None) != (self.requested_yield_total is None),
-            "give exactly one of current and yield_total; the other is calculated",
+            (self.beam_current is None) != (self.requested_yield_total is None),
+            "give exactly one of beam_current and yield_total; the other is calculated",
         )
-        if self.current is not None:
-            require(self.current > 0, "current must be positive")
+        if self.beam_current is not None:
+            require(self.beam_current > 0, "beam_current must be positive")
         if self.requested_yield_total is not None:
             require(self.requested_yield_total > 0, "yield_total must be positive")
         for key, values in [
@@ -850,40 +850,41 @@ class BeamTarget:
             require(np.all(known > 0), f"{key} must be positive")
         temperatures = self.temperature[~np.isnan(self.temperature)]
         require(np.all(temperatures > -273.15), "temperatures must be above 0 K")
-        require(self.start_radius > 0, "start_radius must be positive")
+        require(self.beam_radius_entry > 0, "beam_radius_entry must be positive")
         require(np.all(self.wall_radius > 0), "every region needs a positive wall_radius")
         require(
-            self.wall_radius[0] >= self.start_radius,
-            "the first region's wall_radius must not be smaller than start_radius (the beam "
+            self.wall_radius[0] >= self.beam_radius_entry,
+            "the first region's wall_radius must not be smaller than beam_radius_entry (the beam "
             "radius at entry)",
         )
         require(np.all(self.divergence >= 0), "divergences must not be negative")
-        for attr in ["num_x_bins", "num_x_bins_out"]:
+        for attr in ["position_bins", "position_bins_out"]:
             counts = getattr(self, attr)
             require(np.all(counts == np.round(counts)), f"{attr} must be whole numbers")
             require(np.all(counts > 0), f"{attr} must be positive")
-        require(self.angle_step > 0, "angle_step must be positive")
-        require(self.angle_step_out > 0, "angle_step_out must be positive")
+        require(self.angle_bin_width > 0, "angle_bin_width must be positive")
+        require(self.angle_bin_width_out > 0, "angle_bin_width_out must be positive")
         require(self.energy_bin_width > 0, "energy_bin_width must be positive")
         require(
             self.stopping_power in STOPPING_POWERS,
             f"stopping_power must be one of {', '.join(STOPPING_POWERS)}, "
             f"got {self.stopping_power!r}",
         )
-        require(_is_multiple(180, self.angle_step_out), "angle_step_out must divide 180")
+        require(_is_multiple(180, self.angle_bin_width_out), "angle_bin_width_out must divide 180")
         require(
-            _is_multiple(self.angle_step_out, self.angle_step),
-            "angle_step_out must be a multiple of angle_step",
+            _is_multiple(self.angle_bin_width_out, self.angle_bin_width),
+            "angle_bin_width_out must be a multiple of angle_bin_width",
         )
         require(
-            np.all(self.num_x_bins % self.num_x_bins_out == 0),
-            "num_x_bins_out must divide num_x_bins in every region",
+            np.all(self.position_bins % self.position_bins_out == 0),
+            "position_bins_out must divide position_bins in every region",
         )
 
     @property
-    def beam_energy_entry(self):
-        """Beam energy where the beam enters the first region [keV]: voltage times charge."""
-        return self.voltage * BEAMS[self.beam].charge
+    def beam_power_entry(self):
+        """Beam power entering the first region [kW]: beam energy / charge times current
+        (keV x mA = W)."""
+        return self.beam_energy_entry / BEAMS[self.beam].charge * self.beam_current / 1000
 
     def region_label(self, r):
         """Return "region <n>" for region index r, with its name or material in brackets."""
@@ -973,10 +974,10 @@ class BeamTarget:
             for rxn, reaction in self.reactions.items()
         }
         self.target_density_mids = {
-            rxn: np.repeat(density, self.num_x_bins)
+            rxn: np.repeat(density, self.position_bins)
             for rxn, density in self.target_density_per_region.items()
         }
-        self.divergence_mids = np.repeat(self.divergence, self.num_x_bins)
+        self.divergence_mids = np.repeat(self.divergence, self.position_bins)
 
     def _target_fractions(self, reaction):
         """Return the fraction of each region's atoms that are the reaction's target isotope."""
@@ -1002,7 +1003,7 @@ class BeamTarget:
         [1/cm^3] and length [cm] of each of them. See slow_down."""
         grid = [np.array([E0])]
         for r in regions:
-            n = self.num_x_bins[r]
+            n = self.position_bins[r]
             E_table, eps_table = self.stopping_per_region[r]
             region_grid = slow_down(
                 grid[-1][-1],
@@ -1018,8 +1019,8 @@ class BeamTarget:
         """Build the internal and output meshes in position and emission angle."""
 
         # Angle mesh [deg], cosines, and the solid angle of each bin [sr]
-        self.num_angle_bins = int(round(180 / self.angle_step))
-        self.num_angle_bins_out = int(round(180 / self.angle_step_out))
+        self.num_angle_bins = int(round(180 / self.angle_bin_width))
+        self.num_angle_bins_out = int(round(180 / self.angle_bin_width_out))
         self.angle_ratio = int(round(self.num_angle_bins / self.num_angle_bins_out))
         self.angle_grid = np.linspace(0, 180, self.num_angle_bins + 1)
         self.angle_grid_out = np.linspace(0, 180, self.num_angle_bins_out + 1)
@@ -1033,15 +1034,15 @@ class BeamTarget:
         self.solid_angles_out = (self.cosine_grid_out[:-1] - self.cosine_grid_out[1:]) * 2 * np.pi
 
         # Position mesh [cm]. Each region is divided into equal bins.
-        self.num_x_bins_total = np.sum(self.num_x_bins)
-        self.num_x_bins_total_out = np.sum(self.num_x_bins_out)
+        self.position_bins_total = np.sum(self.position_bins)
+        self.position_bins_total_out = np.sum(self.position_bins_out)
         self.x_ratio_per_region = np.array(
-            np.round(self.num_x_bins / self.num_x_bins_out), dtype=int
+            np.round(self.position_bins / self.position_bins_out), dtype=int
         )
-        self.dx_per_region = self.length / self.num_x_bins
-        self.dx_per_region_out = self.length / self.num_x_bins_out
-        self.dx = np.repeat(self.dx_per_region, self.num_x_bins)
-        self.dx_out = np.repeat(self.dx_per_region_out, self.num_x_bins_out)
+        self.dx_per_region = self.length / self.position_bins
+        self.dx_per_region_out = self.length / self.position_bins_out
+        self.dx = np.repeat(self.dx_per_region, self.position_bins)
+        self.dx_out = np.repeat(self.dx_per_region_out, self.position_bins_out)
         self.x_grid = np.append(0, np.cumsum(self.dx))
         self.x_grid_out = np.append(0, np.cumsum(self.dx_out))
         self.x_mids = (self.x_grid[:-1] + self.x_grid[1:]) / 2
@@ -1049,7 +1050,7 @@ class BeamTarget:
 
         # Number of internal bins in each output bin (angle_ratio for angle), and the
         # internal grid index of each output grid point
-        self.x_ratio_out = np.repeat(self.x_ratio_per_region, self.num_x_bins_out)
+        self.x_ratio_out = np.repeat(self.x_ratio_per_region, self.position_bins_out)
         self.out_grid_inds = np.append(0, np.cumsum(self.x_ratio_out))
 
     def read_stopping_power(self):
@@ -1359,12 +1360,12 @@ class BeamTarget:
             divergence_mids = np.arctan(self.divergence_mids / 1000)
         else:
             divergence_mids = self.divergence_mids / 1000
-        free_radius = self.start_radius + np.append(0, np.cumsum(divergence_mids * self.dx))
+        free_radius = self.beam_radius_entry + np.append(0, np.cumsum(divergence_mids * self.dx))
 
         # Wall radius at each grid point: that of the bin ending there, so that the beam
         # scraped off by a narrower wall is scraped (and its power deposited) inside the
         # region with that wall, starting one bin in
-        wall_mids = np.repeat(self.wall_radius, self.num_x_bins)
+        wall_mids = np.repeat(self.wall_radius, self.position_bins)
         self.wall_grid = np.append(wall_mids[0], wall_mids)
         kept = np.minimum.accumulate(np.minimum(1.0, self.wall_grid / free_radius))
         self.scrape_grid = 1 - kept**2
@@ -1395,7 +1396,7 @@ class BeamTarget:
         versions, and self.beam_fraction_mids: the fraction of the beam still present
         (neither scraped nor removed), averaged over each internal bin.
         """
-        removal = np.zeros(self.num_x_bins_total)  # [1/cm]
+        removal = np.zeros(self.position_bins_total)  # [1/cm]
         E = self.beam_energy_mids / 1000
         for rxn, reaction in self.reactions.items():
             if self._is_endf(rxn):
@@ -1432,17 +1433,17 @@ class BeamTarget:
             )
         if yield_per_mA == 0:
             raise ValueError(f"{self.name}: {NO_NEUTRONS}")
-        self.current = self.requested_yield_total / yield_per_mA
+        self.beam_current = self.requested_yield_total / yield_per_mA
         logger.debug(
-            f"{self.name}: beam current = {self.current:.6g} mA for a total neutron yield of "
+            f"{self.name}: beam current = {self.beam_current:.6g} mA for a total neutron yield of "
             f"{self.requested_yield_total:.4e} n/s"
         )
 
     def calculate_beam_current(self):
         """Set the beam particle rate [1/s] and the beam current [mA] after scraping and the
         loss to nuclear reactions, on the internal and output meshes."""
-        self.particle_rate = self.current / 1000 / (ee * BEAMS[self.beam].charge)
-        self.current_grid = self.current * (1 - self.scrape_grid) * self.survival_grid
+        self.particle_rate = self.beam_current / 1000 / (ee * BEAMS[self.beam].charge)
+        self.current_grid = self.beam_current * (1 - self.scrape_grid) * self.survival_grid
         self.current_mids = (self.current_grid[:-1] + self.current_grid[1:]) / 2
         self.current_grid_out = np.array(self.current_grid[self.out_grid_inds])
         self.current_mids_out = (
@@ -1453,7 +1454,7 @@ class BeamTarget:
         """Work out where the beam power goes: into the target material, onto the wall, or to the backstop.
 
         Beam power is beam energy times particle rate: beam energy / charge times current
-        (keV x mA = W), so the entry power is voltage times current. Along each bin, the beam
+        (keV x mA = W), as beam_power_entry. Along each bin, the beam
         still in it deposits the energy it loses in the target material (current x energy loss), and the
         beam scraped off hits the wall carrying its energy there (energy x current lost). Both
         use the bin averages of the other quantity, which makes the three parts add up to the
@@ -1473,8 +1474,8 @@ class BeamTarget:
         charge = BEAMS[self.beam].charge
         beam_energy_mids = (self.beam_energy_grid[:-1] + self.beam_energy_grid[1:]) / 2
         w, s = 1 - self.scrape_grid, self.survival_grid
-        scraped = self.current * (w[:-1] - w[1:]) * s[:-1]
-        removed = self.current * w[1:] * (s[:-1] - s[1:])
+        scraped = self.beam_current * (w[:-1] - w[1:]) * s[:-1]
+        removed = self.beam_current * w[1:] * (s[:-1] - s[1:])
         nuclear_power_mids = beam_energy_mids * removed / 1000 / charge
         self.nuclear_power = np.sum(nuclear_power_mids)
         self.deposited_power_mids = (
@@ -1489,7 +1490,7 @@ class BeamTarget:
         self.wall_power = np.sum(self.wall_power_mids)
         self.backstop_power = self.beam_energy_grid[-1] * self.current_grid[-1] / 1000 / charge
         logger.debug(
-            f"{self.name}: beam power {self.voltage * self.current / 1000:.4g} kW: "
+            f"{self.name}: beam power {self.beam_power_entry:.4g} kW: "
             f"{self.deposited_power:.4g} kW deposited, {self.wall_power:.4g} kW onto the wall, "
             f"{self.backstop_power:.4g} kW to the backstop"
         )
@@ -1525,7 +1526,7 @@ class BeamTarget:
             mu = -self.cosine_mids if reaction.inverse else self.cosine_mids
             present = np.any(self._target_fractions(reaction) > 0)
 
-            shape = (self.num_x_bins_total, self.num_angle_bins)
+            shape = (self.position_bins_total, self.num_angle_bins)
             self.cm_xs[rxn] = np.zeros(shape)
             self.neutron_energy[rxn] = np.zeros(shape)
             self.lab_cosine[rxn] = np.zeros(shape)
@@ -1551,11 +1552,11 @@ class BeamTarget:
 
     def _output_position_index(self):
         """Return the output position bin of each internal position bin."""
-        offsets = np.cumsum(np.concatenate(([0], self.num_x_bins_out[:-1])))
+        offsets = np.cumsum(np.concatenate(([0], self.position_bins_out[:-1])))
         return np.concatenate(
             [
                 np.floor_divide(np.arange(n), ratio) + offset
-                for n, ratio, offset in zip(self.num_x_bins, self.x_ratio_per_region, offsets)
+                for n, ratio, offset in zip(self.position_bins, self.x_ratio_per_region, offsets)
             ]
         ).astype(int)
 
@@ -1586,7 +1587,7 @@ class BeamTarget:
         sigma_mids = np.zeros(len(E))
         if not np.any(active):
             grid = np.array([0.0, width])
-            per_particle = np.zeros((self.num_x_bins_total_out, self.num_angle_bins_out, 1))
+            per_particle = np.zeros((self.position_bins_total_out, self.num_angle_bins_out, 1))
             return {"energy_grid": grid, "per_particle": per_particle, "sigma_mids": sigma_mids}
 
         # Beam energies to calculate at, from the top down
@@ -1599,7 +1600,7 @@ class BeamTarget:
 
         num = max(1, int(np.ceil(production.max_lab_energy(top) / width)))
         grid = np.arange(num + 1) * width
-        per_particle = np.zeros((self.num_x_bins_total_out, self.num_angle_bins_out, num))
+        per_particle = np.zeros((self.position_bins_total_out, self.num_angle_bins_out, num))
 
         # Interpolation: each active bin between energies[k] (above) and energies[k + 1]
         idx = np.flatnonzero(active)
@@ -1634,7 +1635,7 @@ class BeamTarget:
                     two_body=False,
                 )
                 by_row = np.bincount(
-                    rows[use], coef[use] * weight[use], minlength=self.num_x_bins_total_out
+                    rows[use], coef[use] * weight[use], minlength=self.position_bins_total_out
                 )
                 touched = np.flatnonzero(by_row)
                 per_particle[touched] += by_row[touched, None, None] * spectrum[None]
@@ -1644,7 +1645,7 @@ class BeamTarget:
                 E[idx],
                 coef,
                 rows,
-                self.num_x_bins_total_out,
+                self.position_bins_total_out,
                 self.angle_grid_out,
                 grid,
                 num_cm_angles=num_cm_angles,
@@ -1662,7 +1663,7 @@ class BeamTarget:
         cell containing that position, the neutron's lab angle, and its energy.
 
         Sets, for each reaction, self.neutrons[rxn] [n/s] with shape
-        (num_x_bins_total_out, num_angle_bins_out, num_energy_bins[rxn]), its energy mesh
+        (position_bins_total_out, num_angle_bins_out, num_energy_bins[rxn]), its energy mesh
         self.neutron_energy_grid[rxn] [MeV], the yield self.yields[rxn] [n/s] and the fraction
         of neutrons lost to scraping self.neutron_scrape_fractions[rxn]. The totals over the
         reactions are self.yield_total and self.neutron_scrape_fraction.
@@ -1712,12 +1713,12 @@ class BeamTarget:
             ) / 2
 
             # Output-mesh indices (i_out, j_out, k_out) of every internal (position, angle) cell
-            offsets = np.cumsum(np.concatenate(([0], self.num_x_bins_out[:-1])))
+            offsets = np.cumsum(np.concatenate(([0], self.position_bins_out[:-1])))
             i_out = np.concatenate(
                 [
-                    np.floor_divide(np.arange(num_x_bins)[:, None], x_ratio) + offset
-                    for num_x_bins, x_ratio, offset in zip(
-                        self.num_x_bins, self.x_ratio_per_region, offsets
+                    np.floor_divide(np.arange(position_bins)[:, None], x_ratio) + offset
+                    for position_bins, x_ratio, offset in zip(
+                        self.position_bins, self.x_ratio_per_region, offsets
                     )
                 ],
                 axis=0,
@@ -1727,7 +1728,8 @@ class BeamTarget:
             valid = np.isfinite(lab_angle)
             j_out = np.zeros(len(lab_angle), dtype=int)
             j_out[valid] = np.minimum(
-                (lab_angle[valid] / self.angle_step_out).astype(int), self.num_angle_bins_out - 1
+                (lab_angle[valid] / self.angle_bin_width_out).astype(int),
+                self.num_angle_bins_out - 1,
             )
             k_out = np.zeros(len(lab_angle), dtype=int)
             k_out[valid] = np.clip(
@@ -1740,14 +1742,14 @@ class BeamTarget:
             )
 
             # Neutron rate in each internal cell [n/s], with and without scraping
-            areas = np.tile(self.solid_angles, self.num_x_bins_total)
+            areas = np.tile(self.solid_angles, self.position_bins_total)
             factor = (self.target_density_mids[rxn] * 1e-24 * self.dx * self.particle_rate)[:, None]
             # With and without scraping (beam_fraction_mids also holds the nuclear losses)
             vals_scr = (self.cm_xs[rxn] * factor * self.beam_fraction_mids[:, None]).ravel() * areas
             vals_tot = (self.cm_xs[rxn] * factor * self.survival_mids[:, None]).ravel() * areas
 
             self.neutrons[rxn] = np.zeros(
-                (self.num_x_bins_total_out, self.num_angle_bins_out, self.num_energy_bins[rxn])
+                (self.position_bins_total_out, self.num_angle_bins_out, self.num_energy_bins[rxn])
             )
             np.add.at(
                 self.neutrons[rxn], (i_out[valid], j_out[valid], k_out[valid]), vals_scr[valid]
@@ -1811,9 +1813,13 @@ class BeamTarget:
             requested = [("beam_energy_backstop", self.beam_energy_backstop, "keV, requested")]
         return (
             [
-                ("beam", self.beam, BEAMS[self.beam].description),
-                ("voltage", self.voltage, "kV"),
-                ("current", self.current, "mA, calculated" if self.current_calculated else "mA"),
+                ("beam", BEAMS[self.beam].description, "beam particle"),
+                ("beam_energy_entry", self.beam_energy_entry, "keV"),
+                (
+                    "beam_current",
+                    self.beam_current,
+                    "mA, calculated" if self.beam_current_calculated else "mA",
+                ),
             ]
             + requested_yield
             + [
@@ -1828,13 +1834,13 @@ class BeamTarget:
             ]
             + requested
             + [
-                ("start_radius", self.start_radius, "cm"),
+                ("beam_radius_entry", self.beam_radius_entry, "cm"),
                 ("wall_radius", self.wall_radius, "cm"),
                 ("divergence", self.divergence, "mrad"),
-                ("num_x_bins", self.num_x_bins, ""),
-                ("num_x_bins_out", self.num_x_bins_out, ""),
-                ("angle_step", self.angle_step, "deg"),
-                ("angle_step_out", self.angle_step_out, "deg"),
+                ("position_bins", self.position_bins, ""),
+                ("position_bins_out", self.position_bins_out, ""),
+                ("angle_bin_width", self.angle_bin_width, "deg"),
+                ("angle_bin_width_out", self.angle_bin_width_out, "deg"),
                 ("energy_bin_width", self.energy_bin_width, "MeV"),
                 ("stopping_power", self.stopping_power, ""),
                 ("nuclear_data", self.nuclear_data_given, "libraries, searched in order"),
@@ -1977,7 +1983,7 @@ class BeamTarget:
 
         # The radius varies along the beam if it diverges or a narrower wall scrapes it
         divergent = np.ptp(self.radius_mids_out) > 0
-        isotropic = self.angle_step_out == 180
+        isotropic = self.angle_bin_width_out == 180
         dashed_line = "c " + "-" * 78 + "\n"
 
         run = {
@@ -2029,7 +2035,7 @@ class BeamTarget:
 
         # Extent distribution: region boundaries, with interpolated points inside each region
         ext = sum(np.sum(self.neutrons[rxn], (1, 2)) for rxn in self.reactions)
-        nvals = self.num_x_bins_out
+        nvals = self.position_bins_out
         Lvals = self.length
         if reverse_x:
             ext = ext[::-1]
@@ -2249,7 +2255,7 @@ class BeamTarget:
                     "MeV, over all angles",
                 )
             )
-        region_ends = np.cumsum(self.num_x_bins)
+        region_ends = np.cumsum(self.position_bins)
         results += [
             ("atom_density", self.atom_density_per_region, "atoms/cm3, in each region"),
             (
@@ -2264,7 +2270,7 @@ class BeamTarget:
                 self.current_grid[-1],
                 "mA, after scraping and nuclear losses",
             ),
-            ("beam_power_entry", self.voltage * self.current / 1000, "kW"),
+            ("beam_power_entry", self.beam_power_entry, "kW"),
             (
                 "beam_power_deposited",
                 self.deposited_power,
@@ -2492,10 +2498,10 @@ class BeamTarget:
 
         ax_current.plot(x, self.current_grid_out)
         ax_current.set_ylabel("Beam current [mA]")
-        ax_current.set_ylim(0, 1.05 * self.current)
+        ax_current.set_ylim(0, 1.05 * self.beam_current)
 
         # Power per unit length [W per cm or um] in each output bin, totals in the legend
-        entry = self.voltage * self.current / 1000
+        entry = self.beam_power_entry
         deposited_label = f"Deposited in the target ({self.deposited_power:.3g} kW)"
         wall_label = f"Onto the wall ({self.wall_power:.3g} kW)"
         per_length = 1000 / (self.dx_out * scale)

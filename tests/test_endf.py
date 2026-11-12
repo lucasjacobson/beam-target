@@ -32,9 +32,8 @@ MCNP_PROTONS = {10: 3.3893e-03, 18: 1.2004e-02, 30: 2.9426e-02}
 MCNP_ALPHAS = {30: 3.1157e-03, 70: 1.4677e-02}
 
 
-def thick_be(beam, energy_MeV, nuclear_data, length=1.0, num_x_bins=600, **kw):
+def thick_be(beam, energy_MeV, nuclear_data, length=1.0, position_bins=600, **kw):
     """A Be block thick enough to stop the beam."""
-    charge = 2 if beam in ("h", "a") else 1
     return BeamTarget(
         name=f"{beam}{energy_MeV}",
         regions=[
@@ -42,15 +41,15 @@ def thick_be(beam, energy_MeV, nuclear_data, length=1.0, num_x_bins=600, **kw):
                 BE,
                 length=length,
                 wall_radius=10.0,
-                num_x_bins=num_x_bins,
-                num_x_bins_out=num_x_bins // 10,
+                position_bins=position_bins,
+                position_bins_out=position_bins // 10,
             )
         ],  # fmt: skip
-        voltage=energy_MeV * 1000 / charge,
-        current=1.0,
-        start_radius=0.1,
-        angle_step=1.0,
-        angle_step_out=10.0,
+        beam_energy_entry=energy_MeV * 1000,
+        beam_current=1.0,
+        beam_radius_entry=0.1,
+        angle_bin_width=1.0,
+        angle_bin_width_out=10.0,
         energy_bin_width=0.1,
         beam=beam,
         nuclear_data=None if nuclear_data is None else [str(d) for d in nuclear_data],
@@ -244,7 +243,7 @@ def test_tendl2025_variants():
 
 @pytest.mark.parametrize("energy", list(MCNP_PROTONS))
 def test_protons_on_thick_be_match_mcnp(energy):
-    s = thick_be("p", energy, ["drosg", ENDFB], length=1.0)
+    s = thick_be("proton", energy, ["drosg", ENDFB], length=1.0)
     assert s.beam_energy_grid[-1] == 0  # The beam stops in the target
     assert s.yield_total / s.particle_rate == pytest.approx(MCNP_PROTONS[energy], rel=0.01)
     assert s.reaction_data["p9Be_xn"].startswith("ENDF/B-VIII.1")
@@ -254,7 +253,7 @@ def test_protons_on_thick_be_match_mcnp(energy):
 @pytest.mark.parametrize("energy", list(MCNP_ALPHAS))
 def test_alphas_fall_through_to_tendl_and_match_mcnp(energy):
     """ENDF/B-VIII.1's alpha + 9Be ends at 15 MeV, so the next library is used."""
-    s = thick_be("a", energy, ["drosg", ENDFB, TENDL21], length=0.25, num_x_bins=500)
+    s = thick_be("alpha", energy, ["drosg", ENDFB, TENDL21], length=0.25, position_bins=500)
     assert s.beam_energy_grid[-1] == 0
     assert s.reaction_data["a9Be_xn"].startswith("TENDL-2021")
     assert s.yield_total / s.particle_rate == pytest.approx(MCNP_ALPHAS[energy], rel=0.02)
@@ -264,17 +263,17 @@ def test_alphas_fall_through_to_tendl_and_match_mcnp(energy):
 def test_no_evaluation_reaching_the_beam_energy():
     """With only the 15 MeV evaluation there are no data for 30 MeV alphas on 9Be."""
     with pytest.raises(ValueError, match="no neutrons are produced"):
-        thick_be("a", 30, ["drosg", ENDFB], length=0.1)
+        thick_be("alpha", 30, ["drosg", ENDFB], length=0.1)
 
 
 def test_attenuation_and_power_balance():
     """The beam loses some particles to nuclear reactions on its way; the power they carry is
     deposited in the target, and the power still adds up."""
-    s = thick_be("p", 30, ["drosg", ENDFB], length=0.5)
+    s = thick_be("proton", 30, ["drosg", ENDFB], length=0.5)
     assert 0.03 < 1 - s.survival_grid[-1] < 0.06  # About 4% at 30 MeV
     assert np.all(np.diff(s.survival_grid) <= 0)
     total = s.deposited_power + s.wall_power + s.backstop_power
-    assert total == pytest.approx(s.voltage * s.current / 1000, rel=1e-12)
+    assert total == pytest.approx(s.beam_power_entry, rel=1e-12)
     assert 0 < s.nuclear_power < s.deposited_power
 
 
@@ -283,9 +282,10 @@ def test_drosg_first_keeps_its_reactions():
     results do not change; a Be atom in the gas uses the library."""
     gas = Material("DT + Be", "gas", molecules={"D2": 0.5, "T2": 0.5})
     regions = [Region(gas, length=50.0, pressure=5.0, temperature=25.0, wall_radius=1.0,
-                      num_x_bins=40, num_x_bins_out=10, divergence=30.0)]  # fmt: skip
-    kw = dict(name="t", regions=regions, voltage=280.0, current=10.0, start_radius=0.2,
-              angle_step=1.0, angle_step_out=10.0, energy_bin_width=0.01)  # fmt: skip
+                      position_bins=40, position_bins_out=10, divergence=30.0)]  # fmt: skip
+    kw = dict(name="t", regions=regions, beam_energy_entry=280.0, beam_current=10.0,
+              beam_radius_entry=0.2, angle_bin_width=1.0, angle_bin_width_out=10.0,
+              energy_bin_width=0.01)  # fmt: skip
     plain = BeamTarget(**kw)
     with_library = BeamTarget(**kw, nuclear_data=["drosg", str(ENDFB)])
     assert list(with_library.reactions) == ["DD", "DT"]
@@ -297,7 +297,7 @@ def test_drosg_first_keeps_its_reactions():
 
 
 def test_data_recorded_in_outputs(tmp_path):
-    s = thick_be("p", 18, ["drosg", ENDFB], length=0.5, num_x_bins=200)
+    s = thick_be("proton", 18, ["drosg", ENDFB], length=0.5, position_bins=200)
     summary = tomllib.loads(s.get_summary())
     assert summary["inputs"]["nuclear_data"] == ["drosg", str(ENDFB)]
     assert summary["reactions"]["p9Be_xn"]["reaction"] == "9Be(p,xn)"
@@ -320,15 +320,15 @@ density = 1.848
 atoms = { Be = 1 }
 
 [cases.p18]
-beam = "p"
-voltage = 18000.0
-current = 1.0
-start_radius = 0.1
-angle_step = 1.0
-angle_step_out = 10.0
+beam = "proton"
+beam_energy_entry = 18000.0
+beam_current = 1.0
+beam_radius_entry = 0.1
+angle_bin_width = 1.0
+angle_bin_width_out = 10.0
 energy_bin_width = 0.1
 nuclear_data = ["drosg", "LIBRARY"]
-regions = [{ material = "Be", length = 0.5, wall_radius = 10.0, num_x_bins = 100, num_x_bins_out = 10 }]
+regions = [{ material = "Be", length = 0.5, wall_radius = 10.0, position_bins = 100, position_bins_out = 10 }]
 """
 
 
@@ -408,7 +408,7 @@ def test_named_libraries(tmp_path, monkeypatch):
 def test_unknown_library_name(tmp_path, monkeypatch):
     write_config(tmp_path, monkeypatch, f'[libraries]\nendfb81 = "{ENDFB.as_posix()}"\n')
     with pytest.raises(ValueError, match=r"'fendl' is not 'drosg'.*\(defined: endfb81\)"):
-        thick_be("p", 18, ["drosg", "fendl"])
+        thick_be("proton", 18, ["drosg", "fendl"])
 
 
 @pytest.mark.parametrize(
@@ -418,13 +418,13 @@ def test_unknown_library_name(tmp_path, monkeypatch):
         ('[libraries]\ndrosg = "x"\n', "cannot define 'drosg'"),
         ("[libraries]\nendf = 3\n", "must be a directory"),
         ('[defaults]\nnuclear_data = "drosg"\n', "must be a list"),
-        ('[defaults]\nbeam = "p"\n', "unknown setting"),
+        ('[defaults]\nbeam = "proton"\n', "unknown setting"),
     ],
 )
 def test_invalid_configuration(tmp_path, monkeypatch, text, message):
     write_config(tmp_path, monkeypatch, text)
     with pytest.raises(ValueError, match=message):
-        thick_be("p", 18, None)
+        thick_be("proton", 18, None)
 
 
 # --- Lab-frame tables (LAW=7), with a local FENDL library ----------------------------------
@@ -435,7 +435,7 @@ FENDL_D = Path(os.environ.get("BEAM_TARGET_FENDL_DIR", r"C:\Users\LJ0489\Softwar
 @pytest.mark.skipif(not (FENDL_D / "deuteron").is_dir(), reason="no local FENDL-3.2c library")
 def test_deuterons_with_lab_tables_match_mcnp():
     """FENDL-3.2c's d + 9Be (JENDL/DEU-2020) is given as lab-frame tables (LAW=7)."""
-    s = thick_be("d", 18, ["drosg", FENDL_D], length=0.5)
+    s = thick_be("deuteron", 18, ["drosg", FENDL_D], length=0.5)
     assert s.reactions["d9Be_xn"].production.channels[0].law == 7
     assert s.yield_total / s.particle_rate == pytest.approx(1.2896e-02, rel=0.01)
 
@@ -475,10 +475,10 @@ def uranium_source(beam, energy_MeV, atoms, nuclear_data, length=0.2):
     material = Material("U target", "solid", atoms=atoms, density=18.95)
     return BeamTarget(
         name=f"{beam}U",
-        regions=[Region(material, length=length, wall_radius=10.0, num_x_bins=100,
-                        num_x_bins_out=1)],
-        voltage=energy_MeV * 1000, current=1.0, start_radius=0.1, angle_step=1.0,
-        angle_step_out=10.0, energy_bin_width=0.1, beam=beam,
+        regions=[Region(material, length=length, wall_radius=10.0, position_bins=100,
+                        position_bins_out=1)],
+        beam_energy_entry=energy_MeV * 1000, beam_current=1.0, beam_radius_entry=0.1,
+        angle_bin_width=1.0, angle_bin_width_out=10.0, energy_bin_width=0.1, beam=beam,
         nuclear_data=[str(d) for d in nuclear_data],
     )  # fmt: skip
 
@@ -489,21 +489,21 @@ def fission_warnings(s):
 
 def test_fission_warning_without_an_evaluation():
     """Uranium with no evaluation: its fission neutrons are missing, and the case says so."""
-    s = uranium_source("d", 10.0, {"D": 1.5, "238U": 1}, ["drosg"], length=0.05)
+    s = uranium_source("deuteron", 10.0, {"D": 1.5, "238U": 1}, ["drosg"], length=0.05)
     assert list(s.reactions) == ["DD"]
     [message] = fission_warnings(s)
     assert "238U" in message and "there is no evaluation" in message
 
 
 def test_no_fission_warning_below_thorium():
-    s = uranium_source("d", 10.0, {"D": 1.5, "Ta": 1}, ["drosg"], length=0.05)
+    s = uranium_source("deuteron", 10.0, {"D": 1.5, "Ta": 1}, ["drosg"], length=0.05)
     assert fission_warnings(s) == []
 
 
 @pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
 def test_fission_neutrons_from_fendl_protons():
     """FENDL-3.2c's p + 238U gives fission (MT=18) neutrons explicitly: no warning."""
-    s = uranium_source("p", 30.0, {"238U": 1}, [FENDL_D])
+    s = uranium_source("proton", 30.0, {"238U": 1}, [FENDL_D])
     assert 18 in [c.mt for c in s.reactions["p238U_xn"].production.channels]
     assert fission_warnings(s) == []
 
@@ -511,6 +511,6 @@ def test_fission_neutrons_from_fendl_protons():
 @pytest.mark.skipif(not (FENDL_D / "deuteron").is_dir(), reason="no local FENDL-3.2c library")
 def test_fission_warning_for_an_evaluation_without_fission():
     """FENDL-3.2c's d + 238U (TENDL-2011) has no fission channel: warned about."""
-    s = uranium_source("d", 30.0, {"238U": 1}, [FENDL_D])
+    s = uranium_source("deuteron", 30.0, {"238U": 1}, [FENDL_D])
     [message] = fission_warnings(s)
     assert "d_9237_92-U-238.endf" in message and "no fission (MT=18)" in message

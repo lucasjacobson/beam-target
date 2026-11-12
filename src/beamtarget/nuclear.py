@@ -175,13 +175,34 @@ class Beam:
         return nuclear_mass(self.Z, self.A)
 
 
+# Beam particles by their one-letter keys (as in TENDL's file names and the reaction keys,
+# such as p9Be_xn). Inputs name them by BEAM_NAMES instead.
 BEAMS = {
     "p": Beam("p", "proton", 1, 1),
     "d": Beam("d", "deuteron", 1, 2),
     "t": Beam("t", "triton", 1, 3),
-    "h": Beam("h", "helion (3He)", 2, 3, charge=2),
+    "h": Beam("h", "helion", 2, 3, charge=2),
     "a": Beam("a", "alpha", 2, 4, charge=2),
 }
+
+# The names a beam particle may be given by: its nuclide or its particle name
+BEAM_NAMES = {
+    "1H": "p", "proton": "p",
+    "2H": "d", "deuteron": "d",
+    "3H": "t", "triton": "t",
+    "3He": "h", "helion": "h",
+    "4He": "a", "alpha": "a",
+}  # fmt: skip
+
+
+def beam_key(name):
+    """Return the BEAMS key of a beam particle named as in BEAM_NAMES (such as "proton" or
+    "1H"); raise ValueError for any other name."""
+    if name not in BEAM_NAMES:
+        names = ", ".join('"' + n + '"' for n in BEAM_NAMES)
+        raise ValueError(f"beam must be one of {names}, got {name!r}")
+    return BEAM_NAMES[name]
+
 
 # Particles in final states: (Z, A, excitation energy [MeV])
 _N, _P, _D, _T = (0, 1, 0.0), (1, 1, 0.0), (1, 2, 0.0), (1, 3, 0.0)

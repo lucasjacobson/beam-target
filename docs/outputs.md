@@ -15,7 +15,7 @@ All the text files are ASCII with Unix (LF) line endings. Beam energies are in k
 neutron energies in MeV; positions are in cm, measured along the beam from where it enters the
 first region; emission angles are in degrees from the beam direction (0° is forward). The
 calculation itself runs on a finer internal mesh; every file holds the coarser output mesh,
-set by `num_x_bins_out` (per region), `angle_step_out`, and `energy_bin_width`.
+set by `position_bins_out` (per region), `angle_bin_width_out`, and `energy_bin_width`.
 
 Each reaction has a key, used in dataset and field names: `DD`, `DT`, `pT`, `tD`, `p7Li_n0`,
 and so on for the built-in DROSG reactions, and `<beam><target>_xn` (such as `p9Be_xn`) for
@@ -81,7 +81,7 @@ the backstop:
 
 - **Normalization.** MCNP tallies are per source neutron: multiply them by `yield_total` (in
   the summary) for absolute rates.
-- **Placement.** The `direction` and the `entry_position` or `backstop_position` settings
+- **Placement.** The `beam_direction` and the `entry_position` or `backstop_position` settings
   place the source (see `examples/generic.toml`). For `-z` the card runs along +z with `POS`
   at the backstop end; for every other direction `POS` is where the beam enters.
 - **What MCNP cannot hold.** An SDEF distribution can depend on only one other variable, so

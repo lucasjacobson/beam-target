@@ -1,7 +1,7 @@
 # A simple input file: one case, a deuteron beam into a target chamber of 90% tritium D/T
 # gas, with the pressure and current given. It uses every setting that can be given together;
-# beam, stopping_power, and direction are set to their defaults, to show them. Left out, as
-# alternatives to what is given here: yield_total (instead of current), beam_energy_backstop
+# beam, stopping_power, and beam_direction are set to their defaults, to show them. Left out, as
+# alternatives to what is given here: yield_total (instead of beam_current), beam_energy_backstop
 # (to calculate a length, pressure, or density instead), density (instead of pressure and
 # temperature), entry_position (instead of backstop_position), and atoms with density for a
 # solid material. See examples/generic.toml for those.
@@ -13,24 +13,26 @@ phase     = "gas"
 molecules = { D2 = 0.1, T2 = 0.9 }  # mole fractions of the molecules
 
 [regions.chamber]
-material       = "DT90"
-length         = 137.0   # cm
-pressure       = 38.0    # torr
-temperature    = 1800.0  # degC
-wall_radius    = 4.1783  # cm
-divergence     = 36.0    # mrad
-num_x_bins     = 1370    # position bins, internal calculation
-num_x_bins_out = 137     # position bins, output
+material          = "DT90"
+length            = 137.0   # cm
+pressure          = 38.0    # torr
+temperature       = 1800.0  # degC
+wall_radius       = 4.1783  # cm
+divergence        = 36.0    # mrad
+position_bins     = 1370    # position bins, internal calculation
+position_bins_out = 137     # position bins, output
 
 [cases.DT90]
-regions           = ["chamber"]
-beam              = "d"     # beam particle: "p", "d" or "t"
-voltage           = 280.0   # kV
-current           = 50.0    # mA
-start_radius      = 0.2     # cm, beam radius at entry
-angle_step        = 0.01    # deg, internal calculation
-angle_step_out    = 3.0     # deg, output
-energy_bin_width  = 0.01    # MeV, output
-stopping_power    = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
-direction         = "-z"    # MCNP SDEF beam direction: -x, +x, -y, +y, -z, or +z
-backstop_position = [0.0, 0.0, 0.0]  # cm, where the beam reaches the backstop
+# Beam particle: "proton" or "1H", "deuteron" or "2H", "triton" or "3H", "helion" or "3He",
+# "alpha" or "4He"
+beam                = "deuteron"
+regions             = ["chamber"]
+beam_energy_entry   = 280.0   # keV
+beam_current        = 50.0    # mA
+beam_radius_entry   = 0.2     # cm, beam radius at entry
+angle_bin_width     = 0.01    # deg, internal calculation
+angle_bin_width_out = 3.0     # deg, output
+energy_bin_width    = 0.01    # MeV, output
+stopping_power      = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
+beam_direction      = "-z"    # beam direction in MCNP and OpenMC: -x, +x, -y, +y, -z, or +z
+backstop_position   = [0.0, 0.0, 0.0]  # cm, where the beam reaches the backstop

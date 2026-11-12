@@ -17,7 +17,7 @@ import time
 import tomllib
 
 from .config import DROSG, ConfigError, load_config, resolve_nuclear_data
-from .nuclear import BEAMS
+from .nuclear import BEAM_NAMES, BEAMS, beam_key
 from .source import PHASES, SDEF_DIRECTIONS, STOPPING_POWERS, BeamTarget, Material, Region
 
 logger = logging.getLogger(__name__)
@@ -26,26 +26,28 @@ logger = logging.getLogger(__name__)
 # from [defaults].
 CASE_SETTINGS = {
     "regions": list,  # The regions the beam passes through, in order (see REGION_SETTINGS)
-    "voltage": float,  # Beam voltage [kV]
-    "start_radius": float,  # Beam radius where it enters the first region [cm]
-    "angle_step": float,  # Width of the emission-angle bins [deg] (internal mesh)
-    "angle_step_out": float,  # Width of the emission-angle bins [deg] (output mesh)
+    "beam_energy_entry": float,  # Beam energy where it enters the first region [keV]
+    "beam_radius_entry": float,  # Beam radius where it enters the first region [cm]
+    "angle_bin_width": float,  # Width of the emission-angle bins [deg] (internal mesh)
+    "angle_bin_width_out": float,  # Width of the emission-angle bins [deg] (output mesh)
     "energy_bin_width": float,  # Width of the neutron energy bins [MeV] (output mesh)
 }
 
 # Beam settings: every case needs exactly one of these (directly or from [defaults]), and
 # the other is calculated
 BEAM_SETTINGS = {
-    "current": float,  # Beam current [mA]
+    "beam_current": float,  # Beam current [mA]
     "yield_total": float,  # Total neutron yield [n/s]
 }
 
 # Optional case settings and their defaults
 OPTIONAL_CASE_SETTINGS = {
-    "beam": "d",  # Beam particle, see nuclear.BEAMS: "p", "d", "t", "h" (3He) or "a" (alpha)
+    # Beam particle, see nuclear.BEAM_NAMES: "proton" or "1H", "deuteron" or "2H", "triton" or
+    # "3H", "helion" or "3He", "alpha" or "4He"
+    "beam": "deuteron",
     # Beam energy at the backstop [keV]; give it to calculate the one region value left out
     "beam_energy_backstop": None,
-    "direction": "-z",  # MCNP SDEF beam direction, see SDEF_DIRECTIONS
+    "beam_direction": "-z",  # Beam direction in MCNP and OpenMC, see SDEF_DIRECTIONS
     "stopping_power": "srim",  # Stopping-power set, see STOPPING_POWERS
     # Nuclear-data libraries, searched in order for each target isotope: "drosg" (the built-in
     # two-body reactions), names of libraries defined in the user's configuration file (see
@@ -71,8 +73,8 @@ PLACEMENT_SETTINGS = {
 REGION_SETTINGS = {
     "material": (str, None),  # Name of the [materials.<name>] table filling the region
     "wall_radius": (float, None),  # Radius of the wall around the region [cm]
-    "num_x_bins": (int, None),  # Position bins (internal mesh)
-    "num_x_bins_out": (int, None),  # Position bins (output mesh)
+    "position_bins": (int, None),  # Position bins (internal mesh)
+    "position_bins_out": (int, None),  # Position bins (output mesh)
     "length": (float, ""),  # Length along the beam [cm]
     "pressure": (float, ""),  # Gas pressure [torr], with temperature
     "temperature": (float, ""),  # Gas temperature [degC], with pressure
@@ -230,12 +232,13 @@ def load_input(path):
 
     Leave exactly one value to be calculated: beam_energy_backstop, or one region's length,
     pressure (keeping its temperature) or density, with beam_energy_backstop given. Each case
-    also needs one of current and yield_total; if the case and [defaults] give both, the one
+    also needs one of beam_current and yield_total; if the case and [defaults] give both, the one
     the case sets itself is used.
 
     Each returned settings dict has "source", the keyword arguments for BeamTarget
-    (without name), "direction", the MCNP SDEF beam direction, and "entry_position" and
-    "backstop_position" (one of them None, or both for the default placement).
+    (without name), "beam_direction", the beam direction in MCNP and OpenMC, and
+    "entry_position" and "backstop_position" (one of them None, or both for the default
+    placement).
     """
     with open(path, "rb") as f:
         try:
@@ -287,22 +290,23 @@ def load_input(path):
         if len(given) > 1:  # The case's own setting overrides the other from [defaults]
             given = [key for key in BEAM_SETTINGS if key in case]
             if len(given) != 1:
-                raise InputError(f"{where}: current and yield_total are both set; give one")
+                raise InputError(f"{where}: beam_current and yield_total are both set; give one")
         if len(given) != 1:
             raise InputError(
-                f"{where}: give one of current and yield_total (the other is calculated)"
+                f"{where}: give one of beam_current and yield_total (the other is calculated)"
             )
         _check_type(where, given[0], s[given[0]], float)
         rate = {key: s[key] if key in given else None for key in BEAM_SETTINGS}
 
-        if s["beam"] not in BEAMS:
-            raise InputError(f"{where}: beam must be one of {', '.join(BEAMS)}, got {s['beam']!r}")
+        if s["beam"] not in BEAM_NAMES:
+            names = ", ".join(f'"{n}"' for n in BEAM_NAMES)
+            raise InputError(f"{where}: beam must be one of {names}, got {s['beam']!r}")
         if s["beam_energy_backstop"] is not None:
             _check_type(where, "beam_energy_backstop", s["beam_energy_backstop"], float)
-        if s["direction"] not in SDEF_DIRECTIONS:
+        if s["beam_direction"] not in SDEF_DIRECTIONS:
             raise InputError(
-                f"{where}: direction must be one of {', '.join(SDEF_DIRECTIONS)}, "
-                f"got {s['direction']!r}"
+                f"{where}: beam_direction must be one of {', '.join(SDEF_DIRECTIONS)}, "
+                f"got {s['beam_direction']!r}"
             )
         placement = [key for key in PLACEMENT_SETTINGS if key in s]
         if len(placement) > 1:  # The case's own setting overrides the other from [defaults]
@@ -331,18 +335,18 @@ def load_input(path):
             "source": {
                 "regions": regions,
                 "beam": s["beam"],
-                "voltage": s["voltage"],
-                "current": rate["current"],
+                "beam_energy_entry": s["beam_energy_entry"],
+                "beam_current": rate["beam_current"],
                 "yield_total": rate["yield_total"],
-                "start_radius": s["start_radius"],
-                "angle_step": s["angle_step"],
-                "angle_step_out": s["angle_step_out"],
+                "beam_radius_entry": s["beam_radius_entry"],
+                "angle_bin_width": s["angle_bin_width"],
+                "angle_bin_width_out": s["angle_bin_width_out"],
                 "energy_bin_width": s["energy_bin_width"],
                 "stopping_power": s["stopping_power"],
                 "beam_energy_backstop": s["beam_energy_backstop"],
                 "nuclear_data": nuclear_data,
             },
-            "direction": s["direction"],
+            "beam_direction": s["beam_direction"],
             **positions,
         }
     return resolved
@@ -353,10 +357,10 @@ def setup_logging(verbose=False):
     case's settings and detailed results if verbose. Safe to call more than once."""
     package_logger = logging.getLogger("beamtarget")
     package_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
-    if not any(getattr(h, "_shine_cli", False) for h in package_logger.handlers):
+    if not any(getattr(h, "_beamtarget_cli", False) for h in package_logger.handlers):
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter("%(message)s"))
-        handler._shine_cli = True
+        handler._beamtarget_cli = True
         package_logger.addHandler(handler)
 
 
@@ -370,19 +374,20 @@ def run_case(name, settings, output_dir="output", input_file=None, name_width=0)
     """
     t0 = time.time()
     s = settings["source"]
-    if s["current"] is None:
+    if s["beam_current"] is None:
         beam = f"yield {s['yield_total']:.4e} n/s"
     else:
-        beam = f"{s['current']:g} mA"
+        beam = f"{s['beam_current']:g} mA"
     logger.debug(
-        f"{name}: starting: {BEAMS[s['beam']].description} beam, {s['voltage']:g} kV, {beam}, "
+        f"{name}: starting: {BEAMS[beam_key(s['beam'])].description} beam, "
+        f"{s['beam_energy_entry']:g} keV, {beam}, "
         f"{len(s['regions'])} region(s), "
         f"last {s['regions'][-1].material.name}, stopping power {s['stopping_power']}"
     )
     source = BeamTarget(name=name, **s)
     case_dir = os.path.join(output_dir, name)
     run_info = {} if input_file is None else {"input_file": str(input_file)}
-    direction = settings["direction"]
+    direction = settings["beam_direction"]
     entry, backstop = source.sdef_positions(
         direction, settings["entry_position"], settings["backstop_position"]
     )

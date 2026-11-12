@@ -29,19 +29,19 @@ def data_path(fname):
 SMALL_CASE = dict(
     name="test",
     material=dt_gas(0.5),
-    voltage=280.0,
-    current=10.0,
+    beam_energy_entry=280.0,
+    beam_current=10.0,
     pressure=[5.0],
     temperature=[25.0],
     density=None,
     length=[50.0],
-    start_radius=0.2,
+    beam_radius_entry=0.2,
     wall_radius=1.0,
     divergence=[30.0],
-    num_x_bins=[40],
-    num_x_bins_out=[10],
-    angle_step=1.0,
-    angle_step_out=10.0,
+    position_bins=[40],
+    position_bins_out=[10],
+    angle_bin_width=1.0,
+    angle_bin_width_out=10.0,
     energy_bin_width=0.01,
 )
 
@@ -54,8 +54,8 @@ REGION_SETTINGS = (
     "density",
     "wall_radius",
     "divergence",
-    "num_x_bins",
-    "num_x_bins_out",
+    "position_bins",
+    "position_bins_out",
 )
 
 

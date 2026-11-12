@@ -85,7 +85,7 @@ def test_cells_match_the_output_mesh(h5_path, mixed_source):
     edge of their output energy bins."""
     s = mixed_source
     sources = iter(get_openmc_sources(h5_path))
-    for i in range(s.num_x_bins_total_out):
+    for i in range(s.position_bins_total_out):
         for j in range(s.num_angle_bins_out):
             spectra = {rxn: s.neutrons[rxn][i, j, :] for rxn in ("DD", "DT")}
             if not any(np.any(sp) for sp in spectra.values()):
@@ -171,7 +171,7 @@ def test_exports_to_settings_xml(h5_path, tmp_path):
 
 def test_old_file_rejected(tmp_path):
     path = tmp_path / "old.h5"
-    make_source(num_x_bins=[4], num_x_bins_out=[2]).write_hdf5(path)
+    make_source(position_bins=[4], position_bins_out=[2]).write_hdf5(path)
     with h5py.File(path, "a") as f:
         f.attrs["format_version"] = 5
     with pytest.raises(ValueError, match="format_version 5"):

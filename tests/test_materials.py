@@ -18,8 +18,8 @@ SOLID = dict(
     temperature=[None],
     length=[10e-4],
     divergence=[0.0],
-    num_x_bins=[400],
-    num_x_bins_out=[40],
+    position_bins=[400],
+    position_bins_out=[40],
 )
 
 
@@ -118,8 +118,8 @@ def test_gas_material_upstream():
         temperature=[25.0, 25.0],
         length=[20.0, 50.0],
         divergence=[0.0, 30.0],
-        num_x_bins=[4, 40],
-        num_x_bins_out=[1, 10],
+        position_bins=[4, 40],
+        position_bins_out=[1, 10],
         material=[argon, dt_gas(0.5)],
     )
     assert s.target_density_per_region["DD"][0] == 0  # No neutrons from the argon stage
@@ -139,10 +139,10 @@ def test_thick_solid_target():
     x_stop = s.x_grid[np.flatnonzero(E > 0)[-1] + 1]
     assert 1e-4 < x_stop < 4e-4  # 1-4 um
     assert E[-1] == 0 and s.backstop_power == 0 and s.wall_power == 0
-    assert s.deposited_power == pytest.approx(s.voltage * s.current / 1000)
+    assert s.deposited_power == pytest.approx(s.beam_power_entry)
     assert s.reactions_present() == ["DD"]
     # Thick-target DD yield, about 1.7e6 n/s per uA at 280 keV
-    assert 1e6 < s.yields["DD"] / (s.current * 1000) < 3e6
+    assert 1e6 < s.yields["DD"] / (s.beam_current * 1000) < 3e6
 
 
 def test_titanium_tritide_gives_dt():
