@@ -317,13 +317,22 @@ the neutrons below 2 MeV differ by more than a factor of two between the standar
 `-mt`), so for beryllium and lithium the evaluated libraries (ENDF/B, FENDL) are preferable to
 TENDL wherever they cover the beam.
 
+A survey of all of TENDL-2025 (11,507 beam-target pairs, standard and `-mt` files, all read
+without error) bears this out. For the 284 isotopes found in nature, the variant chosen leaves
+out at most 1% of the non-elastic cross section up to 70 MeV for 90% of them, for every beam;
+`-mt` alone leaves out a median 15-48% for p, t, ³He, and alpha beams, but is complete for
+deuterons. The largest gaps that remain are on light targets: below 30 MeV, 58-73% for
+p + ⁶Li and ⁷Li, 27-42% for t + ⁶Li and ⁷Li, 15-21% for ³He + ⁶Li and ⁷Li, 14% for t + ¹⁰B,
+and about 10% for p, t, ³He, and alpha beams on ⁹Be. Not all of a gap emits neutrons, but some
+does, and the code warns when more than 1% is missing at the beam energy.
+
 **Validation against MCNP.** For beams stopping in thick targets, the neutrons per beam
 particle agree with MCNP's neutrons created by charged-particle reactions, using the same data:
 on beryllium, within 1% for protons at 10-70 MeV (ENDF/B) and deuterons at 18-70 MeV
 (FENDL-3.2c, lab-frame tables), and within 1.5% for alphas at 18-70 MeV (TENDL-2021); on
 aluminum and tantalum, within 2% for protons and deuterons at 18-70 MeV (ENDF/B-VII.0 and
 FENDL-3.2c); and on natural uranium and thorium, within 3% for protons at 18-70 MeV and
-deuterons at 30-70 MeV (FENDL-3.2c, fission included). MCNP's tally of neutrons escaping the
+deuterons at 30-70 MeV (FENDL-3.2c, with fission for protons on uranium). MCNP's tally of neutrons escaping the
 target is higher, as it includes the target's own (n,2n) multiplication: a source term must
 not, because the transport code models the target. The spectra agree too: for 18 MeV protons
 on thick beryllium (ENDF/B-VII.0), MCNP 6.2's escaping neutrons (10¹⁰ histories, 5° cones,
@@ -346,9 +355,12 @@ above; and charged-particle elastic scattering, which deflects the beam slightly
 
 **Fission.** For thorium and heavier targets, fission often gives most of the neutrons. They are
 included only if the evaluation gives fission (MT=18) neutrons explicitly, as FENDL-3.2c does for
-protons on ²³²Th, ²³⁵U, and ²³⁸U (agreeing with MCNP within 3%). Many evaluations leave fission
-out (TENDL-2025's, and FENDL-3.2c's deuteron files, which come from TENDL-2011), and the code
-warns when an actinide's evaluation has no fission channel, or when it has no evaluation at all.
+protons on ²³⁵U and ²³⁸U (agreeing with MCNP within 3%). FENDL-3.2c's p + ²³²Th file puts every
+reaction into one lumped channel (MT=5), so whether its neutrons include fission cannot be told
+from the file; it is treated as having no fission. Many evaluations leave fission out: no
+charged-particle file of TENDL-2025 (any beam, any variant) has a fission channel, nor do
+FENDL-3.2c's deuteron files (which come from TENDL-2011) or ENDF/B-VIII.1's. The code warns when
+an actinide's evaluation has no fission channel, or when it has no evaluation at all.
 
 **Choosing data.** The libraries can differ a lot for light targets. For p + ⁹Be, ENDF/B-VIII.1,
 FENDL-3.2c and TENDL-2021 hold the same evaluation (LANL, 1988; TENDL-2021 adopted it), but

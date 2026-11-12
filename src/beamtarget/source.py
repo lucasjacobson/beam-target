@@ -1284,7 +1284,7 @@ class BeamTarget:
                 message = (
                     f"fission of {atom_name(*za)} ({', '.join(where[za])}) is open but not "
                     f"modeled, so its neutrons, often most of them, are missing: {source} "
-                    "(FENDL-3.2c gives fission for protons on 232Th, 235U, and 238U)"
+                    "(FENDL-3.2c gives fission for protons on 235U and 238U)"
                 )
                 self.warnings.append(message)
                 logger.warning(f"{self.name}: warning: {message}")
