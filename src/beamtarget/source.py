@@ -53,8 +53,8 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt  # Must follow matplotlib.use
 from matplotlib.colors import LogNorm
 
-from .config import DROSG, resolve_nuclear_data
-from .endf import EndfReaction, find_evaluation
+from .config import DROSG, ConfigError, load_config, resolve_nuclear_data
+from .endf import EndfReaction, find_evaluation, load_evaluation
 from .nuclear import (
     BEAMS,
     REACTIONS,
@@ -1320,6 +1320,66 @@ class BeamTarget:
                 )
                 self.warnings.append(message)
                 logger.warning(f"{self.name}: warning: {message}")
+            if seen and za in targets:
+                better = self.better_evaluation(za, E)
+                if better:
+                    self.warnings.append(better)
+                    logger.warning(f"{self.name}: warning: {better}")
+
+    def better_evaluation(self, za, E):
+        """Return a message naming an evaluation that gives the neutrons of a built-in
+        reaction's open competing channels, or None.
+
+        For a target isotope za whose built-in (DROSG) reactions miss channels open at the
+        entry energy E [MeV], look for an evaluation of this beam on it that reaches E, gives
+        neutrons from more than two-body channels to discrete levels (MT=50-90) at E, and
+        leaves at most ENDF_MISSING_WARNING of the non-elastic cross section uncovered: first
+        in the case's nuclear_data libraries (which "drosg" comes before), then in the other
+        libraries of the user's configuration file.
+        """
+        places = [
+            (given, directory, True)
+            for given, directory in zip(self.nuclear_data_given, self.nuclear_data)
+            if directory != DROSG
+        ]
+        try:
+            libraries = load_config()["libraries"]
+        except ConfigError:
+            libraries = {}
+        listed = {os.path.normcase(os.path.abspath(d)) for _, d, _ in places}
+        places += [
+            (name, directory, False)
+            for name, directory in libraries.items()
+            if os.path.normcase(os.path.abspath(directory)) not in listed
+        ]
+        for name, directory, in_list in places:
+            try:
+                path = find_evaluation(directory, self.beam, za, E_max=E)
+                if path is None:
+                    continue
+                production = load_evaluation(path)
+            except (OSError, ValueError, NotImplementedError):
+                continue
+            beyond_levels = any(
+                not 50 <= c.mt <= 90 and c.production(E) > 0 for c in production.channels
+            )
+            if (
+                production.emax < E
+                or not beyond_levels
+                or production.missing_fraction(E) > ENDF_MISSING_WARNING
+            ):
+                continue
+            where = (
+                f'list "{name}" before "drosg" in nuclear_data'
+                if in_list
+                else f'add "{name}" (from your configuration file) to nuclear_data before "drosg"'
+            )
+            return (
+                f"{name} has an evaluation of {production.label} ({os.path.basename(path)}, to "
+                f"{production.emax:g} MeV) that gives these channels' neutrons: {where} to use "
+                f"it for {atom_name(*za)}"
+            )
+        return None
 
     def calculate_beam_energy(self):
         """Slow the beam down through the regions.

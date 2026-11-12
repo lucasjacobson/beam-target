@@ -440,6 +440,54 @@ def test_deuterons_with_lab_tables_match_mcnp():
     assert s.yield_total / s.particle_rate == pytest.approx(1.2896e-02, rel=0.01)
 
 
+def thin_li7(energy_MeV, nuclear_data):
+    """Protons through a thin 7Li film."""
+    li = Material("7Li", "solid", atoms={"7Li": 1}, density=0.534)
+    return BeamTarget(
+        name=f"p{energy_MeV}",
+        regions=[Region(li, length=2e-4, wall_radius=1.0, position_bins=4, position_bins_out=1)],
+        beam_energy_entry=energy_MeV * 1000, beam_current=1e-3, beam_radius_entry=0.1,
+        angle_bin_width=1.0, angle_bin_width_out=10.0, energy_bin_width=0.05, beam="proton",
+        nuclear_data=[str(d) for d in nuclear_data],
+    )  # fmt: skip
+
+
+def better_warnings(s):
+    return [w for w in s.warnings if "that gives these channels' neutrons" in w]
+
+
+@pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
+def test_better_evaluation_named_for_open_channels(tmp_path, monkeypatch):
+    """Above 7Li(p,n3He)4He (3.70 MeV) the built-in 7Li(p,n) lines miss neutrons; FENDL-3.2c's
+    p + 7Li gives them, so a warning says to list it before "drosg", in the case's
+    nuclear_data or (if not there) from the configuration file. Below the threshold, or with
+    FENDL-3.2c first (so it is used), there is no such warning."""
+    (better,) = better_warnings(thin_li7(5.0, ["drosg", FENDL_D]))
+    assert 'before "drosg" in nuclear_data' in better and "p_0328_3-Li-7.endf" in better
+    assert better_warnings(thin_li7(3.0, ["drosg", FENDL_D])) == []
+    s = thin_li7(5.0, [FENDL_D, "drosg"])
+    assert better_warnings(s) == [] and "p7Li_xn" in s.reactions
+    write_config(tmp_path, monkeypatch, f'[libraries]\nfendl = "{FENDL_D.as_posix()}"\n')
+    (better,) = better_warnings(thin_li7(5.0, ["drosg"]))
+    assert 'add "fendl" (from your configuration file)' in better
+
+
+ENDFB_FULL = Path(
+    os.environ.get("BEAM_TARGET_ENDFB_DIR", r"C:\Users\LJ0489\Software\ENDF\ENDF-B-VIII.1")
+)
+
+
+@pytest.mark.skipif(
+    not find_evaluation(ENDFB_FULL, "p", (3, 7)), reason="no local ENDF/B-VIII.1 library"
+)
+def test_no_better_evaluation_from_two_body_levels_only():
+    """ENDF/B-VIII.1's p + 7Li gives only the two levels the built-in data have (MT=50, 51),
+    so it is not suggested."""
+    s = thin_li7(5.0, ["drosg", ENDFB_FULL])
+    assert any("7Li(p,n3He)4He is open" in w for w in s.warnings)
+    assert better_warnings(s) == []
+
+
 @pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
 def test_every_neutron_product_of_a_section_is_read():
     """FENDL-3.2c's p + 7Li (JENDL-5) lists the MT=5 neutrons twice, below and above 10 MeV;

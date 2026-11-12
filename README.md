@@ -128,8 +128,10 @@ including:
   only.
 - **Open neutron channels** that are not modeled, such as the competing channels of the
   built-in reactions or reactions on other isotopes in the target, are reported as warnings
-  (in the log, the summary, and the HDF5 file); the case still runs. A beam energy beyond the
-  end of a built-in reaction's data is refused.
+  (in the log, the summary, and the HDF5 file); the case still runs. When a built-in reaction
+  misses channels that an evaluation in your libraries gives (such as FENDL-3.2c's p + ⁷Li
+  above 3.7 MeV), a further warning names it and says to list it before `"drosg"`. A beam
+  energy beyond the end of a built-in reaction's data is refused.
 - **Evaluated data** come with their own limitations, including fission (often missing from
   the libraries) and neutrons from secondary charged particles; see the
   [data README](src/beamtarget/data/README.md).
