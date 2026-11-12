@@ -7,7 +7,11 @@ from conftest import make_source
 
 openmc = pytest.importorskip("openmc")
 
-from shine_neutron_source.openmc_source import get_openmc_sources, read_placement  # noqa: E402
+from shine_neutron_source.openmc_source import (  # noqa: E402
+    _merged_spectrum,
+    get_openmc_sources,
+    read_placement,
+)
 
 
 @pytest.fixture(scope="module")
@@ -19,9 +23,10 @@ def h5_path(tmp_path_factory, mixed_source):
 
 
 def test_one_source_per_filled_cell(h5_path, mixed_source):
+    """One source per (position, angle) bin with neutrons, the reactions together."""
     s = mixed_source
     sources = get_openmc_sources(h5_path)
-    filled = sum(np.count_nonzero(np.sum(s.neutrons[rxn], 2)) for rxn in ("DD", "DT"))
+    filled = np.count_nonzero(sum(np.sum(s.neutrons[rxn], 2) for rxn in ("DD", "DT")))
     assert len(sources) == filled
     assert sum(src.strength for src in sources) == pytest.approx(s.yield_total, rel=1e-12)
     assert all(str(src.particle) == "neutron" for src in sources)
@@ -38,7 +43,9 @@ def test_case_placement(h5_path, mixed_source):
     np.testing.assert_allclose(space.origin, [0, 0, L])
     np.testing.assert_allclose(space.z_dir, [0, 0, -1])
     assert np.dot(space.r_dir, space.z_dir) == pytest.approx(0)
-    np.testing.assert_allclose(space.z.x, mixed_source.x_grid_out[:2])  # Along the beam
+    np.testing.assert_allclose(
+        [space.z.a, space.z.b], mixed_source.x_grid_out[:2]
+    )  # Along the beam
 
 
 @pytest.mark.parametrize(
@@ -66,42 +73,84 @@ def test_moved_or_turned(h5_path, mixed_source, kwargs, origin, axis):
         assert np.dot(v, u) == pytest.approx(0, abs=1e-12)
 
 
+def cdf(edges, p, x):
+    """Cumulative probability of a histogram (bin edges, probability per bin) at x."""
+    cum = np.concatenate(([0.0], np.cumsum(p)))
+    return np.interp(x, edges, cum, left=0.0, right=cum[-1])
+
+
 def test_cells_match_the_output_mesh(h5_path, mixed_source):
-    """Each source covers one position bin and one angle bin, with that cell's spectrum as a
-    histogram on the output energy bins."""
+    """Each source covers one position bin and one angle bin, and its energy histogram is
+    the sum of the reactions' spectra there: the same cumulative distribution at every
+    edge of their output energy bins."""
     s = mixed_source
     sources = iter(get_openmc_sources(h5_path))
     for i in range(s.num_x_bins_total_out):
         for j in range(s.num_angle_bins_out):
-            for rxn in ("DD", "DT"):
-                spectrum = s.neutrons[rxn][i, j, :]
-                if not np.any(spectrum):
-                    continue
-                src = next(sources)
-                np.testing.assert_allclose(src.space.z.x, s.x_grid_out[i : i + 2])
-                assert src.space.r.b == s.radius_mids_out[i] and src.space.r.n == 1
-                np.testing.assert_allclose(
-                    src.angle.mu.x, np.sort(s.cosine_grid_out[j : j + 2]), atol=1e-15
-                )
-                assert src.energy.interpolation == "histogram"
-                lo, hi = np.flatnonzero(spectrum)[[0, -1]]
-                np.testing.assert_allclose(
-                    src.energy.x, s.neutron_energy_grid[rxn][lo : hi + 2] * 1e6
-                )
-                np.testing.assert_allclose(src.energy.p[:-1], spectrum[lo : hi + 1])
-                assert src.strength == pytest.approx(spectrum.sum())
+            spectra = {rxn: s.neutrons[rxn][i, j, :] for rxn in ("DD", "DT")}
+            if not any(np.any(sp) for sp in spectra.values()):
+                continue
+            src = next(sources)
+            assert (src.space.z.a, src.space.z.b) == tuple(s.x_grid_out[i : i + 2])
+            assert src.space.r.b == s.radius_mids_out[i] and src.space.r.n == 1
+            assert src.angle.mu.a == pytest.approx(s.cosine_grid_out[j + 1], abs=1e-15)
+            assert src.angle.mu.b == pytest.approx(s.cosine_grid_out[j], abs=1e-15)
+            assert src.energy.interpolation == "histogram"
+            total = sum(sp.sum() for sp in spectra.values())
+            assert src.strength == pytest.approx(total, rel=1e-12)
+            edges = np.concatenate([s.neutron_energy_grid[r] * 1e6 for r in spectra])
+            expected = sum(
+                cdf(s.neutron_energy_grid[r] * 1e6, sp, edges) for r, sp in spectra.items()
+            )
+            got = cdf(src.energy.x, src.energy.p[:-1], edges)
+            np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12 * total)
     assert next(sources, None) is None
 
 
+def test_merging_separate_spectra():
+    """Two spectra far apart: one histogram, the empty gap between them a single bin."""
+    edges, p = _merged_spectrum(
+        [np.arange(7.0), np.arange(7.0)],
+        [np.array([0, 1, 2, 0, 0, 0.0]), np.array([0, 0, 0, 0, 0, 3.0])],
+    )
+    np.testing.assert_array_equal(edges, [1, 2, 3, 5, 6])
+    np.testing.assert_array_equal(p, [1, 2, 0, 3])
+
+
+def test_merging_offset_grids():
+    """Grids offset by half a bin: the sum keeps every cumulative probability exactly."""
+    a_edges, a = np.arange(0.0, 5.0), np.array([1.0, 2.0, 3.0, 4.0])
+    b_edges, b = np.arange(0.5, 5.0), np.array([2.0, 1.0, 5.0, 1.0])
+    edges, p = _merged_spectrum([a_edges, b_edges], [a, b])
+    x = np.linspace(-1, 6, 141)
+    np.testing.assert_allclose(cdf(edges, p, x), cdf(a_edges, a, x) + cdf(b_edges, b, x))
+
+
+def test_single_spectrum_unchanged_and_empty_runs_merged():
+    edges, p = _merged_spectrum([np.arange(8.0)], [np.array([0, 2, 0, 0, 0, 1, 0.0])])
+    np.testing.assert_array_equal(edges, [1, 2, 5, 6])
+    np.testing.assert_array_equal(p, [2, 0, 1])
+    assert _merged_spectrum([np.arange(3.0)], [np.zeros(2)]) is None
+
+
 def test_sampled_energies_follow_the_histogram(h5_path):
-    """Sampling a source's energy reproduces its histogram mean (no shift by half a bin)."""
+    """Sampling a source's energy reproduces its histogram (no shift by half a bin): checked
+    on the DT part of the strongest source (above the empty gap after its DD part)."""
     src = max(get_openmc_sources(h5_path), key=lambda s: s.strength)
     x, p = src.energy.x, src.energy.p[:-1]
-    mean = np.sum(p * (x[:-1] + x[1:]) / 2) / np.sum(p)
-    samples = src.energy.sample(200_000, seed=1)
+    samples = src.energy.sample(2_000_000, seed=1)
     samples = samples[0] if isinstance(samples, tuple) else samples  # (values, weights) in 0.16
     assert np.all((samples >= x[0]) & (samples <= x[-1]))
-    assert np.mean(samples) == pytest.approx(mean, abs=0.02 * (x[1] - x[0]))
+    gap = np.argmax(np.diff(x) * (p == 0))  # The widest empty bin
+    assert p[gap] == 0 and gap > 0
+    part = slice(gap + 1, None)
+    mids, w = (x[:-1] + x[1:])[part] / 2, p[part]
+    mean = np.sum(w * mids) / np.sum(w)
+    spread = np.sqrt(np.sum(w * (mids - mean) ** 2) / np.sum(w))
+    above = samples[samples > x[gap + 1]]
+    tolerance = 5 * spread / np.sqrt(len(above))
+    assert tolerance < 0.3 * (x[gap + 2] - x[gap + 1])  # Fine enough to see half a bin
+    assert np.mean(above) == pytest.approx(mean, abs=tolerance)
 
 
 def test_exports_to_settings_xml(h5_path, tmp_path):

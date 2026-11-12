@@ -8,8 +8,8 @@ Needs the openmc Python package, version 0.16 or later (for cylinders along any 
 is imported only here: the rest of shine_neutron_source runs without it.
 
 Unlike the MCNP SDEF card, the OpenMC source keeps the full correlation between position,
-emission angle, and neutron energy: there is one source for each (position bin, angle bin,
-reaction) of the output mesh, each with its own energy spectrum.
+emission angle, and neutron energy: there is one source for each (position bin, angle bin)
+of the output mesh, each with its own energy spectrum (all the reactions together).
 """
 
 import h5py
@@ -75,22 +75,58 @@ def _check_format(path, hf):
         )
 
 
+def _merged_spectrum(grids, spectra):
+    """Return (edges, probabilities) of the sum of histograms, each given by its bin edges
+    and the neutrons in each bin, or None if they are all empty. The sum is a histogram on
+    the union of their edges (the density of each added over each piece), the same
+    distribution as choosing a histogram by its total and then sampling it. Empty bins at
+    either end are dropped, and each run of empty bins inside becomes one bin, which samples
+    the same and keeps the source small."""
+    pieces = []
+    for edges, spectrum in zip(grids, spectra):
+        filled = np.flatnonzero(spectrum)
+        if len(filled):
+            lo, hi = filled[0], filled[-1] + 1
+            pieces.append((edges[lo : hi + 1], spectrum[lo:hi]))
+    if not pieces:
+        return None
+    if len(pieces) == 1:  # Nothing to add: the histogram as it is
+        edges, p = pieces[0]
+    else:
+        edges = np.unique(np.concatenate([e for e, _ in pieces]))
+        # The same edge from two grids can differ in the last bits: keep one
+        edges = edges[np.r_[True, np.diff(edges) > 1e-12 * np.max(np.abs(edges))]]
+        widths = np.diff(edges)
+        mids = edges[:-1] + widths / 2
+        p = np.zeros(len(widths))
+        for e, spectrum in pieces:
+            k = np.searchsorted(e, mids, side="right") - 1
+            inside = (k >= 0) & (k < len(spectrum))
+            p[inside] += spectrum[k[inside]] / np.diff(e)[k[inside]] * widths[inside]
+    # One bin for each run of empty bins
+    keep = np.r_[True, ~((p[1:] == 0) & (p[:-1] == 0))]
+    return np.r_[edges[:-1][keep], edges[-1]], p[keep]
+
+
 def get_openmc_sources(path, direction=None, entry_position=None, backstop_position=None):
     """Return a list of openmc.IndependentSource for the neutron source in a source.h5 file.
 
-    There is one source for each (position bin, emission-angle bin, reaction) of the output
-    mesh that has neutrons:
+    There is one source for each (position bin, emission-angle bin) of the output mesh that
+    has neutrons:
 
     - space: a cylinder along the beam axis, from the start to the end of the position bin,
       uniform in area out to the beam edge radius over the bin (radius_mids, as in the SDEF
       card).
     - angle: uniform in the cosine of the emission angle from the beam direction over the
       angle bin, and uniform in azimuth.
-    - energy: the neutron spectrum of that position, angle, and reaction, as a histogram on
-      the output energy bins.
+    - energy: the neutron spectrum of that position and angle, all reactions together, as a
+      histogram on the output energy bins (each run of empty bins merged into one).
     - strength: the neutrons it emits [n/s]. OpenMC treats strengths as relative weights and
       normalizes tallies per source particle, so multiply tallies by the total of the
       strengths (yield_total in the file's results) for absolute rates.
+
+    Adding the reactions' spectra gives the same distribution as a source for each reaction,
+    with half the sources or fewer, so a smaller settings.xml.
 
     The source is placed as it was for the case (the direction, entry_position, and
     backstop_position the case was run with, stored in the file), unless moved here:
@@ -142,48 +178,43 @@ def get_openmc_sources(path, direction=None, entry_position=None, backstop_posit
         )
     v = _perpendicular(u)
 
-    def histogram(x):
-        """A uniform distribution between x[0] and x[1] (increasing)."""
-        return openmc.stats.Tabular(x, [1.0, 0.0], interpolation="histogram")
-
     phi = openmc.stats.Uniform(0.0, 2 * np.pi)
+    grids = [energy_grids[rxn] for rxn in reactions]
     sources = []
     for i in range(len(x_grid) - 1):
         space = openmc.stats.CylindricalIndependent(
             r=openmc.stats.PowerLaw(a=0.0, b=radius[i], n=1),  # Uniform in area
             phi=phi,
-            z=histogram(x_grid[i : i + 2]),
+            z=openmc.stats.Uniform(x_grid[i], x_grid[i + 1]),
             origin=tuple(entry),
             r_dir=tuple(v),
             z_dir=tuple(u),
         )
         for j in range(len(cosines) - 1):
+            merged = _merged_spectrum(grids, [neutrons[rxn][i, j, :] for rxn in reactions])
+            if merged is None:
+                continue
+            edges, p = merged
             angle = openmc.stats.PolarAzimuthal(
-                mu=histogram([cosines[j + 1], cosines[j]]),
+                mu=openmc.stats.Uniform(cosines[j + 1], cosines[j]),
                 phi=phi,
                 reference_uvw=tuple(u),
                 reference_vwu=tuple(v),
             )
-            for rxn in reactions:
-                spectrum = neutrons[rxn][i, j, :]
-                filled = np.flatnonzero(spectrum)
-                if len(filled) == 0:
-                    continue
-                lo, hi = filled[0], filled[-1] + 1
-                # Histogram: one probability per bin, plus a final 0 that is not used (the
-                # XML holds energies and probabilities as one list of equal halves)
-                energy = openmc.stats.Tabular(
-                    energy_grids[rxn][lo : hi + 1] * 1e6,  # MeV -> eV
-                    np.append(spectrum[lo:hi], 0.0),
-                    interpolation="histogram",
+            # Histogram: one probability per bin, plus a final 0 that is not used (the XML
+            # holds energies and probabilities as one list of equal halves)
+            energy = openmc.stats.Tabular(
+                edges * 1e6,
+                np.append(p, 0.0),
+                interpolation="histogram",  # MeV -> eV
+            )
+            sources.append(
+                openmc.IndependentSource(
+                    space=space,
+                    angle=angle,
+                    energy=energy,
+                    strength=float(np.sum(p)),
+                    particle="neutron",
                 )
-                sources.append(
-                    openmc.IndependentSource(
-                        space=space,
-                        angle=angle,
-                        energy=energy,
-                        strength=float(np.sum(spectrum)),
-                        particle="neutron",
-                    )
-                )
+            )
     return sources

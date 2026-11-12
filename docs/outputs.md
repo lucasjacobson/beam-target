@@ -92,8 +92,8 @@ the backstop:
 ## OpenMC
 
 `get_openmc_sources` turns a `source.h5` file into OpenMC sources, one for each (position bin,
-angle bin, reaction), each with its own energy spectrum, so the full correlation between
-position, angle, and energy is kept:
+angle bin), each with its own energy spectrum (all reactions together), so the full
+correlation between position, angle, and energy is kept:
 
 ```python
 from shine_neutron_source.openmc_source import get_openmc_sources
