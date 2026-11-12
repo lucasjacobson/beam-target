@@ -44,10 +44,24 @@ from .nuclear import BEAMS, atom_name, cm_to_lab, nuclear_mass
 # ENDF sub-library number (NSUB) of each beam particle's incident data
 NSUB_BEAMS = {10010: "p", 10020: "d", 10030: "t", 20030: "h", 20040: "a"}
 
-# Evaluation file names tried for a beam on a target, in order: TENDL's file with every
-# channel explicit ("-mt"), then its other variants. {beam}-{symbol}{A:03d}, such as
-# p-Be009-mt.tendl.
-FILE_SUFFIXES = ("-mt.tendl", ".tendl", "-s60.tendl", "-s20.tendl", "-s0.tendl")
+# TENDL's variants of one evaluation, {beam}-{symbol}{A:03d}{suffix}, such as p-Be009.tendl:
+# the same calculation with its channels given separately up to 30 MeV and lumped into MT=5
+# above (the standard file), up to 20 or 60 MeV (-s20, -s60), everywhere (-mt), or nowhere
+# (-s0). They are not equally complete: in TENDL-2025 the separate channels of -mt (above
+# about 30 MeV for p, t, 3He and alpha beams) and of -s60 (from 30 to 60 MeV) cover as little
+# as 10-60% of the non-elastic cross section, so the neutrons of the rest are missing, while
+# the standard file's separate channels miss up to 22% of it for d + 9Be, where -mt is
+# complete. find_evaluation therefore takes the most complete of the standard, -mt and -s60
+# files present, and among equally complete ones the first in this order. The lumped
+# spectra are used only where no such file is present (-s20, then -s0), because they can be
+# wrong for light targets: for p + 9Be at 10 MeV, -s0 gives every neutron the (p,n) shape,
+# leaving out the low-energy neutrons of the breakup (p,np) that the separate channels give.
+# (Being lumped, -s0 is always complete, so completeness alone would always pick it.)
+FILE_SUFFIXES = (".tendl", "-mt.tendl", "-s60.tendl", "-s20.tendl", "-s0.tendl")
+NUM_SPLIT = 3  # The first NUM_SPLIT of FILE_SUFFIXES are compared by completeness
+# Variants whose uncovered share of the non-elastic cross section (integrated over incident
+# energy) differs by less than this count as equally complete
+VARIANT_TIE = 0.01
 
 M_NEUTRON = nuclear_mass(0, 1)  # MeV
 
@@ -513,6 +527,21 @@ class NeutronProduction:
             return 0.0
         return max(0.0, 1 - self.channel_sum(E * 1e6)[0] / total)
 
+    def missing_share(self, E_max=None):
+        """Share of the non-elastic cross section not covered by the explicit channels,
+        integrated over incident energy up to E_max [MeV] (default: the top of the
+        evaluation); 0 for a complete file."""
+        if self.nonelastic is self.channel_sum:
+            return 0.0
+        top = (self.emax if E_max is None else min(E_max, self.emax)) * 1e6
+        grid = np.union1d(self.nonelastic.x, self.channel_sum.x)
+        grid = np.append(grid[grid < top], top)
+        total = self.nonelastic(grid)
+        gap = np.maximum(0.0, total - self.channel_sum(grid))
+        dx = np.diff(grid)
+        whole = np.sum(0.5 * (total[1:] + total[:-1]) * dx)
+        return float(np.sum(0.5 * (gap[1:] + gap[:-1]) * dx) / whole) if whole > 0 else 0.0
+
     def kalbach_slope(self, E_a, E_b):
         """The Kalbach-Mann slope a for neutrons emitted with CM energy E_b [MeV] (array)
         by the beam at lab energy E_a [MeV] (ENDF-102 section 6.2.3.2)."""
@@ -823,8 +852,8 @@ class NeutronProduction:
         return f"{name}({self.beam},xn)"
 
 
-# File names of the libraries, parsed into (beam, Z, symbol, A, rank): TENDL
-# (p-Be009-mt.tendl; rank by FILE_SUFFIXES, metastable targets such as p-Ac222m are not
+# File names of the libraries, parsed into (beam, symbol, A, rank): TENDL
+# (p-Be009.tendl; rank by FILE_SUFFIXES, metastable targets such as p-Ac222m are not
 # used), ENDF/B (p-004_Be_009.endf) and FENDL (p_0409_4-Be-9.endf)
 _TENDL_NAME = re.compile(r"^([pdtha])-([A-Z][a-z]?)(\d{3})(-mt|-s60|-s20|-s0|)\.tendl$")
 _ENDFB_NAME = re.compile(r"^([pdtha])-(\d{3})_([A-Z][a-z]?)_(\d{3})\.endf$")
@@ -848,10 +877,9 @@ def _parse_name(name):
 
 @functools.lru_cache(maxsize=16)
 def library_index(directory):
-    """Return {(beam, symbol, A): path} for the evaluation files in a directory and its
-    subdirectories (indexed once per run), recognizing TENDL, ENDF/B, and FENDL names. Where
-    a directory holds several TENDL variants of one evaluation, the one earliest in
-    FILE_SUFFIXES (every channel explicit first) is used."""
+    """Return {(beam, symbol, A): [path, ...]} for the evaluation files in a directory and
+    its subdirectories (indexed once per run), recognizing TENDL, ENDF/B, and FENDL names.
+    Several paths are TENDL variants of one evaluation, in FILE_SUFFIXES order."""
     found = {}
     for root, _, files in os.walk(directory):
         for name in files:
@@ -859,19 +887,42 @@ def library_index(directory):
             if parsed is None:
                 continue
             beam, symbol, A, rank = parsed
-            key = (beam, symbol, A)
-            if key not in found or rank < found[key][0]:
-                found[key] = (rank, os.path.join(root, name))
-    return {key: path for key, (_, path) in found.items()}
+            found.setdefault((beam, symbol, A), []).append((rank, os.path.join(root, name)))
+    return {key: [path for _, path in sorted(paths)] for key, paths in found.items()}
 
 
-def find_evaluation(directory, beam, target):
+def choose_variant(paths, E_max=None):
+    """Return the variant to use of several TENDL variants of one evaluation (paths in
+    FILE_SUFFIXES order). Of the standard, -mt and -s60 files (or, without any, of the
+    others), the most complete up to E_max [MeV] (default: the top of each): the one whose
+    explicit channels leave the least of the non-elastic cross section uncovered, integrated
+    over incident energy, and the first among those within VARIANT_TIE of it. Variants that
+    cannot be read are passed over (the error is raised if none can be)."""
+    split = [p for p in paths if _parse_name(os.path.basename(p))[3] < NUM_SPLIT]
+    paths = split or paths
+    if len(paths) == 1:
+        return paths[0]
+    shares, error = {}, None
+    for path in paths:
+        try:
+            shares[path] = load_evaluation(path).missing_share(E_max)
+        except (ValueError, NotImplementedError) as e:
+            error = error or e
+    if not shares:
+        raise error
+    best = min(shares.values())
+    return next(p for p in paths if p in shares and shares[p] <= best + VARIANT_TIE)
+
+
+def find_evaluation(directory, beam, target, E_max=None):
     """Return the path of the evaluation for a beam on a target (Z, A) in a library
-    directory, or None."""
+    directory, or None. Of several TENDL variants, the most complete up to the beam energy
+    E_max [MeV] is used (choose_variant)."""
     if directory is None or not os.path.isdir(directory):
         return None
     Z, A = target
-    return library_index(os.path.abspath(directory)).get((beam, atom_name(Z), A))
+    paths = library_index(os.path.abspath(directory)).get((beam, atom_name(Z), A))
+    return choose_variant(paths, E_max) if paths else None
 
 
 def describe_evaluation(path):

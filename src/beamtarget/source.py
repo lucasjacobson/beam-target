@@ -1125,8 +1125,9 @@ class BeamTarget:
         for this beam on it (like MCNP's search of its xsdir).
 
         - "drosg": the DROSG two-body reactions with that target (nuclear.REACTIONS).
-        - A directory: the evaluated file for this beam on that target (endf.find_evaluation),
-          as one EndfReaction with every neutron-producing channel merged.
+        - A directory: the evaluated file for this beam on that target (endf.find_evaluation;
+          of several TENDL variants, the most complete up to the beam energy), as one
+          EndfReaction with every neutron-producing channel merged.
 
         Only reactions whose target isotope is present are kept: a beam has no reaction (and
         no yield in the outputs) for an isotope the targets do not hold.
@@ -1151,7 +1152,7 @@ class BeamTarget:
                         claimed[za] = DROSG
                         break
                 else:
-                    path = find_evaluation(entry, self.beam, za)
+                    path = find_evaluation(entry, self.beam, za, E_max=E_entry)
                     if not path:
                         continue
                     reaction = EndfReaction(path, library=entry)

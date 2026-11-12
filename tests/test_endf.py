@@ -8,11 +8,12 @@ import h5py
 import numpy as np
 import pytest
 
-from beamtarget import BeamTarget, Material, Region, load_input
+from beamtarget import BeamTarget, Material, Region, endf, load_input
 from beamtarget.endf import (
     NeutronProduction,
     _number,
     _parse_name,
+    choose_variant,
     find_evaluation,
     separation_energy,
 )
@@ -152,7 +153,8 @@ def test_kalbach_slope_systematics():
 @pytest.mark.parametrize(
     "name, parsed",
     [
-        ("p-Be009-mt.tendl", ("p", "Be", 9, 0)),
+        ("p-Be009.tendl", ("p", "Be", 9, 0)),
+        ("p-Be009-mt.tendl", ("p", "Be", 9, 1)),
         ("a-Be009-s0.tendl", ("a", "Be", 9, 4)),
         ("p-004_Be_009.endf", ("p", "Be", 9, 0)),
         ("d_0425_4-Be-9.endf", ("d", "Be", 9, 0)),
@@ -169,6 +171,72 @@ def test_find_evaluation():
     assert Path(find_evaluation(TENDL21, "a", (4, 9))) == A_BE9_TENDL
     assert find_evaluation(ENDFB, "d", (4, 9)) is None
     assert find_evaluation(DATA / "missing", "p", (4, 9)) is None
+
+
+class _Variant:
+    """A stand-in evaluation whose explicit channels leave `share` of the non-elastic cross
+    section uncovered (None: it cannot be read)."""
+
+    def __init__(self, share):
+        self.share = share
+
+    def missing_share(self, E_max=None):
+        if self.share is None:
+            raise NotImplementedError("unsupported representation")
+        return self.share
+
+
+@pytest.mark.parametrize(
+    "shares, chosen",
+    [
+        ({"": 0.0, "-mt": 0.0}, ""),  # Equally complete: the standard file
+        ({"": 0.005, "-mt": 0.0}, ""),  # Within VARIANT_TIE
+        ({"": 0.10, "-mt": 0.0}, "-mt"),  # The standard file misses channels (d + 9Be)
+        ({"": 0.0, "-mt": 0.40, "-s60": 0.08}, ""),  # -mt misses channels (above 30 MeV)
+        ({"": 0.05, "-s0": 0.0}, ""),  # The lumped -s0 is not compared, though complete
+        ({"-s20": 0.0, "-s0": 0.0}, "-s20"),  # Lumped files only: the first
+        ({"": None, "-mt": 0.30}, "-mt"),  # A variant that cannot be read is passed over
+    ],
+)
+def test_most_complete_tendl_variant_is_chosen(tmp_path, monkeypatch, shares, chosen):
+    variants = {}
+    for suffix, share in shares.items():
+        path = tmp_path / f"d-Be009{suffix}.tendl"
+        path.write_text("")
+        variants[str(path)] = _Variant(share)
+    monkeypatch.setattr(endf, "load_evaluation", lambda path: variants[str(path)])
+    assert Path(find_evaluation(tmp_path, "d", (4, 9), E_max=40)).name == f"d-Be009{chosen}.tendl"
+
+
+def test_choose_variant_raises_if_no_variant_can_be_read(tmp_path, monkeypatch):
+    paths = [str(tmp_path / f"p-Be009{s}.tendl") for s in ("", "-mt")]
+    monkeypatch.setattr(endf, "load_evaluation", lambda path: _Variant(None))
+    with pytest.raises(NotImplementedError):
+        choose_variant(paths, 40)
+
+
+TENDL25_VARIANTS = Path(
+    os.environ.get(
+        "BEAM_TARGET_TENDL_VARIANTS_DIR",
+        r"C:\Users\LJ0489\Software\ENDF\_downloads\tendl2025-variants",
+    )
+)
+
+
+@pytest.mark.skipif(
+    not (TENDL25_VARIANTS / "p-Be009").is_dir(), reason="no local TENDL-2025 variants"
+)
+def test_tendl2025_variants():
+    """In TENDL-2025, -mt misses most p + 9Be channels above 30 MeV and the standard file
+    misses some d + 9Be channels below it, so the standard file is used for protons and -mt
+    for deuterons; -s0 is complete but not compared."""
+    p = find_evaluation(TENDL25_VARIANTS, "p", (4, 9), E_max=70)
+    d = find_evaluation(TENDL25_VARIANTS, "d", (4, 9), E_max=70)
+    assert Path(p).name == "p-Be009.tendl"
+    assert Path(d).name == "d-Be009-mt.tendl"
+    mt = NeutronProduction(TENDL25_VARIANTS / "p-Be009" / "p-Be009-mt.tendl")
+    assert mt.missing_share(70) > 0.2 > NeutronProduction(p).missing_share(70)
+    assert NeutronProduction(TENDL25_VARIANTS / "p-Be009" / "p-Be009-s0.tendl").missing_share() == 0
 
 
 # --- Thick-target benchmarks against MCNP --------------------------------------------------
@@ -264,6 +332,16 @@ regions = [{ material = "Be", length = 0.5, wall_radius = 10.0, num_x_bins = 100
 """
 
 
+def _same_dirs(entries, expected):
+    """Whether nuclear_data entries are the expected ones, comparing directories as the
+    operating system does (on Windows, "c:\\..." and "C:\\..." are the same directory)."""
+
+    def norm(entry):
+        return os.path.normcase(os.path.normpath(str(entry)))
+
+    return [norm(e) for e in entries] == [norm(e) for e in expected]
+
+
 def test_input_file_nuclear_data(tmp_path):
     """nuclear_data in an input file: relative directories are taken from the input file's
     directory; a missing directory is an error; the default is DROSG alone."""
@@ -271,7 +349,7 @@ def test_input_file_nuclear_data(tmp_path):
     relative = os.path.relpath(ENDFB, tmp_path).replace("\\", "/")
     path.write_text(INPUT.replace("LIBRARY", relative))
     case = load_input(path)["p18"]
-    assert case["source"]["nuclear_data"] == ["drosg", os.path.normpath(str(ENDFB))]
+    assert _same_dirs(case["source"]["nuclear_data"], ["drosg", ENDFB])
     s = BeamTarget(name="p18", **case["source"])
     assert s.yield_total / s.particle_rate == pytest.approx(MCNP_PROTONS[18], rel=0.02)
 
@@ -314,10 +392,10 @@ def test_named_libraries(tmp_path, monkeypatch):
     source = load_input(path)["p18"]["source"]
     assert source["nuclear_data"] == ["drosg", "endfb81"]
     s = BeamTarget(name="p18", **source)
-    assert s.nuclear_data == ["drosg", os.path.normpath(str(ENDFB))]
+    assert _same_dirs(s.nuclear_data, ["drosg", ENDFB])
     summary = tomllib.loads(s.get_summary())["inputs"]
     assert summary["nuclear_data"] == ["drosg", "endfb81"]
-    assert summary["nuclear_data_dirs"] == ["drosg", os.path.normpath(str(ENDFB))]
+    assert _same_dirs(summary["nuclear_data_dirs"], ["drosg", ENDFB])
     assert s.yield_total / s.particle_rate == pytest.approx(MCNP_PROTONS[18], rel=0.02)
 
     # No nuclear_data in the case: the configuration's default list

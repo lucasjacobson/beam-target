@@ -269,8 +269,8 @@ the input file). Cases that do not set `nuclear_data` use the configuration's de
 the directories they resolved to (`nuclear_data_dirs`).
 
 Each library is recognized by its file names: ENDF/B (`p-004_Be_009.endf`), FENDL
-(`p_0409_4-Be-9.endf`) and TENDL (`p-Be009-mt.tendl`; with several TENDL variants of one file
-in a directory, the one with every channel explicit is used). The evaluation used for each
+(`p_0409_4-Be-9.endf`) and TENDL (`p-Be009.tendl`, and its variants `-mt`, `-s60`, `-s20`,
+and `-s0`). The evaluation used for each
 reaction, from the file's header, and the file (relative to its library's directory in
 `nuclear_data_dirs`) are recorded in the summary (`[reactions.<rxn>]`), the HDF5 file (the
 `data` attribute of `neutrons_<rxn>`) and the SDEF header.
@@ -294,6 +294,28 @@ range at the beam energy), even where the evaluation says linear (INT=2), as MCN
 literally, each peak and edge of a tabulated spectrum stays at a fixed outgoing energy over the
 1-2 MeV between tabulated incident energies, which leaves a stripe for each one and puts
 neutrons above the highest energy the reaction can give. Neither choice changes the yields.
+
+**TENDL variants.** TENDL publishes each evaluation in five variants of the same TALYS
+calculation: the standard file gives the channels separately up to 30 MeV and lumps them into
+one (MT=5) above, `-s20` and `-s60` switch at 20 and 60 MeV, `-mt` never lumps them, and
+`-s0` always does. In TENDL-2025 they are not equally complete. Above about 30 MeV the
+separate channels of `-mt` cover only part of the non-elastic cross section for proton,
+triton, ³He, and alpha beams, so neutron production from p + ⁹Be, ⁶³Cu, and ¹⁸¹Ta at 70 MeV is
+50-65% low; `-s60` has the same gap from 30 to 60 MeV. Below 30 MeV, the standard file misses
+up to 22% of the non-elastic cross section for d + ⁹Be, where `-mt` is complete. The lumped
+`-s0` is always complete, but its spectrum can be wrong for light targets: for 10 MeV
+protons on ⁹Be it gives every neutron the (p,n) shape, putting 1% of the neutrons below 2 MeV
+instead of the separate channels' 39% (from the breakup (p,np)). So where a library holds
+several variants of one file, the code takes the most complete of the standard, `-mt`, and
+`-s60` files up to the beam energy at entry, preferring them in that order when they are
+equally complete (within 1%), and uses `-s20` or `-s0` only when none of those three is there.
+For TENDL-2025 this gives the standard file for protons and alphas, and `-mt` for d + ⁹Be and
+for the actinides. The file used is recorded with the reaction, as above.
+
+Even the complete variants differ in their spectra for light targets (for d + ⁹Be at 25 MeV,
+the neutrons below 2 MeV differ by more than a factor of two between the standard file and
+`-mt`), so for beryllium and lithium the evaluated libraries (ENDF/B, FENDL) are preferable to
+TENDL wherever they cover the beam.
 
 **Validation against MCNP.** For beams stopping in thick targets, the neutrons per beam
 particle agree with MCNP's neutrons created by charged-particle reactions, using the same data:
