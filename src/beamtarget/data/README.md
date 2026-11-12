@@ -331,11 +331,16 @@ particle agree with MCNP's neutrons created by charged-particle reactions, using
 on beryllium, within 1% for protons at 10-70 MeV (ENDF/B) and deuterons at 18-70 MeV
 (FENDL-3.2c, lab-frame tables), and within 1.5% for alphas at 18-70 MeV (TENDL-2021); on
 aluminum and tantalum, within 2% for protons and deuterons at 18-70 MeV (ENDF/B-VII.0 and
-FENDL-3.2c); and on natural uranium and thorium, within 3% for protons at 18-70 MeV and
-deuterons at 30-70 MeV (FENDL-3.2c, with fission for protons on uranium). MCNP's tally of neutrons escaping the
-target is higher, as it includes the target's own (n,2n) multiplication: a source term must
-not, because the transport code models the target. The spectra agree too: for 18 MeV protons
-on thick beryllium (ENDF/B-VII.0), MCNP 6.2's escaping neutrons (10¹⁰ histories, 5° cones,
+FENDL-3.2c); on natural uranium, within 3% for protons at 18-70 MeV and 5% for deuterons at
+30-70 MeV (FENDL-3.2c); and on thorium, within 2% for protons at 30 MeV (FENDL-3.2c). Only the
+proton uranium files give fission a channel of its own. FENDL-3.2c's d + U files (from
+TENDL-2011) give about a third as many neutrons per reaction as its proton files, so most of
+the fission neutrons are probably missing, and its p + ²³²Th file lumps every reaction into
+one channel, so whether it includes fission cannot be told (see Fission, below); for these,
+the agreement shows only that the data are read as MCNP reads them. MCNP's tally of neutrons
+escaping the target is higher, as it includes the target's own (n,2n) multiplication: a source
+term must not, because the transport code models the target. The spectra agree too: for 18 MeV
+protons on thick beryllium (ENDF/B-VII.0), MCNP 6.2's escaping neutrons (10¹⁰ histories, 5° cones,
 0.1 MeV bins) follow the calculated spectra, fine structure and upper edges included. These
 comparisons test the calculation, not the data, which MCNP shares.
 
