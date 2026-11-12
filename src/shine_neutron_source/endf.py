@@ -60,8 +60,9 @@ SUMS = {4: range(50, 92), 103: range(600, 650), 104: range(650, 700), 105: range
 
 
 def _number(field):
-    """Read one 11-character ENDF number, such as " 1.234567+3" or "-2.5-12"."""
-    s = field.strip()
+    """Read one 11-character ENDF number, such as " 1.234567+3", "-2.5-12" or " 6.01200+ 3"
+    (Fortran output can leave a blank between the exponent's sign and its digits)."""
+    s = field.replace(" ", "")
     if not s:
         return 0.0
     for i in range(1, len(s)):
@@ -347,9 +348,7 @@ class NeutronProduction:
         for mt in mf6:
             if mt == 2 or (mt == 4 and has_levels):  # Elastic; or a sum of the level channels
                 continue
-            channel = self._read_channel(mt, sections[(6, mt)], mf3)
-            if channel is not None:
-                self.channels.append(channel)
+            self.channels.extend(self._read_channels(mt, sections[(6, mt)], mf3))
 
         parts = [
             xs for mt, (_, _, xs) in mf3.items() if mt not in (1, 2, 3) and mt not in redundant
@@ -358,11 +357,14 @@ class NeutronProduction:
         self.channel_sum = Tabulated(grid, sum(p(grid) for p in parts), [len(grid)], [2])
         self.nonelastic = mf3[3][2] if 3 in mf3 else self.channel_sum
 
-    def _read_channel(self, mt, lines, mf3):
-        """Return the _Channel of an MF=6 section, or None if it has no neutrons."""
+    def _read_channels(self, mt, lines, mf3):
+        """Return a _Channel for each neutron product of an MF=6 section (none, one, or
+        several: an evaluation can list the neutrons more than once, each over its own range
+        of incident energies, as FENDL-3.2c p + 7Li does below and above 10 MeV)."""
         r = _Records(lines)
         head = r.cont()
         lct, nk = int(head[3]), int(head[4])
+        channels = []
         for _ in range(nk):
             c, yield_ = r.tab1()
             zap, law = int(c[0]), int(c[3])
@@ -386,8 +388,8 @@ class NeutronProduction:
                     f"{self.path}: MT={mt} neutrons use LAW={law}; only LAW=1, 2 and 7 are "
                     "supported"
                 )
-            return _Channel(mt, law, xs, yield_, frame, incident, dists, unit_base, q=qi)
-        return None
+            channels.append(_Channel(mt, law, xs, yield_, frame, incident, dists, unit_base, q=qi))
+        return channels
 
     def _incident_interpolation(self, codes, mt):
         if set(codes) <= {2}:
@@ -453,7 +455,7 @@ class NeutronProduction:
             cosines, spectra = [], []
             for _ in range(int(cm[5])):
                 cc, f = r.tab1()
-                if set(f.codes) - {2}:
+                if set(f.codes) not in ({1}, {2}):  # All histogram or all linear-linear
                     raise NotImplementedError(f"{self.path}: MT={mt} LAW=7 energy INT={f.codes}")
                 cosines.append(cc[1])
                 spectra.append(Tabulated(f.x / 1e6, f.y * 1e6, f.breaks, f.codes))
@@ -639,8 +641,12 @@ class NeutronProduction:
         for s in dist.spectra:  # Each spectrum in the lab energy bins (unnormalised)
             e = s.x * scale
             f = s.y / scale
-            Eb, p, _ = _energy_points(e, f, 2, max_step)
-            norm = np.sum(0.5 * (f[1:] + f[:-1]) * np.diff(e))
+            lep = 1 if set(s.codes) == {1} else 2  # Histogram (INT=1) or linear (INT=2)
+            Eb, p, _ = _energy_points(e, f, lep, max_step)
+            if lep == 1:
+                norm = np.sum(f[:-1] * np.diff(e))
+            else:
+                norm = np.sum(0.5 * (f[1:] + f[:-1]) * np.diff(e))
             k = np.clip(np.floor((Eb - energy_edges[0]) / width).astype(int), 0, shape[1] - 1)
             spectra.append(np.bincount(k, p * norm, minlength=shape[1]))
         out = np.zeros(shape)

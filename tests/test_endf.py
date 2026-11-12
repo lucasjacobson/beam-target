@@ -11,6 +11,7 @@ import pytest
 from shine_neutron_source import Material, Region, ShineSource, load_input
 from shine_neutron_source.endf import (
     NeutronProduction,
+    _number,
     _parse_name,
     find_evaluation,
     separation_energy,
@@ -91,6 +92,16 @@ def test_lab_spectrum_conserves_the_total(path, energy):
     mids = (edges[:-1] + edges[1:]) / 2
     mean = np.sum(spectrum * mids, axis=1) / spectrum.sum(axis=1)
     assert mean[0] > mean[-1]
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [(" 1.234567+3", 1234.567), ("-2.500000-12", -2.5e-12), (" 6.01200+ 3", 6012.0),
+     (" 1.00000- 5", 1e-5), ("  1.5e+2   ", 150.0), ("           ", 0.0)],
+)  # fmt: skip
+def test_endf_numbers(field, value):
+    """ENDF numbers without the "e", including Fortran's blank after the exponent's sign."""
+    assert _number(field) == pytest.approx(value, rel=1e-12)
 
 
 def test_kalbach_slope_systematics():
@@ -309,3 +320,31 @@ def test_deuterons_with_lab_tables_match_mcnp():
     s = thick_be("d", 18, ["drosg", FENDL_D], length=0.5)
     assert s.reactions["d9Be_xn"].production.channels[0].law == 7
     assert s.yield_total / s.particle_rate == pytest.approx(1.2896e-02, rel=0.01)
+
+
+@pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
+def test_every_neutron_product_of_a_section_is_read():
+    """FENDL-3.2c's p + 7Li (JENDL-5) lists the MT=5 neutrons twice, below and above 10 MeV;
+    reading only the first lost every neutron above 10 MeV."""
+    x = NeutronProduction(FENDL_D / "proton" / "p_0328_3-Li-7.endf")
+    assert [c.mt for c in x.channels].count(5) == 2
+    assert x.production_cross_section(30.0) > 0.1  # b, all from the second product
+    angles = np.arange(0, 181, 10.0)
+    edges = np.arange(0, np.ceil(x.max_lab_energy(30.0) / 0.1) * 0.1 + 0.05, 0.1)
+    spectrum, _ = x.lab_spectrum(30.0, angles, edges)
+    assert spectrum.sum() == pytest.approx(x.production_cross_section(30.0), rel=1e-10)
+
+
+@pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
+def test_lab_tables_with_histogram_spectra():
+    """FENDL-3.2c's p + 12C gives its lab-frame (LAW=7) spectra as histograms (INT=1), and
+    writes some exponents with a blank after the sign ("6.01200+ 3")."""
+    x = NeutronProduction(FENDL_D / "proton" / "p_0625_6-C-12.endf")
+    assert set(x.channels[0].distributions[0].spectra[0].codes) == {1}
+    angles = np.arange(0, 181, 10.0)
+    edges = np.arange(0, np.ceil(x.max_lab_energy(70.0) / 0.1) * 0.1 + 0.05, 0.1)
+    spectrum, _ = x.lab_spectrum(70.0, angles, edges)
+    assert spectrum.sum() == pytest.approx(x.production_cross_section(70.0), rel=1e-10)
+    mids = (edges[:-1] + edges[1:]) / 2
+    mean = np.sum(spectrum * mids, axis=1) / spectrum.sum(axis=1)
+    assert mean[0] > mean[-1]  # Forward neutrons are faster
