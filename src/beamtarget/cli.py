@@ -360,12 +360,13 @@ def setup_logging(verbose=False):
         package_logger.addHandler(handler)
 
 
-def run_case(name, settings, output_dir="output", input_file=None):
+def run_case(name, settings, output_dir="output", input_file=None, name_width=0):
     """Calculate one case from load_input() and write its outputs to <output_dir>/<name>/.
 
     Writes source.h5, source.sdef, summary.toml, the profiles, and plots/*.png (see
     docs/outputs.md), and returns the BeamTarget. input_file, if given, is recorded in the
-    summary and the SDEF header.
+    summary and the SDEF header. The case's result line pads its name to name_width
+    characters (the longest name of the run), so the lines line up.
     """
     t0 = time.time()
     s = settings["source"]
@@ -394,9 +395,10 @@ def run_case(name, settings, output_dir="output", input_file=None):
         "sdef_backstop_position": backstop,
     }
     source.write_text_files(case_dir, {**run_info, **sdef_info})
+    # Fixed widths, so the lines of a run line up
     logger.info(
-        f"{name}: {source.yield_total:.3e} n/s, mean energy "
-        f"{source.mean_neutron_energy():.3g} MeV, in {time.time() - t0:.1f} s "
+        f"{name + ':':<{name_width + 1}} {source.yield_total:.3e} n/s, mean energy "
+        f"{source.mean_neutron_energy():5.2f} MeV, in {time.time() - t0:6.1f} s "
         f"-> {os.path.join(case_dir, '')}"  # Trailing separator: a directory
     )
     return source
@@ -466,8 +468,9 @@ def main(argv=None):
         f"Running {len(cases)} case(s) from {args.input} with {jobs} process(es); "
         f"results in {os.path.join(args.output_dir, '')}"  # Trailing separator: a directory
     )
+    width = max(len(name) for name in cases)
     if jobs > 1:
-        work = [(name, s, args.output_dir, args.input) for name, s in cases.items()]
+        work = [(name, s, args.output_dir, args.input, width) for name, s in cases.items()]
         # Each worker sets up logging; close() and join() let workers exit normally (the
         # context manager alone would terminate them, which can lose their last output)
         with mp.Pool(jobs, initializer=setup_logging, initargs=(args.verbose,)) as pool:
@@ -476,5 +479,5 @@ def main(argv=None):
             pool.join()
     else:
         for name, s in cases.items():
-            run_case(name, s, args.output_dir, args.input)
+            run_case(name, s, args.output_dir, args.input, width)
     logger.info(f"Done: {len(cases)} case(s) in {time.time() - t0:.1f} s")
