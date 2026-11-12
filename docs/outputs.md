@@ -28,7 +28,7 @@ The complete result, from which the other files can all be remade. Its file attr
 
 | Attribute | Meaning |
 |---|---|
-| `format`, `format_version` | `"shine-neutron-source"`, and the layout version, increased whenever the layout changes |
+| `format`, `format_version` | `"beam-target"`, and the layout version, increased whenever the layout changes |
 | `name`, `created`, `code_version` | Case name, UTC creation time, and the code version: the git commit (with `-dirty` if there were uncommitted changes) when run from a checkout, otherwise the package version |
 | `input_file` | The input file, when run from one |
 | `direction`, `entry_position`, `backstop_position` | Where the source was placed for the case: the beam direction, and the points where the beam enters and reaches the backstop [cm] |
@@ -96,7 +96,7 @@ angle bin), each with its own energy spectrum (all reactions together), so the f
 correlation between position, angle, and energy is kept:
 
 ```python
-from shine_neutron_source.openmc_source import get_openmc_sources
+from beamtarget.openmc_source import get_openmc_sources
 
 settings.source = get_openmc_sources("output/DT90/source.h5")
 ```

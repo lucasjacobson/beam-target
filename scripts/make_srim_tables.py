@@ -21,7 +21,7 @@ copy of SR Module, so nothing is installed on the system.
 
 Usage:
     python scripts/make_srim_tables.py "C:\\path\\to\\SRIM-2013-Pro" \\
-        src/shine_neutron_source/data/srim_stopping.h5 --raw-dir srim_raw
+        src/beamtarget/data/srim_stopping.h5 --raw-dir srim_raw
 """
 
 import argparse
@@ -201,7 +201,7 @@ def write_hdf5(path, raw_dir, all_targets):
     gz = dict(compression="gzip", compression_opts=9, shuffle=True)
     units = "eV/(1e15 atoms/cm2)"
     with h5py.File(path, "w") as f:
-        f.attrs["format"] = "shine-neutron-source SRIM stopping powers"
+        f.attrs["format"] = "beam-target SRIM stopping powers"
         f.attrs["format_version"] = FORMAT_VERSION
         f.attrs["srim_version"] = versions.pop()
         f.attrs["created"] = datetime.date.today().isoformat()

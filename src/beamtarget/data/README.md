@@ -1,6 +1,6 @@
 # Nuclear data
 
-The files in this directory are read by `ShineSource` (see `read_drosg_koe`,
+The files in this directory are read by `BeamTarget` (see `read_drosg_koe`,
 `read_srim_h5`, `read_pstar`, `read_cross_sections` and `read_stopping_power` in
 `source.py`, and `mass_table` and `natural_abundances` in `nuclear.py`). The DROSG files and
 the mass table are kept exactly as distributed, the DROSG files including their Windows (CRLF)
@@ -101,7 +101,7 @@ from the data files in this directory.
 ## Stopping powers
 
 Two stopping-power sets are available, chosen with the `stopping_power` setting (in an input
-file, or the `stopping_power` argument of `ShineSource`):
+file, or the `stopping_power` argument of `BeamTarget`):
 
 | `stopping_power` | Electronic stopping | Nuclear stopping |
 |---|---|---|
@@ -250,8 +250,8 @@ evaluations based on measurements to model calculations:
     nuclear_data = ["drosg", ".../ENDF-B-VIII.1", ".../FENDL-3.2c", ".../TENDL-2025"]
 
 Where the libraries are belongs to the machine, not to a case, so define them once, by name,
-in your configuration file, `~/.shine-neutron-source.toml` (or the file named by the
-`SHINE_NEUTRON_SOURCE_CONFIG` environment variable), and name them in input files, which then
+in your configuration file, `~/.beam-target.toml` (or the file named by the
+`BEAM_TARGET_CONFIG` environment variable), and name them in input files, which then
 work on any machine that defines the same names:
 
     [libraries]

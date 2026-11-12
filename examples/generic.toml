@@ -1,6 +1,6 @@
-# Generic beam-target cases for shine_neutron_source, one for each feature of the code.
+# Generic beam-target cases for beamtarget, one for each feature of the code.
 #
-# Run with:  python -m shine_neutron_source examples/generic.toml -j 4
+# Run with:  python -m beamtarget examples/generic.toml -j 4
 #
 # Memory use is roughly 2.5 GB per case at the mesh below, so limit the number of cases run
 # in parallel with -j (the default is one per CPU). Run a single case with -c NAME.
@@ -44,8 +44,8 @@ backstop_position = [0.0, 0.0, 0.0]  # cm
 stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
 # Nuclear-data libraries, searched in order for each target isotope: "drosg" (the built-in
 # D(d,n), T(d,n), T(p,n) and 7Li(p,n) reactions), names of libraries defined in your
-# ~/.shine-neutron-source.toml, such as ["drosg", "endfb81", "fendl32c", "tendl2025"], or
-# directories (relative to this file). See src/shine_neutron_source/data/README.md.
+# ~/.beam-target.toml, such as ["drosg", "endfb81", "fendl32c", "tendl2025"], or
+# directories (relative to this file). See src/beamtarget/data/README.md.
 nuclear_data = ["drosg"]
 
 # --- Materials -------------------------------------------------------------------------------

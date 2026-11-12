@@ -2,7 +2,7 @@
 
 Writes stopping_power.png next to this script. Needs the package installed (pip install -e .).
 
-Both curves are the stopping per tritium atom exactly as ShineSource uses it (pure T2 gas):
+Both curves are the stopping per tritium atom exactly as BeamTarget uses it (pure T2 gas):
 "srim" is the SRIM electronic + nuclear stopping; "icru49" is the ICRU 49 electronic stopping
 for protons at the same velocity plus the SRIM nuclear stopping.
 """
@@ -12,8 +12,8 @@ import os
 import numpy as np
 from matplotlib import pyplot as plt
 
-from shine_neutron_source import ShineSource
-from shine_neutron_source.source import Region, dt_gas
+from beamtarget import BeamTarget
+from beamtarget.source import Region, dt_gas
 
 plt.rcParams["font.family"] = "serif"
 plt.rcParams["mathtext.default"] = "regular"
@@ -26,7 +26,7 @@ def stopping_per_atom(stopping_power):
         dt_gas(1.0), 20.0, pressure=10.0, temperature=1.0, wall_radius=4.0, num_x_bins=2,
         num_x_bins_out=1,
     )  # fmt: skip
-    source = ShineSource(
+    source = BeamTarget(
         "plot", [region], 280.0, 1.0, 0.2, 90.0, 90.0, 0.5, stopping_power=stopping_power
     )
     E, eps = source.stopping_per_region[0]

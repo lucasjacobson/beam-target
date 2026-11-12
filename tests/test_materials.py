@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from conftest import make_source
 
-from shine_neutron_source.source import Material, dt_gas, get_atom_density, parse_formula
+from beamtarget.source import Material, dt_gas, get_atom_density, parse_formula
 
 TID = Material("TiD1.5", "solid", atoms={"Ti": 1.0, "D": 1.5}, density=3.9)
 TIT = Material("TiT1.5", "solid", atoms={"Ti": 1.0, "T": 1.5}, density=4.0)

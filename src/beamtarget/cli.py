@@ -2,8 +2,8 @@
 
 Run the cases in a TOML input file with either of:
 
-    shine-neutron-source examples/generic.toml [-c CASE] [-o OUTPUT_DIR] [-j JOBS] [-v]
-    python -m shine_neutron_source examples/generic.toml ...
+    beam-target examples/generic.toml [-c CASE] [-o OUTPUT_DIR] [-j JOBS] [-v]
+    python -m beamtarget examples/generic.toml ...
 
 See load_input for the file format and examples/generic.toml for an example.
 """
@@ -18,7 +18,7 @@ import tomllib
 
 from .config import DROSG, ConfigError, load_config, resolve_nuclear_data
 from .nuclear import BEAMS
-from .source import PHASES, SDEF_DIRECTIONS, STOPPING_POWERS, Material, Region, ShineSource
+from .source import PHASES, SDEF_DIRECTIONS, STOPPING_POWERS, BeamTarget, Material, Region
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +194,7 @@ def _read_regions(where, items, named, materials):
 
 def _read_nuclear_data(where, entries, input_path, config):
     """Check a nuclear_data list (None: the configuration's default) and return the entries
-    to give ShineSource: "drosg" and library names (from the configuration) as they are,
+    to give BeamTarget: "drosg" and library names (from the configuration) as they are,
     directories made absolute (relative ones are taken from the input file's directory)."""
     if entries is None:
         return None
@@ -233,7 +233,7 @@ def load_input(path):
     also needs one of current and yield_total; if the case and [defaults] give both, the one
     the case sets itself is used.
 
-    Each returned settings dict has "source", the keyword arguments for ShineSource
+    Each returned settings dict has "source", the keyword arguments for BeamTarget
     (without name), "direction", the MCNP SDEF beam direction, and "entry_position" and
     "backstop_position" (one of them None, or both for the default placement).
     """
@@ -351,7 +351,7 @@ def load_input(path):
 def setup_logging(verbose=False):
     """Show this package's log messages on stderr: progress and one line per case, plus each
     case's settings and detailed results if verbose. Safe to call more than once."""
-    package_logger = logging.getLogger("shine_neutron_source")
+    package_logger = logging.getLogger("beamtarget")
     package_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
     if not any(getattr(h, "_shine_cli", False) for h in package_logger.handlers):
         handler = logging.StreamHandler()
@@ -364,7 +364,7 @@ def run_case(name, settings, output_dir="output", input_file=None):
     """Calculate one case from load_input() and write its outputs to <output_dir>/<name>/.
 
     Writes source.h5, source.sdef, summary.toml, the profiles, and plots/*.png (see
-    docs/outputs.md), and returns the ShineSource. input_file, if given, is recorded in the
+    docs/outputs.md), and returns the BeamTarget. input_file, if given, is recorded in the
     summary and the SDEF header.
     """
     t0 = time.time()
@@ -378,7 +378,7 @@ def run_case(name, settings, output_dir="output", input_file=None):
         f"{len(s['regions'])} region(s), "
         f"last {s['regions'][-1].material.name}, stopping power {s['stopping_power']}"
     )
-    source = ShineSource(name=name, **s)
+    source = BeamTarget(name=name, **s)
     case_dir = os.path.join(output_dir, name)
     run_info = {} if input_file is None else {"input_file": str(input_file)}
     direction = settings["direction"]
@@ -410,7 +410,7 @@ def _run_case_in_worker(args):
 def main(argv=None):
     """Command-line interface: run the cases in an input file."""
     parser = argparse.ArgumentParser(
-        prog="shine-neutron-source",
+        prog="beam-target",
         description="Calculate neutron source terms for the cases in a TOML input file. "
         "Each case is written to <output-dir>/<case>/: source.h5, source.sdef, plots/, "
         "summary.toml, axial_profile.txt, energy_spectrum.txt and angular_distribution.txt. "

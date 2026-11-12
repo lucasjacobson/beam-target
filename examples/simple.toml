@@ -6,7 +6,7 @@
 # temperature), entry_position (instead of backstop_position), and atoms with density for a
 # solid material. See examples/generic.toml for those.
 #
-# Run with:  python -m shine_neutron_source examples/simple.toml
+# Run with:  python -m beamtarget examples/simple.toml
 
 [materials.DT90]
 phase     = "gas"

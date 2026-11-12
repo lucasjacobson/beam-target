@@ -1,14 +1,14 @@
 """Neutron source terms for beam-target neutron generators, for MCNP and OpenMC (see README.md).
 
-- ShineSource (in source.py) calculates the source for one case and writes it as HDF5, an
+- BeamTarget (in source.py) calculates the source for one case and writes it as HDF5, an
   MCNP SDEF card, and plots.
 - load_input and run_case (in cli.py) read cases from a TOML input file and run them; the
-  shine-neutron-source command (or python -m shine_neutron_source) does this from the
+  beam-target command (or python -m beamtarget) does this from the
   command line.
 - openmc_source.get_openmc_sources turns a case's source.h5 into OpenMC sources (needs the
   openmc package, which is not imported otherwise).
 
-Progress and results are logged to the "shine_neutron_source" logger, which is silent unless
+Progress and results are logged to the "beamtarget" logger, which is silent unless
 logging is configured (the command line shows it; see setup_logging).
 """
 
@@ -16,9 +16,9 @@ import logging
 
 from .cli import InputError, load_input, main, run_case, setup_logging
 from .source import (
+    BeamTarget,
     Material,
     Region,
-    ShineSource,
     dt_gas,
     get_atom_density,
     get_code_version,
@@ -34,7 +34,7 @@ __all__ = [
     "InputError",
     "Material",
     "Region",
-    "ShineSource",
+    "BeamTarget",
     "__version__",
     "dt_gas",
     "get_atom_density",

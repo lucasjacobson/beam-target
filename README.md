@@ -1,4 +1,4 @@
-# shine-neutron-source
+# beam-target
 
 Neutron source terms for beam-target neutron generators, for MCNP and OpenMC.
 
@@ -33,31 +33,31 @@ Python 3.11 or later. From a clone of this repository:
     pip install -e .
 
 This installs the package, its dependencies (numpy, h5py, and matplotlib), and the
-`shine-neutron-source` command. The nuclear data it needs are included, except evaluated
+`beam-target` command. The nuclear data it needs are included, except evaluated
 libraries, which are optional (see [Nuclear data](#nuclear-data)). Writing OpenMC sources
 also needs the `openmc` Python package (0.16 or later). For development,
 `pip install -e ".[dev]"` adds pytest and ruff.
 
 ## Quick start
 
-    shine-neutron-source examples/simple.toml
+    beam-target examples/simple.toml
 
 runs the case in `examples/simple.toml` and writes its results to `output/DT90/`. The same
-works as `python -m shine_neutron_source`. Options: `-c NAME` runs one case, `-o DIR` sets the
+works as `python -m beamtarget`. Options: `-c NAME` runs one case, `-o DIR` sets the
 output directory, `-j N` sets the number of cases run in parallel, `--list` lists the cases,
 and `-v` shows more detail.
 
 From Python:
 
 ```python
-from shine_neutron_source import load_input, run_case
+from beamtarget import load_input, run_case
 
 for name, settings in load_input("examples/simple.toml").items():
     source = run_case(name, settings, output_dir="output")
     print(name, source.yield_total, "n/s")
 ```
 
-`ShineSource` can also be built directly from `Material` and `Region` objects; see its
+`BeamTarget` can also be built directly from `Material` and `Region` objects; see its
 docstring.
 
 ## Input files
@@ -85,10 +85,10 @@ energy, which an SDEF card cannot. [`docs/outputs.md`](docs/outputs.md) describe
 
 The cross sections of the built-in reactions (DROSG-2000), stopping powers (SRIM and
 ICRU 49), atomic masses (AME2020), and natural isotopic compositions (NIST) are included in
-[`src/shine_neutron_source/data/`](src/shine_neutron_source/data/). For other reactions, point
+[`src/beamtarget/data/`](src/beamtarget/data/). For other reactions, point
 the code at evaluated libraries you download (ENDF/B, FENDL, TENDL, etc.); a per-user
 configuration file names them once for every input file. The
-[data README](src/shine_neutron_source/data/README.md) gives the source of every data file,
+[data README](src/beamtarget/data/README.md) gives the source of every data file,
 how evaluated libraries are set up and used, how the results compare with MCNP and with
 measurements, and how to choose between libraries.
 
@@ -104,7 +104,7 @@ including:
   target agree with MCNP's own calculation from the same data within 1-3%: protons,
   deuterons, and alphas on beryllium (in `tests/test_endf.py`), and protons and deuterons on
   aluminum, tantalum, uranium, and thorium (see the
-  [data README](src/shine_neutron_source/data/README.md)).
+  [data README](src/beamtarget/data/README.md)).
 - **Reference results:** yields for D/T gas targets are pinned, so that any change in them is
   deliberate.
 
@@ -130,7 +130,7 @@ including:
   end of a built-in reaction's data is refused.
 - **Evaluated data** come with their own limitations, including fission (often missing from
   the libraries) and neutrons from secondary charged particles; see the
-  [data README](src/shine_neutron_source/data/README.md).
+  [data README](src/beamtarget/data/README.md).
 - **Target (n,2n) multiplication** and any other transport of the neutrons in the target are
   left to the transport code, which models the target.
 
@@ -138,7 +138,7 @@ including:
 
 Run the tests with `python -m pytest`, and format and lint with `ruff format` and `ruff check`
 (settings in `pyproject.toml`). The naming conventions used in the code are at the top of
-[`source.py`](src/shine_neutron_source/source.py).
+[`source.py`](src/beamtarget/source.py).
 [`scripts/make_srim_tables.py`](scripts/make_srim_tables.py) regenerates the SRIM stopping
 tables, and [`docs/figures/`](docs/figures/) holds the figures in the data README and the
 scripts that draw them.
@@ -147,10 +147,10 @@ scripts that draw them.
 
 If you use this package in published work, please cite it; [`CITATION.cff`](CITATION.cff)
 gives the details (GitHub shows them under "Cite this repository"). Please also cite the
-nuclear data you use (see the [data README](src/shine_neutron_source/data/README.md)).
+nuclear data you use (see the [data README](src/beamtarget/data/README.md)).
 
 ## License
 
 The code and documentation are released under the MIT License (see [`LICENSE`](LICENSE)),
 copyright SHINE Technologies, LLC. The data files are redistributed under their own sources'
-terms; see the [data README](src/shine_neutron_source/data/README.md#licensing).
+terms; see the [data README](src/beamtarget/data/README.md#licensing).

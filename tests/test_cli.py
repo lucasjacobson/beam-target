@@ -8,7 +8,7 @@ import h5py
 import pytest
 from conftest import EXAMPLE_INPUT
 
-from shine_neutron_source import InputError, ShineSource, load_input, main
+from beamtarget import BeamTarget, InputError, load_input, main
 
 # Settings for a small, fast case; the tests below add cases and tables to these. [defaults]
 # comes last, so that text added to BASE goes into it.
@@ -111,7 +111,7 @@ def example_sources():
         s = settings["source"]
         for region in s["regions"]:
             region.num_x_bins = region.num_x_bins_out
-        sources[name] = ShineSource(name=name, **{**s, "angle_step": 1.0})
+        sources[name] = BeamTarget(name=name, **{**s, "angle_step": 1.0})
     return sources
 
 
@@ -303,7 +303,7 @@ def test_beam_setting(tmp_path):
     cases = load_input(write_input(tmp_path, BASE + lithium))
     assert cases["d"]["source"]["beam"] == "d"
     assert cases["p"]["source"]["beam"] == "p"
-    source = ShineSource(name="p", **cases["p"]["source"])
+    source = BeamTarget(name="p", **cases["p"]["source"])
     assert source.reactions_present() == ["p7Li_n0", "p7Li_n1"]
 
 
@@ -463,7 +463,7 @@ def test_shine_systems_example(name, expected):
     assert s["current"] == 45.0 and s["voltage"] == 280.0 and s["beam_energy_backstop"] == 10.0
     for region in s["regions"]:
         region.num_x_bins = region.num_x_bins_out  # A coarse mesh, for speed
-    source = ShineSource(name=name, **{**s, "angle_step": 1.0})
+    source = BeamTarget(name=name, **{**s, "angle_step": 1.0})
     assert source.calculated == "pressure"
     assert source.yield_total == pytest.approx(expected, rel=0.01)
     assert source.warnings == []
@@ -478,7 +478,7 @@ def test_simple_example():
     assert chamber.material.atom_fractions["T"] == pytest.approx(0.9)
     assert chamber.pressure == 38.0 and s["current"] == 50.0 and s["beam"] == "d"
     chamber.num_x_bins = chamber.num_x_bins_out  # A coarse mesh, for speed
-    source = ShineSource(name="DT90", **{**s, "angle_step": 1.0})
+    source = BeamTarget(name="DT90", **{**s, "angle_step": 1.0})
     assert source.calculated == "beam_energy_backstop"
     assert source.yields["DT"] > 10 * source.yields["DD"] > 0
 

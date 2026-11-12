@@ -1,6 +1,6 @@
 # Nuclear data files are kept byte-for-byte as distributed (the DROSG files with CRLF line
 # endings, the AME2020 and NIST tables with LF)
-src/shine_neutron_source/data/*.koe -text
-src/shine_neutron_source/data/mass_1.mas20.txt -text
-src/shine_neutron_source/data/nist_isotopic_compositions.txt -text
+src/beamtarget/data/*.koe -text
+src/beamtarget/data/mass_1.mas20.txt -text
+src/beamtarget/data/nist_isotopic_compositions.txt -text
 tests/data/endf/** -text

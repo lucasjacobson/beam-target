@@ -8,8 +8,8 @@ import h5py
 import numpy as np
 import pytest
 
-from shine_neutron_source import Material, Region, ShineSource, load_input
-from shine_neutron_source.endf import (
+from beamtarget import BeamTarget, Material, Region, load_input
+from beamtarget.endf import (
     NeutronProduction,
     _number,
     _parse_name,
@@ -34,7 +34,7 @@ MCNP_ALPHAS = {30: 3.1157e-03, 70: 1.4677e-02}
 def thick_be(beam, energy_MeV, nuclear_data, length=1.0, num_x_bins=600, **kw):
     """A Be block thick enough to stop the beam."""
     charge = 2 if beam in ("h", "a") else 1
-    return ShineSource(
+    return BeamTarget(
         name=f"{beam}{energy_MeV}",
         regions=[
             Region(
@@ -218,8 +218,8 @@ def test_drosg_first_keeps_its_reactions():
                       num_x_bins=40, num_x_bins_out=10, divergence=30.0)]  # fmt: skip
     kw = dict(name="t", regions=regions, voltage=280.0, current=10.0, start_radius=0.2,
               angle_step=1.0, angle_step_out=10.0, energy_bin_width=0.01)  # fmt: skip
-    plain = ShineSource(**kw)
-    with_library = ShineSource(**kw, nuclear_data=["drosg", str(ENDFB)])
+    plain = BeamTarget(**kw)
+    with_library = BeamTarget(**kw, nuclear_data=["drosg", str(ENDFB)])
     assert list(with_library.reactions) == ["DD", "DT"]
     assert with_library.yield_total == plain.yield_total
     assert np.all(with_library.survival_grid == 1)
@@ -272,7 +272,7 @@ def test_input_file_nuclear_data(tmp_path):
     path.write_text(INPUT.replace("LIBRARY", relative))
     case = load_input(path)["p18"]
     assert case["source"]["nuclear_data"] == ["drosg", os.path.normpath(str(ENDFB))]
-    s = ShineSource(name="p18", **case["source"])
+    s = BeamTarget(name="p18", **case["source"])
     assert s.yield_total / s.particle_rate == pytest.approx(MCNP_PROTONS[18], rel=0.02)
 
     path.write_text(INPUT.replace("LIBRARY", "nowhere"))
@@ -283,7 +283,7 @@ def test_input_file_nuclear_data(tmp_path):
     source = load_input(path)["p18"]["source"]
     assert source["nuclear_data"] is None
     with pytest.raises(ValueError, match="no neutrons are produced"):  # DROSG has no 9Be
-        ShineSource(name="p18", **source)
+        BeamTarget(name="p18", **source)
 
 
 # --- The user's configuration file: named libraries ----------------------------------------
@@ -292,7 +292,7 @@ def test_input_file_nuclear_data(tmp_path):
 def write_config(tmp_path, monkeypatch, text):
     path = tmp_path / "config.toml"
     path.write_text(text)
-    monkeypatch.setenv("SHINE_NEUTRON_SOURCE_CONFIG", str(path))
+    monkeypatch.setenv("BEAM_TARGET_CONFIG", str(path))
     return path
 
 
@@ -313,7 +313,7 @@ def test_named_libraries(tmp_path, monkeypatch):
     path.write_text(INPUT.replace('"LIBRARY"', '"endfb81"'))
     source = load_input(path)["p18"]["source"]
     assert source["nuclear_data"] == ["drosg", "endfb81"]
-    s = ShineSource(name="p18", **source)
+    s = BeamTarget(name="p18", **source)
     assert s.nuclear_data == ["drosg", os.path.normpath(str(ENDFB))]
     summary = tomllib.loads(s.get_summary())["inputs"]
     assert summary["nuclear_data"] == ["drosg", "endfb81"]
@@ -322,7 +322,7 @@ def test_named_libraries(tmp_path, monkeypatch):
 
     # No nuclear_data in the case: the configuration's default list
     path.write_text(INPUT.replace('nuclear_data = ["drosg", "LIBRARY"]\n', ""))
-    s = ShineSource(name="p18", **load_input(path)["p18"]["source"])
+    s = BeamTarget(name="p18", **load_input(path)["p18"]["source"])
     assert s.nuclear_data_given == ["drosg", "endfb81", "tendl21"]
     assert "p9Be_xn" in s.reactions_present()
 
@@ -351,7 +351,7 @@ def test_invalid_configuration(tmp_path, monkeypatch, text, message):
 
 # --- Lab-frame tables (LAW=7), with a local FENDL library ----------------------------------
 
-FENDL_D = Path(os.environ.get("SHINE_FENDL_DIR", r"C:\Users\LJ0489\Software\ENDF\FENDL-3.2c"))
+FENDL_D = Path(os.environ.get("BEAM_TARGET_FENDL_DIR", r"C:\Users\LJ0489\Software\ENDF\FENDL-3.2c"))
 
 
 @pytest.mark.skipif(not (FENDL_D / "deuteron").is_dir(), reason="no local FENDL-3.2c library")
@@ -395,7 +395,7 @@ def test_lab_tables_with_histogram_spectra():
 
 def uranium_source(beam, energy_MeV, atoms, nuclear_data, length=0.2):
     material = Material("U target", "solid", atoms=atoms, density=18.95)
-    return ShineSource(
+    return BeamTarget(
         name=f"{beam}U",
         regions=[Region(material, length=length, wall_radius=10.0, num_x_bins=100,
                         num_x_bins_out=1)],

@@ -12,8 +12,8 @@ import os
 import numpy as np
 from matplotlib import pyplot as plt
 
-from shine_neutron_source.nuclear import REACTIONS
-from shine_neutron_source.source import DEFAULT_DATA_DIR, read_drosg_koe
+from beamtarget.nuclear import REACTIONS
+from beamtarget.source import DEFAULT_DATA_DIR, read_drosg_koe
 
 plt.rcParams["font.family"] = "serif"
 plt.rcParams["mathtext.default"] = "regular"

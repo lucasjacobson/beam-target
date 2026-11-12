@@ -19,7 +19,7 @@ try:
 except (ImportError, OSError):  # No compiled library
     pytest.skip("openmc.lib is not available", allow_module_level=True)
 
-from shine_neutron_source.openmc_source import get_openmc_sources  # noqa: E402
+from beamtarget.openmc_source import get_openmc_sources  # noqa: E402
 
 NUM_SAMPLES = 200_000
 

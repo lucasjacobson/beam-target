@@ -896,7 +896,7 @@ def load_evaluation(path):
 
 class EndfReaction:
     """The neutron production of a beam on one target isotope from an evaluated file, as a
-    reaction of ShineSource (alongside the DROSG two-body reactions of nuclear.REACTIONS).
+    reaction of BeamTarget (alongside the DROSG two-body reactions of nuclear.REACTIONS).
 
     Attributes: key (such as "p9Be_xn"), label (such as "9Be(p,xn)"), beam, target (Z, A),
     path, library (the nuclear_data entry it was found in), evaluation (see

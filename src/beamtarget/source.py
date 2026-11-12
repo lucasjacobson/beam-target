@@ -20,7 +20,7 @@ The result can be written as an HDF5 file, as an MCNP SDEF source card, as text 
 as plots. The caller chooses every output path.
 
 Cases are normally described in a TOML input file and run from the command line (see
-cli.py); the ShineSource class can also be used directly from Python.
+cli.py); the BeamTarget class can also be used directly from Python.
 
 Naming conventions used throughout:
 
@@ -69,7 +69,7 @@ from .nuclear import (
     parse_atom,
 )
 
-PACKAGE_NAME = "shine-neutron-source"
+PACKAGE_NAME = "beam-target"
 logger = logging.getLogger(__name__)
 
 # Beam-energy step [relative, and at least the absolute value in MeV] of the grid on which
@@ -115,7 +115,7 @@ NO_NEUTRONS = (
     "start of its cross-section data, and that the beam is not scraped away entirely."
 )
 
-# Repository root when running from a source checkout (src/shine_neutron_source/ -> root)
+# Repository root when running from a source checkout (src/beamtarget/ -> root)
 REPO_DIR = os.path.normcase(os.path.dirname(os.path.dirname(CODE_DIR)))
 
 # Physical constants (exact SI values)
@@ -319,7 +319,7 @@ class Region:
 
     Args:
         material: The Material filling the region.
-        length: Length along the beam [cm]; None to calculate it (see ShineSource).
+        length: Length along the beam [cm]; None to calculate it (see BeamTarget).
         pressure, temperature: For a gas given by pressure [torr] and temperature [degC].
             None for a solid, or for a gas given by density. A gas with a temperature but no
             pressure has its pressure calculated.
@@ -606,12 +606,12 @@ def _save_figure(fig, fname, close=True):
         plt.close(fig)
 
 
-class ShineSource:
+class BeamTarget:
     """Neutron source term for a light-ion beam in gas or solid target regions.
 
     The whole calculation runs when the object is created; afterwards use write_hdf5(),
     write_mcnp_sdef(), write_text_files() and make_plots() to write the results. Summary
-    values are logged at DEBUG level to the "shine_neutron_source" logger (silent unless
+    values are logged at DEBUG level to the "beamtarget" logger (silent unless
     logging is configured).
 
     The beam passes through a list of regions (see Region), in order; the last one ends at
@@ -1880,7 +1880,7 @@ class ShineSource:
                              f"{reaction.label} neutron emission rate in each (position, angle, "
                              "energy) cell"))  # fmt: skip
         with h5py.File(path, "w") as hf:
-            hf.attrs["format"] = "shine-neutron-source"
+            hf.attrs["format"] = "beam-target"
             hf.attrs["format_version"] = HDF5_FORMAT_VERSION
             hf.attrs["name"] = self.name
             hf.attrs["code_version"] = get_code_version()
@@ -2120,7 +2120,7 @@ class ShineSource:
         """Return the comment block at the top of the SDEF card: the case summary (see
         get_summary) with each line as an MCNP comment."""
         s = dashed_line
-        s += f"c     Source definition for {self.name}, made by shine-neutron-source\n"
+        s += f"c     Source definition for {self.name}, made by beam-target\n"
         s += "c     Case summary (TOML; the same as summary.toml written by write_text_files):\n"
         s += dashed_line
         s += "c\n"
@@ -2272,7 +2272,7 @@ class ShineSource:
 
         Sections: [run] (case name, code version, creation time, any run_info entries, such
         as the input file and SDEF direction, and any warnings, see check_channels), [inputs]
-        (the ShineSource arguments, see get_inputs; lists have one value per region in beam
+        (the BeamTarget arguments, see get_inputs; lists have one value per region in beam
         order) and [results] (see get_results), followed by a [materials.<name>] table for
         each material used (phase, density for a solid, and its atoms or molecules). Units are
         given in comments. title adds a first comment line saying what the file is. The "="

@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
-title: "shine-neutron-source"
+title: "beam-target"
 abstract: >-
   Neutron source terms for beam-target neutron generators, for MCNP and OpenMC. A beam of
   protons, deuterons, tritons, 3He, or alphas slows down through gas or solid target regions,
@@ -15,7 +15,7 @@ authors:
     affiliation: "SHINE Technologies, LLC"
 version: 0.1.0
 license: MIT
-repository-code: "https://github.com/PhoenixNuclearLabs/shine-neutron-source"
+repository-code: "https://github.com/PhoenixNuclearLabs/beam-target"
 keywords:
   - neutron source
   - neutron generator

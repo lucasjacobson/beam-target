@@ -6,15 +6,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from shine_neutron_source import Region, ShineSource
-from shine_neutron_source.source import DEFAULT_DATA_DIR, dt_gas
+from beamtarget import BeamTarget, Region
+from beamtarget.source import DEFAULT_DATA_DIR, dt_gas
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 
 # Ignore the user's own configuration file (their nuclear-data libraries), so the results do
 # not depend on the machine: point it at a file that does not exist. Set before any source is
 # made; tests of the configuration set it themselves (monkeypatch).
-os.environ["SHINE_NEUTRON_SOURCE_CONFIG"] = str(REPO_DIR / "tests" / "no-user-config.toml")
+os.environ["BEAM_TARGET_CONFIG"] = str(REPO_DIR / "tests" / "no-user-config.toml")
 EXAMPLE_INPUT = REPO_DIR / "examples" / "generic.toml"
 
 
@@ -71,7 +71,7 @@ def make_regions(settings):
 
 
 def make_source(**overrides):
-    """Return a ShineSource for SMALL_CASE with some settings overridden. Region settings are
+    """Return a BeamTarget for SMALL_CASE with some settings overridden. Region settings are
     lists, one entry per region. T_frac=x is short for material=dt_gas(x), a D/T gas with that
     tritium fraction."""
     if "T_frac" in overrides:
@@ -79,7 +79,7 @@ def make_source(**overrides):
     settings = {**SMALL_CASE, **overrides}
     regions = make_regions(settings)
     rest = {k: v for k, v in settings.items() if k not in REGION_SETTINGS}
-    return ShineSource(regions=regions, **rest)
+    return BeamTarget(regions=regions, **rest)
 
 
 @pytest.fixture(scope="session")

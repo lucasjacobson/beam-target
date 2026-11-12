@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from conftest import data_path, make_source
 
-from shine_neutron_source.source import (
+from beamtarget.source import (
     SRIM_STOPPING_FILE,
     get_atom_density,
     get_molecule_density,

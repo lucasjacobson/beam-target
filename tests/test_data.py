@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 from conftest import data_path
 
-from shine_neutron_source.nuclear import REACTIONS
-from shine_neutron_source.source import (
+from beamtarget.nuclear import REACTIONS
+from beamtarget.source import (
     PSTAR_FILE,
     SRIM_STOPPING_FILE,
     _fortran_float,
@@ -129,7 +129,7 @@ def test_data_files_unchanged_line_endings():
 
 
 def test_copy_of_data_dir_is_usable(tmp_path):
-    """ShineSource can read a data directory other than the default (data_dir argument)."""
+    """BeamTarget can read a data directory other than the default (data_dir argument)."""
     from conftest import make_source
 
     data_dir = tmp_path / "data"

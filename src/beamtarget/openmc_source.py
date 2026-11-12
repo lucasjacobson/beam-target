@@ -1,11 +1,11 @@
-"""OpenMC sources from a source.h5 file written by ShineSource.write_hdf5.
+"""OpenMC sources from a source.h5 file written by BeamTarget.write_hdf5.
 
-    from shine_neutron_source.openmc_source import get_openmc_sources
+    from beamtarget.openmc_source import get_openmc_sources
 
     settings.source = get_openmc_sources("output/DT90/source.h5")
 
 Needs the openmc Python package, version 0.16 or later (for cylinders along any axis), which
-is imported only here: the rest of shine_neutron_source runs without it.
+is imported only here: the rest of beamtarget runs without it.
 
 Unlike the MCNP SDEF card, the OpenMC source keeps the full correlation between position,
 emission angle, and neutron energy: there is one source for each (position bin, angle bin)
@@ -65,8 +65,8 @@ def read_placement(path):
 
 
 def _check_format(path, hf):
-    if hf.attrs.get("format") != "shine-neutron-source":
-        raise ValueError(f"{path} is not a shine-neutron-source HDF5 file")
+    if hf.attrs.get("format") != "beam-target":
+        raise ValueError(f"{path} is not a beam-target HDF5 file")
     version = int(hf.attrs.get("format_version", 0))
     if version < MIN_FORMAT_VERSION:
         raise ValueError(

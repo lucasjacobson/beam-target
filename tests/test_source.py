@@ -1,4 +1,4 @@
-"""Whole calculations with ShineSource: physics checks, input checks, and outputs."""
+"""Whole calculations with BeamTarget: physics checks, input checks, and outputs."""
 
 import re
 import tomllib
@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 from conftest import SMALL_CASE, make_source
 
-from shine_neutron_source.nuclear import REACTIONS
-from shine_neutron_source.source import HDF5_FORMAT_VERSION, SDEF_RADIUS_DECIMALS
+from beamtarget.nuclear import REACTIONS
+from beamtarget.source import HDF5_FORMAT_VERSION, SDEF_RADIUS_DECIMALS
 
 # Highest voltage for SMALL_CASE (D and T): where T(d,np)T opens [kV]
 MAX_VOLTAGE = REACTIONS["DT"].complete_up_to()[0] * 1000
@@ -541,7 +541,7 @@ def test_hdf5_file(mixed_source, tmp_path):
     path = tmp_path / "source.h5"
     s.write_hdf5(path, {"input_file": "cases.toml"})
     with h5py.File(path) as f:
-        assert f.attrs["format"] == "shine-neutron-source"
+        assert f.attrs["format"] == "beam-target"
         assert f.attrs["format_version"] == HDF5_FORMAT_VERSION
         assert f.attrs["name"] == "test"
         assert f.attrs["code_version"]

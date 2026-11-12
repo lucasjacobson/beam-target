@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 from conftest import make_source
 
-from shine_neutron_source import Material
-from shine_neutron_source.nuclear import REACTIONS, mean_atomic_mass
+from beamtarget import Material
+from beamtarget.nuclear import REACTIONS, mean_atomic_mass
 
 LI7 = Material("7Li", "solid", atoms={"7Li": 1}, density=0.534)
 

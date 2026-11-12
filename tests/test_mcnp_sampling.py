@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 from conftest import MAX_Z, assert_counts_match, assert_mean_matches, make_source
 
-from shine_neutron_source import Material
+from beamtarget import Material
 
 ENDF_DIR = Path(__file__).parent / "data" / "endf" / "ENDF-B-VIII.1"
 
@@ -204,7 +204,7 @@ def test_radius_and_azimuth(sampled):
     """Within each position bin, particles fill a disc of the beam edge radius uniformly in
     area (the radius as written in the card, to SDEF_RADIUS_DECIMALS), at every azimuth."""
     s = sampled["source"]
-    from shine_neutron_source.source import SDEF_RADIUS_DECIMALS
+    from beamtarget.source import SDEF_RADIUS_DECIMALS
 
     for k in range(s.num_x_bins_total_out):
         in_bin = sampled["i"] == k

@@ -7,7 +7,7 @@ from conftest import make_source
 
 openmc = pytest.importorskip("openmc")
 
-from shine_neutron_source.openmc_source import (  # noqa: E402
+from beamtarget.openmc_source import (  # noqa: E402
     _merged_spectrum,
     get_openmc_sources,
     read_placement,

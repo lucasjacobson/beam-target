@@ -1,4 +1,4 @@
-"""Allow `python -m shine_neutron_source <input file>`."""
+"""Allow `python -m beamtarget <input file>`."""
 
 from .cli import main
 

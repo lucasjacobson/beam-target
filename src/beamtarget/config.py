@@ -1,7 +1,7 @@
 """The user's configuration file: where their nuclear-data libraries are.
 
 Library locations belong to the machine, not to a case, so they live in a per-user TOML file,
-~/.shine-neutron-source.toml (or the file named by the SHINE_NEUTRON_SOURCE_CONFIG
+~/.beam-target.toml (or the file named by the BEAM_TARGET_CONFIG
 environment variable), with a [libraries] table naming directories of evaluated files and a
 [defaults] nuclear_data list. Its format and use are described in data/README.md
 ("Evaluated nuclear data libraries").
@@ -10,8 +10,8 @@ environment variable), with a [libraries] table naming directories of evaluated 
 import os
 import tomllib
 
-CONFIG_ENV = "SHINE_NEUTRON_SOURCE_CONFIG"
-CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".shine-neutron-source.toml")
+CONFIG_ENV = "BEAM_TARGET_CONFIG"
+CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".beam-target.toml")
 
 # The nuclear_data entry for the built-in DROSG-2000 two-body reactions (nuclear.REACTIONS)
 DROSG = "drosg"
@@ -24,8 +24,8 @@ class ConfigError(ValueError):
 
 
 def config_path():
-    """Return the configuration file's path: SHINE_NEUTRON_SOURCE_CONFIG if set, else
-    ~/.shine-neutron-source.toml. The file need not exist."""
+    """Return the configuration file's path: BEAM_TARGET_CONFIG if set, else
+    ~/.beam-target.toml. The file need not exist."""
     return os.environ.get(CONFIG_ENV) or CONFIG_FILE
 
 

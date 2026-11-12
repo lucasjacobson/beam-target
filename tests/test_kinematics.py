@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from shine_neutron_source.nuclear import (
+from beamtarget.nuclear import (
     BEAMS,
     REACTIONS,
     atom_name,

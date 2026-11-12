@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "shine-neutron-source"
+name = "beam-target"
 version = "0.1.0"
 description = "Neutron source terms for beam-target neutron generators, for MCNP and OpenMC"
 readme = "README.md"
@@ -17,10 +17,10 @@ dependencies = ["numpy", "h5py", "matplotlib"]
 dev = ["ruff", "pytest"]
 
 [project.scripts]
-shine-neutron-source = "shine_neutron_source.cli:main"
+beam-target = "beamtarget.cli:main"
 
 [tool.setuptools.package-data]
-shine_neutron_source = ["data/*"]
+beamtarget = ["data/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
