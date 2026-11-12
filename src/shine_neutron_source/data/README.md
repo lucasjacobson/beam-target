@@ -282,12 +282,23 @@ tabulated) and LAW=7 (lab-frame tables), with linear or unit-base interpolation 
 incident energies. The beam also loses particles to nuclear reactions (the non-elastic cross
 section) on its way; their power is deposited in the target.
 
+Two choices keep thick-target spectra free of artificial stripes. Two-body channels make a
+sharp line in lab energy and angle at each beam energy, so they are calculated at the beam
+energy of every internal position bin, with its own kinematics. Continuum (LAW=1) spectra are
+always mixed between tabulated incident energies by unit base (stretched to the outgoing-energy
+range at the beam energy), even where the evaluation says linear (INT=2), as MCNP does: mixed
+literally, each peak and edge of a tabulated spectrum stays at a fixed outgoing energy over the
+1-2 MeV between tabulated incident energies, which leaves a stripe for each one and puts
+neutrons above the highest energy the reaction can give. Neither choice changes the yields.
+
 **Validation.** For beams stopping in thick beryllium, the neutrons per beam particle agree
 with MCNP's neutrons created by charged-particle reactions, using the same data, to within
 1 %: protons 10-70 MeV (ENDF/B), deuterons 18-70 MeV (FENDL-3.2c, lab-frame tables) and
 alphas 18-70 MeV (TENDL-2021). MCNP's tally of neutrons escaping the target is higher, as it
 includes the target's own (n,2n) multiplication: a source term must not, because the transport
-code models the target.
+code models the target. The spectra agree too: for 18 MeV protons on thick beryllium
+(ENDF/B-VII.0), MCNP 6.2's escaping neutrons (10¹⁰ histories, 5° cones, 0.1 MeV bins) follow
+the calculated spectra, fine structure and upper edges included.
 
 **Not modelled.** Neutrons made by secondary charged particles (protons, deuterons and alphas
 emitted in reactions, which can react again), a few percent at most at 70 MeV in the cases

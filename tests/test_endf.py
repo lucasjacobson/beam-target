@@ -104,6 +104,42 @@ def test_endf_numbers(field, value):
     assert _number(field) == pytest.approx(value, rel=1e-12)
 
 
+def test_continuum_is_mixed_by_unit_base():
+    """Between tabulated incident energies (16 and 18 MeV for p + 9Be), the continuum's upper
+    edge moves with the beam energy. Mixed literally (INT=2), it jumped to near the 18 MeV
+    edge just above 16 MeV: a stripe in a thick target, and neutrons above what the
+    reaction can give."""
+    x = NeutronProduction(P_BE9)
+    assert all(c.unit_base for c in x.channels if c.law == 1)
+    edges = np.arange(0, 20.0001, 0.05)
+
+    def top(E):  # Highest forward (0-10 degree) neutron energy of the continuum
+        spectrum, _ = x.lab_spectrum(E, [0.0, 10.0, 180.0], edges, two_body=False)
+        return edges[np.flatnonzero(spectrum[0] > spectrum[0].max() * 1e-6)[-1] + 1]
+
+    low, mid, high = top(16.0), top(17.0), top(18.0)
+    assert low < mid < high
+    assert mid == pytest.approx((low + high) / 2, abs=0.1)
+
+
+def test_two_body_channels_at_each_beam_energy():
+    """two_body_spectrum, at one beam energy, gives the two-body part of lab_spectrum."""
+    x = NeutronProduction(P_BE9)
+    angles = np.arange(0, 181, 10.0)
+    edges = np.arange(0, 12.05, 0.1)
+    full, total = x.lab_spectrum(12.0, angles, edges, num_cm_angles=360)
+    rest, total_rest = x.lab_spectrum(12.0, angles, edges, num_cm_angles=360, two_body=False)
+    two_body, sigma = x.two_body_spectrum(
+        [12.0, 12.0], [1.0, 0.0], [0, 1], 2, angles, edges, num_cm_angles=360
+    )
+    assert np.allclose(two_body[0], full - rest, rtol=1e-12, atol=1e-15)
+    assert not two_body[1].any()  # Its weight is zero
+    assert sigma[0] == pytest.approx(total - total_rest, rel=1e-12)
+    assert sigma[0] == pytest.approx(
+        sum(c.production(12.0) for c in x.channels if c.law == 2), rel=1e-12
+    )
+
+
 def test_kalbach_slope_systematics():
     """The slope grows with the emitted energy; separation energies are sensible (a
     neutron is bound by roughly 6-8 MeV in 12C, the compound of alpha + 9Be)."""

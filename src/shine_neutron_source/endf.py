@@ -19,9 +19,16 @@ Supported neutron distributions (ENDF-102 section 6.2):
 - LAW=7, lab-frame angle-energy tables: an outgoing-energy distribution at each of a set of
   lab cosines.
 
-Between tabulated incident energies, distributions are interpolated linearly (INT=2) or by
-unit base (INT=22: each stretched to the outgoing-energy range at the wanted energy).
-Anything else is refused with a message naming it.
+Between tabulated incident energies, distributions are mixed linearly (INT=2) or by unit base
+(INT=22: each stretched to the outgoing-energy range at the wanted energy). Continuum (LAW=1)
+distributions are always mixed by unit base, even where the evaluation gives INT=2, as MCNP
+does: mixed literally, every feature of a tabulated spectrum (a peak, its upper edge) stays at
+the same outgoing energy between tabulated incident energies 1-2 MeV apart, which in a thick
+target makes a stripe for each one, and the top of the higher energy's spectrum reaches above
+what the reaction can give at the lower beam energies. For 18 MeV protons on thick 9Be
+(ENDF/B-VII.0), spectra mixed by unit base match MCNP 6.2's (1e10 histories) in their fine
+structure, and literally mixed ones do not; the yields are the same either way. Anything else
+is refused with a message naming it.
 
 Reference: ENDF-6 Formats Manual, BNL-203218-2023-INRE (ENDF-102).
 """
@@ -404,7 +411,10 @@ class NeutronProduction:
     def _read_law1(self, r, mt):
         c, _, codes = r.tab2()
         lang, lep, ne = int(c[2]), int(c[3]), int(c[5])
-        unit_base = self._incident_interpolation(codes, mt)
+        # Always by unit base, even where the evaluation says INT=2, as MCNP does (see the
+        # module docstring)
+        self._incident_interpolation(codes, mt)
+        unit_base = True
         if lep not in (1, 2):
             raise NotImplementedError(f"{self.path}: MT={mt} uses LEP={lep}")
         incident, dists = [], []
@@ -531,7 +541,14 @@ class NeutronProduction:
         beta = p1 / (E + m1 + m2)
         return beta, 1 / np.sqrt(1 - beta**2)
 
-    def lab_spectrum(self, E, angle_edges, energy_edges, num_cm_angles=720, max_step=None):
+    @property
+    def has_two_body(self):
+        """Whether any channel is two-body (LAW=2: discrete levels)."""
+        return any(c.law == 2 for c in self.channels)
+
+    def lab_spectrum(
+        self, E, angle_edges, energy_edges, num_cm_angles=720, max_step=None, two_body=True
+    ):
         """Return the neutron production cross section [b] in each (lab angle, lab energy)
         bin at beam energy E [MeV], and the total [b].
 
@@ -543,6 +560,8 @@ class NeutronProduction:
                 distribution is integrated exactly and placed at its middle angle.
             max_step: Largest outgoing-energy step [MeV] at which continuum distributions
                 are split (default: half an output energy bin).
+            two_body: Include the two-body (LAW=2) channels; leave them out to calculate
+                them separately with two_body_spectrum.
 
         Each piece of each distribution (outgoing energy, angle cell) is converted to the
         lab (boosted from the centre of mass of beam + target with relativistic kinematics,
@@ -565,6 +584,8 @@ class NeutronProduction:
 
         total = 0.0
         for channel in self.channels:
+            if channel.law == 2 and not two_body:
+                continue
             sigma = channel.production(E)
             if sigma <= 0:
                 continue
@@ -598,6 +619,79 @@ class NeutronProduction:
                     )
                 total += w
         return out, total
+
+    def two_body_spectrum(
+        self, E, weights, rows, num_rows, angle_edges, energy_edges, num_cm_angles=720
+    ):
+        """Bin the neutrons of the two-body (LAW=2) channels at many beam energies at once,
+        each with its own kinematics: no interpolation between beam energies, so the sharp
+        line each level makes at one beam energy is smeared exactly as the beam slows down.
+
+        Args:
+            E: Beam (lab) energies [MeV], one per internal bin.
+            weights: Weight of each, multiplying the cross section [b] (n_target dx times
+                the beam fraction, for neutrons per beam particle).
+            rows: Output position row of each.
+            num_rows: Number of output position rows.
+            angle_edges, energy_edges, num_cm_angles: As for lab_spectrum.
+
+        Returns (out, sigma): out with shape (num_rows, angle bins, energy bins), the
+        weighted neutrons, and sigma, the two-body production cross section [b] at each beam
+        energy (zero where a level is below its kinematic threshold).
+        """
+        E = np.asarray(E, dtype=float)
+        weights = np.asarray(weights, dtype=float)
+        rows = np.asarray(rows, dtype=int)
+        angle_edges = np.asarray(angle_edges, dtype=float)
+        energy_edges = np.asarray(energy_edges, dtype=float)
+        width = energy_edges[1] - energy_edges[0]
+        num_angles, num_energies = len(angle_edges) - 1, len(energy_edges) - 1
+        size = num_rows * num_angles * num_energies
+        out = np.zeros(size)
+        sigma = np.zeros(len(E))
+        theta_edges = np.linspace(0, np.pi, num_cm_angles + 1)
+        mu_edges = np.cos(theta_edges)
+        mu_mid = np.cos(0.5 * (theta_edges[:-1] + theta_edges[1:]))
+        m1, m2 = BEAMS[self.beam].mass, nuclear_mass(*self.target)
+        chunk = max(1, 2_000_000 // num_cm_angles)  # Beam energies per pass, to bound memory
+        for channel in self.channels:
+            if channel.law != 2:
+                continue
+            sig = channel.xs(E * 1e6) * channel.yield_(E * 1e6)
+            # Angular distribution at each tabulated incident energy, interpolated linearly
+            # in the incident energy (INT=2) as in _Channel.mixture
+            table = np.array([d.cell_probabilities(mu_edges) for d in channel.distributions])
+            inc = channel.incident
+            if len(inc) > 1:
+                k = np.clip(np.searchsorted(inc, E, side="right") - 1, 0, len(inc) - 2)
+                t = np.clip((E - inc[k]) / (inc[k + 1] - inc[k]), 0, 1)
+            else:
+                k, t = np.zeros(len(E), dtype=int), np.zeros(len(E))
+            m4 = m1 + m2 - M_NEUTRON - channel.q  # Residual, in its level
+            for start in range(0, len(E), chunk):
+                s = slice(start, start + chunk)
+                use = np.flatnonzero((sig[s] > 0) & (weights[s] != 0)) + start
+                if len(use) == 0:
+                    continue
+                T3, cos_lab = cm_to_lab(E[use, None], mu_mid[None, :], m1, m2, M_NEUTRON, m4)
+                ok = ~np.isnan(T3[:, 0])  # Above the kinematic threshold
+                if not np.any(ok):
+                    continue
+                use, T3, cos_lab = use[ok], T3[ok], cos_lab[ok]
+                k1 = np.minimum(k[use] + 1, len(inc) - 1)
+                probs = (1 - t[use, None]) * table[k[use]] + t[use, None] * table[k1]
+                sigma[use] += sig[use]
+                prob = (weights[use] * sig[use])[:, None] * probs
+                angle = np.degrees(np.arccos(np.clip(cos_lab, -1, 1)))
+                j = np.clip(
+                    np.searchsorted(angle_edges, angle, side="right") - 1, 0, num_angles - 1
+                )
+                kk = np.clip(
+                    np.floor((T3 - energy_edges[0]) / width).astype(int), 0, num_energies - 1
+                )
+                flat = (rows[use, None] * num_angles + j) * num_energies + kk
+                out += np.bincount(flat.ravel(), prob.ravel(), minlength=size)
+        return out.reshape(num_rows, num_angles, num_energies), sigma
 
     @staticmethod
     def _bin(E_lab, cos_lab, prob, grid):

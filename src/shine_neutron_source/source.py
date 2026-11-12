@@ -1536,12 +1536,16 @@ class ShineSource:
         """Calculate the neutrons of an evaluated reaction on the output mesh, per beam
         particle.
 
-        The lab spectrum (see endf.NeutronProduction.lab_spectrum) is calculated at beam
-        energies from the highest to the lowest in the target, ENDF_ENERGY_STEP apart, and
-        interpolated linearly to the beam energy in each internal bin; each bin adds
-        n_target dx sigma times the fraction of the beam still present (see
-        calculate_attenuation). The neutron energy mesh runs from 0 to the highest lab
-        energy, in steps of energy_bin_width.
+        Each internal bin adds n_target dx sigma times the fraction of the beam still
+        present (see calculate_attenuation). Two-body channels (discrete levels, LAW=2) are
+        calculated at the beam energy of every internal bin, with its own kinematics (see
+        endf.NeutronProduction.two_body_spectrum): each level makes a sharp line in lab energy
+        and angle at one beam energy, so interpolating between beam energies would leave a
+        band for each beam energy calculated. The other channels, whose spectra change
+        smoothly with the beam energy, are calculated (see lab_spectrum) at beam energies from
+        the highest to the lowest in the target, ENDF_ENERGY_STEP apart, and interpolated
+        linearly to the beam energy in each internal bin. The neutron energy mesh runs from 0
+        to the highest lab energy, in steps of energy_bin_width.
 
         Returns {"energy_grid": the energy mesh [MeV], "per_particle": neutrons per beam
         particle on the output (position, angle, energy) mesh, "sigma_mids": the neutron
@@ -1587,22 +1591,39 @@ class ShineSource:
         coef = density[idx] * 1e-24 * self.dx[idx] * self.beam_fraction_mids[idx]
         rows = self._output_position_index()[idx]
         totals = np.zeros(len(energies))
-        for j in np.unique(np.concatenate((k, k + 1 if len(energies) > 1 else k))):
-            weight = np.where(k == j, 1 - t, 0.0) + np.where(
-                (k + 1 == j) & (len(energies) > 1), t, 0.0
-            )
-            use = weight > 0
-            if not np.any(use):
-                continue
-            spectrum, totals[j] = production.lab_spectrum(
-                energies[j], self.angle_grid_out, grid, num_cm_angles=num_cm_angles
-            )
-            by_row = np.bincount(
-                rows[use], coef[use] * weight[use], minlength=self.num_x_bins_total_out
-            )
-            touched = np.flatnonzero(by_row)
-            per_particle[touched] += by_row[touched, None, None] * spectrum[None]
+        if any(c.law != 2 for c in production.channels):  # Smooth channels: interpolated
+            for j in np.unique(np.concatenate((k, k + 1 if len(energies) > 1 else k))):
+                weight = np.where(k == j, 1 - t, 0.0) + np.where(
+                    (k + 1 == j) & (len(energies) > 1), t, 0.0
+                )
+                use = weight > 0
+                if not np.any(use):
+                    continue
+                spectrum, totals[j] = production.lab_spectrum(
+                    energies[j],
+                    self.angle_grid_out,
+                    grid,
+                    num_cm_angles=num_cm_angles,
+                    two_body=False,
+                )
+                by_row = np.bincount(
+                    rows[use], coef[use] * weight[use], minlength=self.num_x_bins_total_out
+                )
+                touched = np.flatnonzero(by_row)
+                per_particle[touched] += by_row[touched, None, None] * spectrum[None]
         sigma_mids[idx] = (1 - t) * totals[k] + t * totals[np.minimum(k + 1, len(energies) - 1)]
+        if production.has_two_body:  # Discrete levels: at each bin's own beam energy
+            two_body, sigma_two_body = production.two_body_spectrum(
+                E[idx],
+                coef,
+                rows,
+                self.num_x_bins_total_out,
+                self.angle_grid_out,
+                grid,
+                num_cm_angles=num_cm_angles,
+            )
+            per_particle += two_body
+            sigma_mids[idx] += sigma_two_body
         return {"energy_grid": grid, "per_particle": per_particle, "sigma_mids": sigma_mids}
 
     def bin_neutrons(self):

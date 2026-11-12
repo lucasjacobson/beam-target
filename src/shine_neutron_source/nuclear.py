@@ -317,34 +317,41 @@ def cm_to_lab(T1, cos_cm, m1, m2, m3, m4):
     mass (CM) to the lab.
 
     Args:
-        T1: Lab kinetic energy of the beam particle 1 [MeV] (scalar).
+        T1: Lab kinetic energy of the beam particle 1 [MeV] (scalar, or an array that
+            broadcasts against cos_cm, such as a column of beam energies against a row of
+            cosines).
         cos_cm: Cosine of the CM emission angle of particle 3, from the beam direction
             (scalar or array).
         m1, m2, m3, m4: Rest-mass energies [MeV].
 
-    Returns (T3, cos_lab), shaped like cos_cm: the lab kinetic energy of particle 3 [MeV] and
-    the cosine of its lab angle. Every CM angle has exactly one lab angle, so this also covers
-    endothermic reactions near threshold, where a lab angle can have two neutron energies.
-    Below the threshold both are NaN.
+    Returns (T3, cos_lab), shaped like T1 and cos_cm broadcast together: the lab kinetic
+    energy of particle 3 [MeV] and the cosine of its lab angle. Every CM angle has exactly one
+    lab angle, so this also covers endothermic reactions near threshold, where a lab angle can
+    have two neutron energies. Below the threshold both are NaN.
     """
     cos_cm = np.asarray(cos_cm, dtype=float)
+    T1 = np.asarray(T1, dtype=float)
     E1 = T1 + m1
     p1 = np.sqrt(E1**2 - m1**2)
     E_tot = E1 + m2
     s = m1**2 + m2**2 + 2 * E1 * m2
     sqrt_s = np.sqrt(s)
-    if sqrt_s <= m3 + m4:
-        nan = np.full(cos_cm.shape, np.nan)
+    shape = np.broadcast_shapes(T1.shape, cos_cm.shape)
+    below = np.broadcast_to(sqrt_s <= m3 + m4, shape)
+    if np.all(below):
+        nan = np.full(shape, np.nan)
         return nan, nan.copy()
     beta, gamma = p1 / E_tot, E_tot / sqrt_s
     E3_cm = (s + m3**2 - m4**2) / (2 * sqrt_s)
-    p3_cm = np.sqrt(E3_cm**2 - m3**2)
+    p3_cm = np.sqrt(np.clip(E3_cm**2 - m3**2, 0, None))
     sin_cm = np.sqrt(np.clip(1 - cos_cm**2, 0, None))
     p_par = gamma * (p3_cm * cos_cm + beta * E3_cm)
     p_perp = p3_cm * sin_cm
     E3 = gamma * (E3_cm + beta * p3_cm * cos_cm)
-    cos_lab = p_par / np.hypot(p_par, p_perp)
-    return E3 - m3, cos_lab
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cos_lab = p_par / np.hypot(p_par, p_perp)
+    T3 = np.where(below, np.nan, E3 - m3)
+    return T3, np.where(below, np.nan, cos_lab)
 
 
 # Radius parameter of the Coulomb barrier [fm], and e^2 / (4 pi eps0) [MeV fm]
