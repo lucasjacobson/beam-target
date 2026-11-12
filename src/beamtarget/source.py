@@ -106,7 +106,7 @@ SRIM_ISOTOPE_TABLES = {(1, 2): "D", (1, 3): "T", (2, 3): "He3"}
 SDEF_RADIUS_DECIMALS = 5
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
-HDF5_FORMAT_VERSION = 7
+HDF5_FORMAT_VERSION = 8
 
 # Error message when a case produces no neutrons
 NO_NEUTRONS = (
@@ -2187,6 +2187,16 @@ class BeamTarget:
         isotope is in some region, and the beam is above their threshold there."""
         return [rxn for rxn in self.reactions if self.yields[rxn] > 0]
 
+    def mean_neutron_energy(self, rxn=None):
+        """Mean energy [MeV] of the neutrons from one reaction, or (rxn None) from all of
+        them, over all angles and positions; nan if there are none."""
+        total = weighted = 0.0
+        for r in [rxn] if rxn else self.reactions_present():
+            spectrum = np.sum(self.neutrons[r], (0, 1))
+            total += np.sum(spectrum)
+            weighted += np.sum(spectrum * self.neutron_energy_mids[r])
+        return weighted / total if total > 0 else float("nan")
+
     def neutrons_by_angle_and_energy(self):
         """Return the neutron source integrated over position, on one energy mesh for all the
         beam's reactions.
@@ -2227,10 +2237,18 @@ class BeamTarget:
             (f"fraction_{rxn}", self.yields[rxn] / self.yield_total, "share of the total yield")
             for rxn in self.reactions
         ]
+        if self.reactions_present():
+            results.append(
+                ("mean_neutron_energy", self.mean_neutron_energy(), "MeV, all reactions and angles")
+            )
         for rxn in self.reactions_present():
-            spectrum = np.sum(self.neutrons[rxn], (0, 1))
-            mean = np.sum(spectrum * self.neutron_energy_mids[rxn]) / np.sum(spectrum)
-            results.append((f"mean_neutron_energy_{rxn}", mean, "MeV, over all angles"))
+            results.append(
+                (
+                    f"mean_neutron_energy_{rxn}",
+                    self.mean_neutron_energy(rxn),
+                    "MeV, over all angles",
+                )
+            )
         region_ends = np.cumsum(self.num_x_bins)
         results += [
             ("atom_density", self.atom_density_per_region, "atoms/cm3, in each region"),

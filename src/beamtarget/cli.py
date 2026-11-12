@@ -395,7 +395,8 @@ def run_case(name, settings, output_dir="output", input_file=None):
     }
     source.write_text_files(case_dir, {**run_info, **sdef_info})
     logger.info(
-        f"{name}: {source.yield_total:.3e} n/s in {time.time() - t0:.1f} s "
+        f"{name}: {source.yield_total:.3e} n/s, mean energy "
+        f"{source.mean_neutron_energy():.3g} MeV, in {time.time() - t0:.1f} s "
         f"-> {os.path.join(case_dir, '')}"  # Trailing separator: a directory
     )
     return source

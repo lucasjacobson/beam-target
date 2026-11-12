@@ -638,6 +638,12 @@ def test_text_files(mixed_source, tmp_path):
     assert results["fraction_DD"] + results["fraction_DT"] == pytest.approx(1, rel=1e-6)
     assert 2.0 < results["mean_neutron_energy_DD"] < 3.0
     assert 13.5 < results["mean_neutron_energy_DT"] < 14.8
+    # Over all reactions: the reactions' means weighted by their yields
+    assert results["mean_neutron_energy"] == pytest.approx(
+        results["fraction_DD"] * results["mean_neutron_energy_DD"]
+        + results["fraction_DT"] * results["mean_neutron_energy_DT"],
+        rel=1e-6,
+    )
     assert results["beam_energy_backstop"] == pytest.approx(s.beam_energy_grid[-1], rel=1e-6)
     assert results["beam_energy_region_end"] == pytest.approx([s.beam_energy_grid[-1]], rel=1e-6)
     assert results["beam_power_entry"] == pytest.approx(280 * 10 / 1000)  # kV x mA -> kW

@@ -112,7 +112,7 @@ The key inputs and results as TOML, with units in comments, in these tables:
   warnings.
 - `[inputs]`: every input; values per region are lists in beam order.
 - `[results]`: the yield of each reaction and in total, the share of each reaction, the mean
-  neutron energies, the atom density and the beam energy at the end of each region, the beam
+  neutron energy over all reactions and of each one, the atom density and the beam energy at the end of each region, the beam
   energy, current, and radius at the backstop, the beam power (entering, deposited in the
   target, carried onto the wall by scraping, lost to nuclear reactions, and reaching the
   backstop), and the fractions of the beam and of the neutrons lost.

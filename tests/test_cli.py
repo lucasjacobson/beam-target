@@ -420,7 +420,7 @@ def test_main_default_messages(tmp_path, caplog):
     assert messages[0].startswith("Running 2 case(s)")
     assert messages[0].endswith(f"results in {tmp_path / 'out'}{os.sep}")
     assert [m.split(":")[0] for m in messages[1:3]] == ["mix", "pureD"]
-    assert all(" n/s in " in m for m in messages[1:3])
+    assert all(" n/s, mean energy " in m and " MeV, in " in m for m in messages[1:3])
     assert messages[1].endswith(f"-> {tmp_path / 'out' / 'mix'}{os.sep}")
     assert messages[3].startswith("Done: 2 case(s)")
     assert len(messages) == 4
