@@ -82,6 +82,9 @@ ENDF_MIN_ANGLE_CELLS = 180
 # Warn if the explicit channels of an evaluation cover less than this fraction of its
 # non-elastic cross section at the beam energy (the neutrons of the rest are missing)
 ENDF_MISSING_WARNING = 0.01
+# Targets from thorium (Z = 90) up can fission: warn unless their evaluation gives fission
+# (MT=18) neutrons explicitly
+FISSION_MIN_Z = 90
 CODE_DIR = os.path.dirname(os.path.realpath(__file__))
 DEFAULT_DATA_DIR = os.path.join(CODE_DIR, "data")
 # Stopping-power data files (in data/) and the available stopping-power sets
@@ -1262,6 +1265,27 @@ class ShineSource:
                 self.warnings.append(message)
                 logger.warning(f"{self.name}: warning: {message}")
         for za in sorted(where):
+            # Fission: an actinide's evaluation must give fission (MT=18) neutrons explicitly;
+            # many (TENDL's, for instance) leave fission out, losing most of the neutrons
+            reaction = evaluated.get(za)
+            has_fission = reaction is not None and any(
+                c.mt == 18 for c in reaction.production.channels
+            )
+            above = cm_energy(self.beam, za, E) / coulomb_barrier(beam.Z, beam.A, *za)
+            if za[0] >= FISSION_MIN_Z and not has_fission and above >= COULOMB_FRACTION:
+                source = (
+                    f"its evaluation ({os.path.basename(reaction.path)}) gives no fission (MT=18) "
+                    "neutrons"
+                    if reaction is not None
+                    else "there is no evaluation for it"
+                )
+                message = (
+                    f"fission of {atom_name(*za)} ({', '.join(where[za])}) is open but not "
+                    f"modelled, so its neutrons, often most of them, are missing: {source} "
+                    "(FENDL-3.2c gives fission for protons on 232Th, 235U and 238U)"
+                )
+                self.warnings.append(message)
+                logger.warning(f"{self.name}: warning: {message}")
             if za in evaluated:
                 continue
             if za in self.skipped_data:

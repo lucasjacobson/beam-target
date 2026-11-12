@@ -307,6 +307,12 @@ the calculated spectra, fine structure and upper edges included.
 emitted in reactions, which can react again), a few percent at most at 70 MeV in the cases
 above; and charged-particle elastic scattering, which deflects the beam slightly.
 
+**Fission.** For thorium and heavier targets, fission often gives most of the neutrons. They are
+included only if the evaluation gives fission (MT=18) neutrons explicitly, as FENDL-3.2c does for
+protons on ²³²Th, ²³⁵U and ²³⁸U (agreeing with MCNP within 3%). Many evaluations leave fission
+out (TENDL-2025's, and FENDL-3.2c's deuteron files, which come from TENDL-2011), and the code
+warns when an actinide's evaluation has no fission channel, or when it has no evaluation at all.
+
 **Choosing data.** The libraries can differ a lot for light targets. For p + ⁹Be, ENDF/B-VIII.1,
 FENDL-3.2c and TENDL-2021 hold the same evaluation (LANL, 1988; TENDL-2021 adopted it), but
 TENDL-2025's model calculation gives only 44-62 % of its neutrons between 10 and 70 MeV. TENDL

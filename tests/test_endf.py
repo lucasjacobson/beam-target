@@ -388,3 +388,51 @@ def test_lab_tables_with_histogram_spectra():
     mids = (edges[:-1] + edges[1:]) / 2
     mean = np.sum(spectrum * mids, axis=1) / spectrum.sum(axis=1)
     assert mean[0] > mean[-1]  # Forward neutrons are faster
+
+
+# --- Fission ---------------------------------------------------------------------------------
+
+
+def uranium_source(beam, energy_MeV, atoms, nuclear_data, length=0.2):
+    material = Material("U target", "solid", atoms=atoms, density=18.95)
+    return ShineSource(
+        name=f"{beam}U",
+        regions=[Region(material, length=length, wall_radius=10.0, num_x_bins=100,
+                        num_x_bins_out=1)],
+        voltage=energy_MeV * 1000, current=1.0, start_radius=0.1, angle_step=1.0,
+        angle_step_out=10.0, energy_bin_width=0.1, beam=beam,
+        nuclear_data=[str(d) for d in nuclear_data],
+    )  # fmt: skip
+
+
+def fission_warnings(s):
+    return [w for w in s.warnings if w.startswith("fission of")]
+
+
+def test_fission_warning_without_an_evaluation():
+    """Uranium with no evaluation: its fission neutrons are missing, and the case says so."""
+    s = uranium_source("d", 10.0, {"D": 1.5, "238U": 1}, ["drosg"], length=0.05)
+    assert list(s.reactions) == ["DD"]
+    [message] = fission_warnings(s)
+    assert "238U" in message and "there is no evaluation" in message
+
+
+def test_no_fission_warning_below_thorium():
+    s = uranium_source("d", 10.0, {"D": 1.5, "Ta": 1}, ["drosg"], length=0.05)
+    assert fission_warnings(s) == []
+
+
+@pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
+def test_fission_neutrons_from_fendl_protons():
+    """FENDL-3.2c's p + 238U gives fission (MT=18) neutrons explicitly: no warning."""
+    s = uranium_source("p", 30.0, {"238U": 1}, [FENDL_D])
+    assert 18 in [c.mt for c in s.reactions["p238U_xn"].production.channels]
+    assert fission_warnings(s) == []
+
+
+@pytest.mark.skipif(not (FENDL_D / "deuteron").is_dir(), reason="no local FENDL-3.2c library")
+def test_fission_warning_for_an_evaluation_without_fission():
+    """FENDL-3.2c's d + 238U (TENDL-2011) has no fission channel: warned about."""
+    s = uranium_source("d", 30.0, {"238U": 1}, [FENDL_D])
+    [message] = fission_warnings(s)
+    assert "d_9237_92-U-238.endf" in message and "no fission (MT=18)" in message
