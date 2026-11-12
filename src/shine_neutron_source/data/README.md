@@ -270,8 +270,9 @@ the directories they resolved to (`nuclear_data_dirs`).
 Each library is recognised by its file names: ENDF/B (`p-004_Be_009.endf`), FENDL
 (`p_0409_4-Be-9.endf`) and TENDL (`p-Be009-mt.tendl`; with several TENDL variants of one file
 in a directory, the one with every channel explicit is used). The evaluation used for each
-reaction, from the file's header, is recorded in the summary (`[reactions.<rxn>]`), the HDF5
-file (the `data` attribute of `neutrons_<rxn>`) and the SDEF header.
+reaction, from the file's header, and the file (relative to its library's directory in
+`nuclear_data_dirs`) are recorded in the summary (`[reactions.<rxn>]`), the HDF5 file (the
+`data` attribute of `neutrons_<rxn>`) and the SDEF header.
 
 **What is calculated.** Every neutron-producing channel of the evaluation is merged into one
 reaction (`p9Be_xn` for p + ⁹Be). At each beam energy, each channel's cross section times its

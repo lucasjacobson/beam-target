@@ -107,7 +107,7 @@ def test_gas_mixture_with_argon():
     )
     assert argon.beam_energy_grid[-1] < pure.beam_energy_grid[-1]  # More stopping
     assert argon.yields["DD"] < 0.9 * pure.yields["DD"]
-    assert argon.yields["DT"] == 0
+    assert list(argon.reactions) == ["DD"]  # No tritium, so no DT reaction
 
 
 def test_gas_material_upstream():
@@ -147,7 +147,7 @@ def test_thick_solid_target():
 
 def test_titanium_tritide_gives_dt():
     s = make_solid(material=TIT)
-    assert s.reactions_present() == ["DT"] and s.yields["DD"] == 0
+    assert list(s.reactions) == ["DT"]  # No deuterium, so no DD reaction
     assert s.yields["DT"] > 50 * make_solid().yields["DD"]  # DT is far more likely
 
 

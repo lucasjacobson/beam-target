@@ -233,7 +233,11 @@ def test_data_recorded_in_outputs(tmp_path):
     summary = tomllib.loads(s.get_summary())
     assert summary["inputs"]["nuclear_data"] == ["drosg", str(ENDFB)]
     assert summary["reactions"]["p9Be_xn"]["reaction"] == "9Be(p,xn)"
-    assert "LANL" in summary["reactions"]["p9Be_xn"]["data"]
+    data = summary["reactions"]["p9Be_xn"]["data"]
+    assert "LANL" in data
+    # The file relative to its library's directory, which nuclear_data_dirs lists in full
+    assert data.endswith(" (protons/p-004_Be_009.endf)")
+    assert str(ENDFB) not in data
     assert summary["results"]["beam_nuclear_loss"] > 0
     s.write_hdf5(tmp_path / "s.h5")
     with h5py.File(tmp_path / "s.h5") as f:

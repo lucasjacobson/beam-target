@@ -1125,10 +1125,8 @@ class ShineSource:
         - A directory: the evaluated file for this beam on that target (endf.find_evaluation),
           as one EndfReaction with every neutron-producing channel merged.
 
-        The DROSG reactions of the beam whose target is not present (or is not claimed by an
-        earlier library) are kept as well, with no target atoms, so that a deuteron beam
-        always has the DD and DT reactions (with zero yield when absent), as long as "drosg"
-        is in nuclear_data.
+        Only reactions whose target isotope is present are kept: a beam has no reaction (and
+        no yield in the outputs) for an isotope the targets do not hold.
 
         An evaluation that ends below the beam energy at entry is skipped, and the search goes
         on to the next library (check_channels warns if no library then covers the isotope).
@@ -1164,16 +1162,20 @@ class ShineSource:
 
         self.reactions = {}
         self.reaction_data = {}
-        if DROSG in self.nuclear_data:
-            for r in drosg:
-                if claimed.get(r.target, DROSG) == DROSG:
-                    self.reactions[r.key] = r
-                    self.reaction_data[r.key] = f"DROSG-2000 v12.01, {r.data_file}"
+        for r in drosg:
+            if claimed.get(r.target) == DROSG:
+                self.reactions[r.key] = r
+                self.reaction_data[r.key] = f"DROSG-2000 v12.01, {r.data_file}"
         for za, source in claimed.items():
             if source == DROSG:
                 continue
             self.reactions[source.key] = source
-            self.reaction_data[source.key] = f"{source.evaluation} ({source.path})"
+            # The file, relative to its library's directory (listed in nuclear_data_dirs)
+            try:
+                where = os.path.relpath(source.path, source.library).replace(os.sep, "/")
+            except ValueError:  # On another drive
+                where = source.path
+            self.reaction_data[source.key] = f"{source.evaluation} ({where})"
 
     def _is_endf(self, rxn):
         return isinstance(self.reactions[rxn], EndfReaction)

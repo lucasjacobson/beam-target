@@ -38,9 +38,10 @@ def _sdef_energies(si):
 
 def test_proton_on_lithium():
     s = make_source(**LITHIUM_CASE)
-    assert list(s.reactions) == ["pT", "p7Li_n0", "p7Li_n1"]
+    # No tritium in the target, so no T(p,n) reaction at all
+    assert list(s.reactions) == ["p7Li_n0", "p7Li_n1"]
     assert s.reactions_present() == ["p7Li_n0", "p7Li_n1"]
-    assert s.yields["pT"] == 0
+    assert "pT" not in s.yields
     # Below about 3 MeV the 7Be* line is a small fraction of the ground-state one
     assert 0 < s.yields["p7Li_n1"] < 0.3 * s.yields["p7Li_n0"]
     # At 2.5 MeV, n0 neutrons run from about 0.78 MeV forward to 0.24 MeV backward (less

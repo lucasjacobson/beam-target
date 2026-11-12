@@ -118,8 +118,8 @@ def example_sources():
 def test_example_cases_show_their_features(example_sources):
     """Each example case does what its comment in examples/generic.toml says."""
     s = example_sources
-    assert s["DD"].yields["DT"] == 0 and s["DD"].yields["DD"] > 0
-    assert s["DT"].yields["DD"] == 0 and s["DT"].yields["DT"] > 0
+    assert list(s["DD"].reactions) == ["DD"] and s["DD"].yields["DD"] > 0
+    assert list(s["DT"].reactions) == ["DT"] and s["DT"].yields["DT"] > 0
     assert s["DT50_argon"].materials[0].atom_fractions["Ar"] > 0
     assert s["DT50_argon"].yield_total < s["DT50"].yield_total
     assert s["DT50_by_density"].yield_total == pytest.approx(s["DT50"].yield_total, rel=1e-5)

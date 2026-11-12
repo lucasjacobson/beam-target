@@ -49,8 +49,10 @@ def test_yields_add_up(mixed_source):
 
 @pytest.mark.parametrize("T_frac, absent", [(0.0, "DT"), (1.0, "DD")])
 def test_pure_gases(T_frac, absent):
+    """A reaction whose target isotope is absent is left out altogether, outputs included."""
     source = make_source(T_frac=T_frac)
-    assert source.yields[absent] == 0
+    assert absent not in source.reactions and absent not in source.yields
+    assert f"yield_{absent}" not in tomllib.loads(source.get_summary())["results"]
     assert source.yield_total > 0
 
 
@@ -287,8 +289,9 @@ REFERENCE = {
 def test_reference_results(T_frac, stopping_power):
     source = make_source(T_frac=T_frac, stopping_power=stopping_power)
     yield_DD, yield_DT, E_end, scrape = REFERENCE[(T_frac, stopping_power)]
-    assert source.yields["DD"] == pytest.approx(yield_DD, rel=1e-9)
-    assert source.yields["DT"] == pytest.approx(yield_DT, rel=1e-9)
+    # A reaction with no target isotope is absent; its reference yield is 0
+    assert source.yields.get("DD", 0.0) == pytest.approx(yield_DD, rel=1e-9)
+    assert source.yields.get("DT", 0.0) == pytest.approx(yield_DT, rel=1e-9)
     assert source.beam_energy_grid[-1] == pytest.approx(E_end, rel=1e-9)
     assert source.neutron_scrape_fraction == pytest.approx(scrape, rel=1e-8)
 
@@ -645,16 +648,18 @@ def test_text_files(mixed_source, tmp_path):
 
 
 def test_text_files_pure_deuterium(tmp_path):
-    """With no tritium, the DT columns are all zero, the spectrum covers DD energies only and
-    the summary gives no mean DT neutron energy."""
+    """With no tritium there is no DT reaction: the files have DD columns only, the spectrum
+    covers DD energies only and the summary gives no DT yield or mean energy."""
     make_source(T_frac=0.0).write_text_files(tmp_path)
+    for name in ("energy_spectrum.txt", "axial_profile.txt", "angular_distribution.txt"):
+        text = (tmp_path / name).read_text()
+        assert "DD neutrons" in text and "DT neutrons" not in text
     energy = np.loadtxt(tmp_path / "energy_spectrum.txt")
-    assert np.all(energy[:, 3] == 0)
     assert energy[-1, 1] < 4  # DD neutrons only
-    assert np.all(np.loadtxt(tmp_path / "axial_profile.txt")[:, 6] == 0)
     with open(tmp_path / "summary.toml", "rb") as f:
         results = tomllib.load(f)["results"]
-    assert results["yield_DT"] == 0 and "mean_neutron_energy_DT" not in results
+    assert "yield_DT" not in results and "mean_neutron_energy_DT" not in results
+    assert results["yield_DD"] == pytest.approx(results["yield_total"], rel=1e-6)
 
 
 @pytest.mark.parametrize("T_frac, num_plots", [(0.0, 7), (0.5, 8)])
