@@ -8,7 +8,7 @@ Needs the openmc Python package, version 0.16 or later (for cylinders along any 
 is imported only here: the rest of shine_neutron_source runs without it.
 
 Unlike the MCNP SDEF card, the OpenMC source keeps the full correlation between position,
-emission angle and neutron energy: there is one source for each (position bin, angle bin,
+emission angle, and neutron energy: there is one source for each (position bin, angle bin,
 reaction) of the output mesh, each with its own energy spectrum.
 """
 
@@ -86,13 +86,13 @@ def get_openmc_sources(path, direction=None, entry_position=None, backstop_posit
       card).
     - angle: uniform in the cosine of the emission angle from the beam direction over the
       angle bin, and uniform in azimuth.
-    - energy: the neutron spectrum of that position, angle and reaction, as a histogram on
+    - energy: the neutron spectrum of that position, angle, and reaction, as a histogram on
       the output energy bins.
     - strength: the neutrons it emits [n/s]. OpenMC treats strengths as relative weights and
-      normalises tallies per source particle, so multiply tallies by the total of the
+      normalizes tallies per source particle, so multiply tallies by the total of the
       strengths (yield_total in the file's results) for absolute rates.
 
-    The source is placed as it was for the case (the direction, entry_position and
+    The source is placed as it was for the case (the direction, entry_position, and
     backstop_position the case was run with, stored in the file), unless moved here:
 
     Args:

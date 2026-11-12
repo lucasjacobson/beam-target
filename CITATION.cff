@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "shine-neutron-source"
+abstract: >-
+  Neutron source terms for beam-target neutron generators, for MCNP and OpenMC. A beam of
+  protons, deuterons, tritons, 3He, or alphas slows down through gas or solid target regions,
+  with beam divergence, wall scraping, and losses to nuclear reactions; neutrons come from the
+  built-in DROSG-2000 two-body reactions or from evaluated nuclear data libraries in ENDF-6
+  format, converted to the lab frame with relativistic kinematics. The source is written as an
+  MCNP SDEF card, OpenMC sources, and an HDF5 file.
+authors:
+  - given-names: Lucas
+    family-names: Jacobson
+    affiliation: "SHINE Technologies, LLC"
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/PhoenixNuclearLabs/shine-neutron-source"
+keywords:
+  - neutron source
+  - neutron generator
+  - beam-target
+  - MCNP
+  - OpenMC
+  - fusion
+  - nuclear data

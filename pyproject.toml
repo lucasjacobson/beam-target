@@ -5,7 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "shine-neutron-source"
 version = "0.1.0"
-description = "Neutron source terms from proton, deuteron and triton beams in gas and solid targets, for MCNP and OpenMC"
+description = "Neutron source terms for beam-target neutron generators, for MCNP and OpenMC"
+readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]

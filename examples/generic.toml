@@ -9,7 +9,7 @@
 # of [regions.<name>] tables, or inline tables. An inline table can start from a named region
 # with use = "<name>" and change some of its settings; setting = false leaves one of them
 # out. Each region holds a material from a [materials.<name>] table and has its own length,
-# wall radius, divergence and position mesh; a gas region also has its state, pressure with
+# wall radius, divergence, and position mesh; a gas region also has its state, pressure with
 # temperature or density. The last region ends at the backstop.
 #
 # Leave exactly one value to be calculated: the beam energy at the backstop, or (giving
@@ -37,7 +37,7 @@ energy_bin_width = 0.01  # MeV, width of the output neutron energy bins
 # reaches the backstop (backstop_position) or where it enters the first region
 # (entry_position); a case may set either. Here the backstop is at the origin, whatever the
 # case's length (even a calculated one).
-direction         = "-z"             # beam direction: -x, +x, -y, +y, -z or +z
+direction         = "-z"             # beam direction: -x, +x, -y, +y, -z, or +z
 backstop_position = [0.0, 0.0, 0.0]  # cm
 
 # Physics
@@ -49,9 +49,9 @@ stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 ele
 nuclear_data = ["drosg"]
 
 # --- Materials -------------------------------------------------------------------------------
-# A gas gives its molecules (mole fractions): its pressure counts molecules, so H2O vapour,
+# A gas gives its molecules (mole fractions): its pressure counts molecules, so H2O vapor,
 # H2 + O2, and atomic H and O are different gases. A solid gives its atoms (atom ratios) and
-# its mass density. An element symbol means the natural element (Li is 92.4 % 7Li, H holds a
+# its mass density. An element symbol means the natural element (Li is 92.4% 7Li, H holds a
 # little D); write one isotope with its mass number first (7Li, 3He). D and T are 2H and 3H.
 
 [materials.D2]
@@ -129,7 +129,7 @@ divergence     = 36.0
 num_x_bins     = 10
 num_x_bins_out = 1
 
-# A titanium deuteride film 5 micrometres thick. Divergence means nothing over micrometres,
+# A titanium deuteride film 5 micrometers thick. Divergence means nothing over micrometers,
 # so it is left at its default of 0 (a constant beam radius).
 [regions.TiD_film]
 material       = "TiD1.5"
@@ -138,7 +138,7 @@ wall_radius    = 4.1783
 num_x_bins     = 1370
 num_x_bins_out = 137
 
-# A lithium metal film 10 micrometres thick
+# A lithium metal film 10 micrometers thick
 [regions.Li_film]
 material       = "Li"
 length         = 1e-3    # cm
@@ -159,7 +159,7 @@ regions = [{ use = "chamber", material = "T2" }]
 # 50/50 D/T: everything from [defaults]. The DT50_ cases below change one thing each.
 [cases.DT50]
 
-# 50/50 D/T with 2 % argon (by molecule): same pressure, fewer D and T atoms, more stopping
+# 50/50 D/T with 2% argon (by molecule): same pressure, fewer D and T atoms, more stopping
 [cases.DT50_argon]
 regions = [{ use = "chamber", material = "DT_argon" }]
 
@@ -170,7 +170,7 @@ regions = [{ use = "chamber", pressure = false, temperature = false, density = 1
 
 # --- Solid targets ---------------------------------------------------------------------------
 
-# The beam stops in about 2 micrometres of the film
+# The beam stops in about 2 micrometers of the film
 [cases.TiD_thick]
 regions = ["TiD_film"]
 current = 1.0  # mA
@@ -234,7 +234,7 @@ yield_total = 1e13  # n/s
 
 # --- Geometry and MCNP output ----------------------------------------------------------------
 
-# Pumping stages in front of the chamber, with the beam travelling along +x from x = -100 cm
+# Pumping stages in front of the chamber, with the beam traveling along +x from x = -100 cm
 # (entry_position set in the case replaces backstop_position from [defaults])
 [cases.DT50_upstream]
 regions        = ["stage1", "stage2", "chamber"]

@@ -1,4 +1,4 @@
-"""Reading the nuclear data files: DROSG-2000, SRIM and PSTAR."""
+"""Reading the nuclear data files: DROSG-2000, SRIM, and PSTAR."""
 
 import shutil
 

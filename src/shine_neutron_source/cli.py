@@ -225,7 +225,7 @@ def load_input(path):
     describing regions that cases can use by name (see REGION_SETTINGS). Each case lists the
     regions the beam passes through, in order, in its regions setting: names of
     [regions.<name>] tables, or inline tables (which may start from a named one with
-    use = "<name>"). See CASE_SETTINGS, BEAM_SETTINGS and OPTIONAL_CASE_SETTINGS for the case
+    use = "<name>"). See CASE_SETTINGS, BEAM_SETTINGS, and OPTIONAL_CASE_SETTINGS for the case
     settings and their units, and examples/generic.toml for an example.
 
     Leave exactly one value to be calculated: beam_energy_backstop, or one region's length,
@@ -363,10 +363,9 @@ def setup_logging(verbose=False):
 def run_case(name, settings, output_dir="output", input_file=None):
     """Calculate one case from load_input() and write its outputs to <output_dir>/<name>/.
 
-    Writes source.h5, source.sdef, plots/*.png, summary.toml and the integrated profiles
-    axial_profile.txt, energy_spectrum.txt and angular_distribution.txt (see
-    ShineSource.write_text_files), and returns the ShineSource. input_file, if given, is
-    recorded in the summary and the SDEF header.
+    Writes source.h5, source.sdef, summary.toml, the profiles, and plots/*.png (see
+    docs/outputs.md), and returns the ShineSource. input_file, if given, is recorded in the
+    summary and the SDEF header.
     """
     t0 = time.time()
     s = settings["source"]

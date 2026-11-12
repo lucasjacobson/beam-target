@@ -34,7 +34,7 @@ def test_mixing_is_per_atom():
 
 
 def test_same_pressure_same_energy_loss():
-    """D and T have one electron each, so dE/dx at 100 keV agrees within 0.1 %."""
+    """D and T have one electron each, so dE/dx at 100 keV agrees within 0.1%."""
     loss = [np.interp(100.0, *_stopping(make_source(T_frac=f))) for f in (0.0, 1.0)]
     assert loss[0] == pytest.approx(loss[1], rel=1e-3)
 
@@ -54,7 +54,7 @@ def test_icru49_close_to_srim():
     E = np.linspace(2, 400, 200)
     ratio = np.interp(E, E_s, eps_s) / np.interp(E, E_i, eps_i)
     assert np.all((ratio > 0.96) & (ratio < 1.01))
-    assert np.all(ratio[E > 200] < 0.98)  # SRIM is 2-3.5 % lower where the beam enters
+    assert np.all(ratio[E > 200] < 0.98)  # SRIM is 2-3.5% lower where the beam enters
 
 
 def test_icru49_slows_beam_faster():

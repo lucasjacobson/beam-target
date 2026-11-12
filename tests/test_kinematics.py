@@ -1,4 +1,4 @@
-"""Masses, reactions and relativistic two-body kinematics (nuclear.py)."""
+"""Masses, reactions, and relativistic two-body kinematics (nuclear.py)."""
 
 import numpy as np
 import pytest
@@ -247,5 +247,5 @@ def test_coulomb_barrier():
     """About 0.44 MeV for d + D and 4.3 MeV for d + 40Ar (R0 = 1.3 fm)."""
     assert coulomb_barrier(1, 2, 1, 2) == pytest.approx(0.44, abs=0.01)
     assert coulomb_barrier(1, 2, 18, 40) == pytest.approx(4.26, abs=0.01)
-    # Centre-of-mass energy: about E_lab * m2 / (m1 + m2)
+    # Center-of-mass energy: about E_lab * m2 / (m1 + m2)
     assert cm_energy("d", (1, 3), 0.1) == pytest.approx(0.1 * 3 / 5, rel=2e-3)

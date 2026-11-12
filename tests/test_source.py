@@ -1,4 +1,4 @@
-"""Whole calculations with ShineSource: physics checks, input checks and outputs."""
+"""Whole calculations with ShineSource: physics checks, input checks, and outputs."""
 
 import re
 import tomllib
@@ -75,7 +75,7 @@ def test_beam_slows_down(mixed_source):
 @pytest.mark.parametrize("T_frac", [0.0, 1.0])
 def test_beam_stops_inside_target(T_frac, stopping_power):
     """When the beam stops well before the end of the target, everything beyond the stopping
-    point is exactly zero: the beam energy, the cross sections and the neutrons. There must be
+    point is exactly zero: the beam energy, the cross sections, and the neutrons. There must be
     no low-level tail of neutrons all the way to the backstop."""
     source = make_source(
         T_frac=T_frac,
@@ -105,7 +105,7 @@ def test_beam_stops_inside_target(T_frac, stopping_power):
     assert source.backstop_power == 0  # All the beam power stays in the target
 
 
-# --- Two of pressure, length and backstop energy -------------------------------------------
+# --- Two of pressure, length, and backstop energy -------------------------------------------
 
 
 @pytest.mark.parametrize("calculated", ["pressure", "length"])
@@ -248,7 +248,7 @@ def test_current_or_yield_rejected(overrides, message):
 
 
 def test_beam_power_adds_up(mixed_source):
-    """The beam power splits into gas, wall and backstop with nothing lost or double counted."""
+    """The beam power splits into gas, wall, and backstop with nothing lost or double counted."""
     s = mixed_source
     entry = s.voltage * s.current / 1000
     assert s.wall_power > 0 and s.deposited_power > 0 and s.backstop_power > 0
@@ -523,7 +523,7 @@ def test_sdef_number_formats(mixed_source):
 
 
 def test_sdef_extent_without_float_artefacts():
-    """Region boundaries are written as stored, without artefacts from adding lengths
+    """Region boundaries are written as stored, without artifacts from adding lengths
     (0.1 + 0.2 is 0.30000000000000004 in floating point)."""
     source = make_source(
         pressure=[5.0, 5.0],
@@ -649,7 +649,7 @@ def test_text_files(mixed_source, tmp_path):
 
 def test_text_files_pure_deuterium(tmp_path):
     """With no tritium there is no DT reaction: the files have DD columns only, the spectrum
-    covers DD energies only and the summary gives no DT yield or mean energy."""
+    covers DD energies only, and the summary gives no DT yield or mean energy."""
     make_source(T_frac=0.0).write_text_files(tmp_path)
     for name in ("energy_spectrum.txt", "axial_profile.txt", "angular_distribution.txt"):
         text = (tmp_path / name).read_text()

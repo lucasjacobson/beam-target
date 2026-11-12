@@ -34,7 +34,7 @@ ALIAS_NAMES = {za: name for name, za in ISOTOPE_ALIASES.items()}
 _ATOM = re.compile(r"^(\d*)([A-Z][a-z]?)$")
 
 
-# Total electron binding energies of H and He [eV] (ionisation energies, NIST ASD)
+# Total electron binding energies of H and He [eV] (ionization energies, NIST ASD)
 _ELECTRON_BINDING_EV = {1: 13.598434599702, 2: 24.587389011 + 54.4177655282}
 
 
@@ -53,7 +53,7 @@ def mass_table():
 
     The file is fixed-width (Fortran format a1,i3,i5,i5,i5,1x,a3,a4,1x,f14.6,f12.6,f13.5,1x,
     f10.5,1x,a2,f13.5,f11.5,1x,i3,1x,f13.6,f12.6): N - Z, N, Z, A, element, origin, mass excess,
-    binding energy, beta-decay energy and the atomic mass, as an integer part [u] and the rest
+    binding energy, beta-decay energy, and the atomic mass, as an integer part [u] and the rest
     [micro-u]. A "#" in place of the decimal point marks an estimated (non-experimental)
     value; it is read as a decimal point. The table starts after the "(micro-u)" header line.
     """
@@ -222,7 +222,7 @@ class Reaction:
     competing: tuple = ()
 
     def masses(self):
-        """Return (m1, m2, m3, m4) [MeV]: beam, target, neutron and residual."""
+        """Return (m1, m2, m3, m4) [MeV]: beam, target, neutron, and residual."""
         return (
             BEAMS[self.beam].mass,
             nuclear_mass(*self.target),
@@ -263,7 +263,7 @@ class Reaction:
 
     def data_energy(self, beam_energy):
         """Convert lab beam energies to the energies the cross-section data are tabulated at
-        (the same centre-of-mass energy): unchanged, or for an inverse reaction scaled by
+        (the same center-of-mass energy): unchanged, or for an inverse reaction scaled by
         target mass / beam mass, which is exact relativistically too."""
         if not self.inverse:
             return beam_energy
@@ -313,7 +313,7 @@ REACTIONS = {
 
 
 def cm_to_lab(T1, cos_cm, m1, m2, m3, m4):
-    """Relativistic kinematics of 1 + 2 -> 3 + 4 with particle 2 at rest, from the centre of
+    """Relativistic kinematics of 1 + 2 -> 3 + 4 with particle 2 at rest, from the center of
     mass (CM) to the lab.
 
     Args:
@@ -361,12 +361,12 @@ E2_COULOMB = 1.439964548
 
 def coulomb_barrier(Z1, A1, Z2, A2):
     """Return the Coulomb barrier [MeV] of two nuclei touching at radius
-    R0_COULOMB * (A1^(1/3) + A2^(1/3)), in the centre of mass (an estimate)."""
+    R0_COULOMB * (A1^(1/3) + A2^(1/3)), in the center of mass (an estimate)."""
     return E2_COULOMB * Z1 * Z2 / (R0_COULOMB * (A1 ** (1 / 3) + A2 ** (1 / 3)))
 
 
 def cm_energy(beam, target, beam_energy):
-    """Return the kinetic energy in the centre of mass [MeV] of a beam particle (a BEAMS key)
+    """Return the kinetic energy in the center of mass [MeV] of a beam particle (a BEAMS key)
     of lab energy beam_energy [MeV] on a target nucleus (Z, A) at rest."""
     m1, m2 = BEAMS[beam].mass, nuclear_mass(*target)
     return np.sqrt(m1**2 + m2**2 + 2 * (beam_energy + m1) * m2) - m1 - m2

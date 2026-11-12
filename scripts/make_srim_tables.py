@@ -6,7 +6,7 @@ SRIM-2013 Pro, whose SR Module reports SRIM-2012.01) and runs SRIM's batch progr
 "SR Module\\SRModule.exe", once per table.
 
 Tables are made for every beam particle (p, d, t, 3He, alpha), every target (elements
-Z = 1-92 at their natural atomic mass, plus the isotopes D, T and 3He) and both target phases
+Z = 1-92 at their natural atomic mass, plus the isotopes D, T, and 3He) and both target phases
 (solid and gas): 950 in all. Stopping is requested per atom, in eV/(1e15 atoms/cm2), so it
 does not depend on the target density. Densities are SRIM's own (from SCOEF03.dat); for the
 gas phase of elements SRIM gives no gas density for, an ideal monatomic gas at 0 degC and
@@ -216,7 +216,7 @@ def write_hdf5(path, raw_dir, all_targets):
         f.create_dataset("targets", data=np.array(names, dtype="S"))
         f["targets"].attrs["description"] = (
             "target names: element symbols for Z = 1-92 at natural isotopic mass, then the "
-            "isotopes D, T and He3"
+            "isotopes D, T, and He3"
         )
         f.create_dataset("target_Z", data=np.array([t[1] for t in all_targets], dtype="i4"))
         f.create_dataset("target_mass", data=np.array([t[3] for t in all_targets]))

@@ -1,4 +1,4 @@
-"""Materials other than D/T gas: formulas, the Material class, solid targets and gas mixtures."""
+"""Materials other than D/T gas: formulas, the Material class, solid targets, and gas mixtures."""
 
 import tomllib
 
@@ -12,7 +12,7 @@ from shine_neutron_source.source import Material, dt_gas, get_atom_density, pars
 TID = Material("TiD1.5", "solid", atoms={"Ti": 1.0, "D": 1.5}, density=3.9)
 TIT = Material("TiT1.5", "solid", atoms={"Ti": 1.0, "T": 1.5}, density=4.0)
 
-# A solid target region: no pressure or temperature, micrometres thick, no divergence
+# A solid target region: no pressure or temperature, micrometers thick, no divergence
 SOLID = dict(
     pressure=[None],
     temperature=[None],
@@ -130,7 +130,7 @@ def test_gas_material_upstream():
 
 
 def test_thick_solid_target():
-    """The beam stops within a few micrometres of TiD1.5: all its power stays in the target."""
+    """The beam stops within a few micrometers of TiD1.5: all its power stays in the target."""
     s = make_solid()
     assert s.atom_density_per_region[0] == pytest.approx(3.9 * 6.02214076e23 / (
         (47.9 + 1.5 * 2.0141) / 2.5), rel=1e-3)  # fmt: skip
@@ -193,7 +193,7 @@ def test_solid_outputs_record_material(tmp_path):
     "overrides, message",
     [
         (dict(pressure=[5.0]), "is a solid, so it takes no pressure"),
-        (dict(temperature=[25.0]), "is a solid, so it takes no pressure, temperature or density"),
+        (dict(temperature=[25.0]), "is a solid, so it takes no pressure, temperature, or density"),
         (dict(stopping_power="icru49"), "icru49 is for hydrogen-isotope gases only.*is a solid"),
         (dict(length=[None]), "only one value can be calculated"),
     ],
@@ -210,7 +210,7 @@ def test_unknown_element_rejected():
 
 def test_isotopes_and_natural_elements():
     """A natural element is split into its isotopes; an isotope stays itself. Stopping uses
-    the element's table, except for D, T and 3He."""
+    the element's table, except for D, T, and 3He."""
     natural = Material("Li", "solid", atoms={"Li": 1}, density=0.534)
     assert natural.isotope_fractions[(3, 7)] == 0.9241
     assert natural.stopping_fractions() == {"Li": pytest.approx(1.0)}
@@ -281,12 +281,12 @@ def test_gas_state_rejected(overrides, message):
 
 
 def test_solid_takes_no_density():
-    with pytest.raises(ValueError, match="takes no pressure, temperature or density"):
+    with pytest.raises(ValueError, match="takes no pressure, temperature, or density"):
         make_solid(density=[1.0])
 
 
 def test_monatomic_and_molecular_gases():
-    """A gas's molecules set its atoms per molecule: water vapour has 3, argon 1."""
+    """A gas's molecules set its atoms per molecule: water vapor has 3, argon 1."""
     steam = Material("steam", "gas", molecules={"H2O": 1})
     assert steam.atoms_per_unit == 3 and steam.atom_fractions == pytest.approx(
         {"H": 2 / 3, "O": 1 / 3}

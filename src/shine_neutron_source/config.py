@@ -2,20 +2,9 @@
 
 Library locations belong to the machine, not to a case, so they live in a per-user TOML file,
 ~/.shine-neutron-source.toml (or the file named by the SHINE_NEUTRON_SOURCE_CONFIG
-environment variable), not in input files:
-
-    [libraries]
-    endfb81   = "C:/data/ENDF-B-VIII.1"   # name = directory of evaluated files
-    fendl32c  = "C:/data/FENDL-3.2c"
-    tendl2025 = "C:/data/TENDL-2025"
-
-    [defaults]
-    nuclear_data = ["drosg", "endfb81", "fendl32c", "tendl2025"]
-
-Input files then name the libraries (nuclear_data = ["drosg", "endfb81", ...]), so they work
-on any machine whose configuration defines those names, and the outputs record which
-libraries a case used. [defaults] nuclear_data is used for cases that do not set it. Relative
-directories in the configuration are taken from the configuration file's directory.
+environment variable), with a [libraries] table naming directories of evaluated files and a
+[defaults] nuclear_data list. Its format and use are described in data/README.md
+("Evaluated nuclear data libraries").
 """
 
 import os

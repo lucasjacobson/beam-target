@@ -198,7 +198,7 @@ beam_energy_backstop = 200.0
         ("regions = [3]", "each region is the name of"),
         ("regions = []", "regions must list at least one region"),
         ('regions = "gas"', "regions must be list"),
-        ('regions = [{ use = "gas", colour = "red" }]', r"unknown setting\(s\) colour"),
+        ('regions = [{ use = "gas", color = "red" }]', r"unknown setting\(s\) color"),
         ('regions = [{ use = "gas", material = "nope" }]', r"no \[materials.nope\] table"),
         ('regions = [{ use = "gas", length = "long" }]', "length must be float"),
         ('regions = [{ use = "gas", density = false }]', "density must be float"),
@@ -414,7 +414,7 @@ def test_main_list(tmp_path, capsys):
 
 
 def test_main_default_messages(tmp_path, caplog):
-    """By default: a start line, one line per case and a closing line; no details."""
+    """By default: a start line, one line per case, and a closing line; no details."""
     main([str(write_input(tmp_path, TWO_CASES)), "-o", str(tmp_path / "out"), "-j", "1"])
     messages = [r.getMessage() for r in caplog.records]
     assert messages[0].startswith("Running 2 case(s)")

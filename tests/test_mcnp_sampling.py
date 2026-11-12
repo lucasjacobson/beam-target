@@ -57,7 +57,7 @@ CASES = {
     "DT50_+x": ({}, "+x", "entry_position", (-100.0, 0.0, 0.0)),
     "DT50_-y": ({}, "-y", "entry_position", (0.0, 7.0, 0.0)),
     "DT50_+y": ({}, "+y", "backstop_position", (0.0, 0.0, 0.0)),
-    # Three regions of 1, 2 and 3 output bins (si1 with no, one "i" and "2i" points)
+    # Three regions of 1, 2, and 3 output bins (si1 with no, one "i", and "2i" points)
     "regions": (
         dict(
             length=[10.0, 20.0, 30.0],
@@ -239,7 +239,7 @@ def test_angles(sampled):
 
 def test_energy_in_each_angle_bin(sampled):
     """In each angle bin, the energies follow the spectrum at that angle bin by bin, with no
-    particles in empty bins (the segments, the zero bins between them and the trimmed
+    particles in empty bins (the segments, the zero bins between them, and the trimmed
     ends are read as intended)."""
     s = sampled["source"]
     grid, by_angle = s.neutrons_by_angle_and_energy()

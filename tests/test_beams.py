@@ -87,7 +87,7 @@ def test_lithium_limits():
     ],
 )
 def test_unmodelled_channels_warned(voltage, expected):
-    """Deuterons on CD4: the carbon (d,n) channels are open but not modelled, so the case
+    """Deuterons on CD4: the carbon (d,n) channels are open but not modeled, so the case
     runs (with the DD neutrons) and warns about each."""
     s = make_source(material=_gas("CD4"), voltage=voltage, num_x_bins=[4], num_x_bins_out=[2])
     assert [w.split(" is open")[0] for w in s.warnings] == expected
@@ -96,7 +96,7 @@ def test_unmodelled_channels_warned(voltage, expected):
 
 
 def test_coulomb_barrier_suppresses_warnings():
-    """2 % argon at 280 keV: 40Ar(d,n) is exothermic, but the beam is at 6 % of the Coulomb
+    """2% argon at 280 keV: 40Ar(d,n) is exothermic, but the beam is at 6% of the Coulomb
     barrier, so it is negligible and not warned about. At 1 MeV it is."""
     gas = Material("DT_argon", "gas", molecules={"D2": 0.49, "T2": 0.49, "Ar": 0.02})
     assert make_source(material=gas).warnings == []
@@ -152,7 +152,7 @@ def test_triton_on_hydrogen_is_a_forward_cone():
 
 
 def test_natural_hydrogen_holds_deuterium():
-    """Natural hydrogen is 0.0145 % deuterium, so a triton beam also makes D(t,n)4He
+    """Natural hydrogen is 0.0145% deuterium, so a triton beam also makes D(t,n)4He
     neutrons in it, at every angle."""
     s = make_source(beam="t", material=_gas("H2"), voltage=3300.0, length=[1.0])
     assert s.reactions_present() == ["tD", "tH"]

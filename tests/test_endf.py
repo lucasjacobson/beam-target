@@ -203,7 +203,7 @@ def test_attenuation_and_power_balance():
     """The beam loses some particles to nuclear reactions on its way; the power they carry is
     deposited in the target, and the power still adds up."""
     s = thick_be("p", 30, ["drosg", ENDFB], length=0.5)
-    assert 0.03 < 1 - s.survival_grid[-1] < 0.06  # About 4 % at 30 MeV
+    assert 0.03 < 1 - s.survival_grid[-1] < 0.06  # About 4% at 30 MeV
     assert np.all(np.diff(s.survival_grid) <= 0)
     total = s.deposited_power + s.wall_power + s.backstop_power
     assert total == pytest.approx(s.voltage * s.current / 1000, rel=1e-12)

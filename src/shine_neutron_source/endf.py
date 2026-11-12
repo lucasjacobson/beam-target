@@ -12,9 +12,9 @@ Supported neutron distributions (ENDF-102 section 6.2):
 - LAW=1, continuum energy-angle: LANG=2 (Kalbach-Mann, with the slope from the systematics,
   NA=1, or given, NA=2), LANG=3 with NA=2 (as TENDL uses it: Kalbach-Mann with the slope
   given), LANG=1 (Legendre) or NA=0 (isotropic); outgoing energies as a histogram (LEP=1) or
-  linear (LEP=2); centre-of-mass (LCT=2, 3, 4) or lab (LCT=1) frame.
+  linear (LEP=2); center-of-mass (LCT=2, 3, 4) or lab (LCT=1) frame.
 - LAW=2, discrete two-body reactions (such as (p,n) to one level of the residual nucleus):
-  Legendre (LANG=0) or tabulated (LANG=12) centre-of-mass angular distributions; the
+  Legendre (LANG=0) or tabulated (LANG=12) center-of-mass angular distributions; the
   neutron energy follows from the kinematics, with the channel's Q value (QI in MF=3).
 - LAW=7, lab-frame angle-energy tables: an outgoing-energy distribution at each of a set of
   lab cosines.
@@ -191,7 +191,7 @@ def separation_energy(Z_c, A_c, Z_x, A_x, particle):
 def _energy_points(energies, f0, lep, max_step):
     """Split an outgoing-energy distribution (energies [MeV], density f0 [1/MeV], histogram
     for lep 1 or linear for lep 2) into pieces at most max_step [MeV] wide. Return (energy
-    of each piece [MeV], its probability, index of the tabulated point below), normalised
+    of each piece [MeV], its probability, index of the tabulated point below), normalized
     to a total of 1."""
     e, f = energies, f0
     widths = np.diff(e)
@@ -241,7 +241,7 @@ class _TwoBody:
         self.values = np.asarray(values, dtype=float)
 
     def cell_probabilities(self, mu_edges):
-        """Probability of each cosine cell between mu_edges (decreasing), normalised to 1."""
+        """Probability of each cosine cell between mu_edges (decreasing), normalized to 1."""
         if self.lang == 0:
             coeffs = np.concatenate(([1.0], self.values))
             series = np.polynomial.legendre.Legendre(coeffs * (2 * np.arange(len(coeffs)) + 1) / 2)
@@ -386,7 +386,7 @@ class NeutronProduction:
                 incident, dists, unit_base = self._read_law1(r, mt)
             elif law == 2:
                 incident, dists, unit_base = self._read_law2(r, mt)
-                frame = "cm"  # LAW=2 is always in the centre-of-mass frame
+                frame = "cm"  # LAW=2 is always in the center-of-mass frame
             elif law == 7:
                 incident, dists, unit_base = self._read_law7(r, mt)
                 frame = "lab"
@@ -535,7 +535,7 @@ class NeutronProduction:
     # --- Lab-frame spectra -----------------------------------------------------------------
 
     def _boost(self, E):
-        """Return (beta, gamma) of the beam + target centre of mass at beam energy E [MeV]."""
+        """Return (beta, gamma) of the beam + target center of mass at beam energy E [MeV]."""
         m1, m2 = BEAMS[self.beam].mass, nuclear_mass(*self.target)
         p1 = np.sqrt(E * (E + 2 * m1))
         beta = p1 / (E + m1 + m2)
@@ -564,7 +564,7 @@ class NeutronProduction:
                 them separately with two_body_spectrum.
 
         Each piece of each distribution (outgoing energy, angle cell) is converted to the
-        lab (boosted from the centre of mass of beam + target with relativistic kinematics,
+        lab (boosted from the center of mass of beam + target with relativistic kinematics,
         unless given in the lab) and added to the lab bin it lands in. The total is exact:
         the bins add up to the production cross section; the placement is good to about the
         size of the pieces.
@@ -732,7 +732,7 @@ class NeutronProduction:
         angle_edges, energy_edges, width, shape = grid
         step = np.radians(np.min(np.diff(angle_edges))) / 4
         spectra = []
-        for s in dist.spectra:  # Each spectrum in the lab energy bins (unnormalised)
+        for s in dist.spectra:  # Each spectrum in the lab energy bins (unnormalized)
             e = s.x * scale
             f = s.y / scale
             lep = 1 if set(s.codes) == {1} else 2  # Histogram (INT=1) or linear (INT=2)
@@ -849,7 +849,7 @@ def _parse_name(name):
 @functools.lru_cache(maxsize=16)
 def library_index(directory):
     """Return {(beam, symbol, A): path} for the evaluation files in a directory and its
-    subdirectories (indexed once per run), recognising TENDL, ENDF/B and FENDL names. Where
+    subdirectories (indexed once per run), recognizing TENDL, ENDF/B, and FENDL names. Where
     a directory holds several TENDL variants of one evaluation, the one earliest in
     FILE_SUFFIXES (every channel explicit first) is used."""
     found = {}
@@ -876,7 +876,7 @@ def find_evaluation(directory, beam, target):
 
 def describe_evaluation(path):
     """Return a one-line description of an evaluation: the file's label (TPID) and its
-    origin line (target, laboratory, evaluation date and authors), from the header."""
+    origin line (target, laboratory, evaluation date, and authors), from the header."""
     with open(path, encoding="ascii", errors="replace") as f:
         lines = [next(f, "") for _ in range(6)]
     tpid = lines[0][:66].strip()
