@@ -51,7 +51,10 @@ ISOTOPE_TARGETS = {"D": (1, 2.01410177812), "T": (1, 3.0160492779), "He3": (2, 3
 
 PHASES = {"solid": 0, "gas": 1}
 STOPPING_UNITS = 7  # eV/(1E15 atoms/cm2)
-E_MIN_KEV, E_MAX_KEV = 0.0011, 100000.0  # 1.1 eV to 100 MeV, as in the original D and T tables
+# 1.1 eV to 5 GeV: the widest range SR Module gives. It starts its tables at 1.1 eV whatever lower
+# E-Min it is given, and above about 5 GeV it stops with "Run-time error '6': Overflow" (though
+# it accepts up to 10 GeV/u), for protons in hydrogen as for alphas in uranium
+E_MIN_KEV, E_MAX_KEV = 0.0011, 5.0e6
 STP_ATOM_DENSITY = 2.6867811e19  # Loschmidt constant [1/cm3]
 AVOGADRO = 6.02214076e23
 FORMAT_VERSION = 1

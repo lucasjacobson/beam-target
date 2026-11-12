@@ -153,13 +153,13 @@ def test_srim_h5_layout(srim_h5):
     assert len(targets) == 95 and targets[:2] == ["H", "He"] and targets[-3:] == ["D", "T", "He3"]
     assert list(f["target_Z"][:92]) == list(range(1, 93))
     E = f["energy"][()]
-    assert len(E) == 208 and E[0] == pytest.approx(0.0011) and E[-1] == pytest.approx(1e5)
+    assert len(E) == 253 and E[0] == pytest.approx(0.0011) and E[-1] == pytest.approx(5e6)
     for particle, z in [("p", 1), ("d", 1), ("t", 1), ("h", 2), ("a", 2)]:
         assert f[particle].attrs["Z"] == z
         for phase in ("solid", "gas"):
             for key in ("electronic", "nuclear"):
                 data = f[particle][phase][key][()]
-                assert data.shape == (95, 208)
+                assert data.shape == (95, 253)
                 assert np.all(np.isfinite(data)) and np.all(data >= 0)
                 assert np.all(data[:, :-1].max(axis=1) > 0)
 

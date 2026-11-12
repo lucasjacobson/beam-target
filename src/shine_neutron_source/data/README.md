@@ -140,7 +140,9 @@ deuteron (`d`) tables with `read_srim_h5`.
   differs from its solid-phase stopping by up to about 9 % at low energies (1–5 % for the
   noble gases), so a hydride target should use the solid-phase hydrogen values and a gas
   target the gas-phase ones.
-- **Energies:** 208 values from 1.1 eV to 100 MeV, the same for every table.
+- **Energies:** 253 values from 1.1 eV to 5 GeV, the same for every table: the widest range SR
+  Module gives (it starts at 1.1 eV whatever lower energy is asked for, and above about 5 GeV
+  it stops with an overflow error, though it accepts up to 10 GeV/u).
 
 Stopping is stored per target atom, in eV/(10¹⁵ atoms/cm²), exactly as SRIM printed it (4
 significant figures), so it does not depend on the target density. Stopping in a compound or
@@ -151,9 +153,9 @@ Layout (each dataset has a `units` attribute; stopping datasets also have `dimen
 
 | Path | Contents |
 |---|---|
-| `energy` | beam energy [keV], shape (208,) |
+| `energy` | beam energy [keV], shape (253,) |
 | `targets`, `target_Z`, `target_mass` | target names (`H` … `U`, then `D`, `T`, `He3`), atomic numbers and masses [u] |
-| `<particle>/<phase>/electronic` | electronic stopping, shape (95 targets, 208 energies) |
+| `<particle>/<phase>/electronic` | electronic stopping, shape (95 targets, 253 energies) |
 | `<particle>/<phase>/nuclear` | nuclear stopping, same shape |
 
 `<particle>` is `p`, `d`, `t`, `h` or `a` (each group has `Z`, `mass` and `description`
