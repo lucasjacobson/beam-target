@@ -45,13 +45,8 @@ import textwrap
 import time
 
 import h5py
-import matplotlib
 import numpy as np
 from numpy.polynomial.legendre import legval
-
-matplotlib.use("Agg")
-from matplotlib import pyplot as plt  # Must follow matplotlib.use
-from matplotlib.colors import LogNorm
 
 from .config import DROSG, ConfigError, load_config, resolve_nuclear_data
 from .endf import EndfReaction, find_evaluation, load_evaluation
@@ -82,6 +77,9 @@ ENDF_ANGLE_CELLS_PER_BIN = 8
 ENDF_MIN_ANGLE_CELLS = 180
 # Warn if the explicit channels of an evaluation cover less than this fraction of its
 # non-elastic cross section at the beam energy (the neutrons of the rest are missing)
+# Cells (position x CM angle) handled at a time when binning the built-in reactions: a block that
+# fits in the CPU cache, which is much faster than whole-array operations on large meshes
+CHUNK_CELLS = 65_536
 ENDF_MISSING_WARNING = 0.01
 # Targets from thorium (Z = 90) up can fission: warn unless their evaluation gives fission
 # (MT=18) neutrons explicitly
@@ -505,8 +503,10 @@ def get_package_version():
         return "unknown"
 
 
+@functools.cache
 def get_code_version():
-    """Return the version of this code, for recording in output files.
+    """Return the version of this code, for recording in output files (looked up once per
+    process: it runs git).
 
     When the code runs from a git checkout of this repository (including an editable
     install), this is the git commit, with "-dirty" appended if tracked files (code or data)
@@ -588,12 +588,24 @@ def _cosine_text(x):
 PLOT_STYLE = {"font.family": "serif", "mathtext.default": "regular", "savefig.dpi": 200}
 
 
+@functools.cache
+def _pyplot():
+    """Return matplotlib.pyplot, imported on first use (with the non-interactive Agg backend),
+    so that runs and imports that make no plots do not pay for loading matplotlib."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib import pyplot
+
+    return pyplot
+
+
 def _plot_style(method):
     """Decorator: draw the plot with PLOT_STYLE, without changing global matplotlib settings."""
 
     @functools.wraps(method)
     def wrapper(*args, **kwargs):
-        with plt.rc_context(PLOT_STYLE):
+        with _pyplot().rc_context(PLOT_STYLE):
             return method(*args, **kwargs)
 
     return wrapper
@@ -604,7 +616,7 @@ def _save_figure(fig, fname, close=True):
     fig.tight_layout()
     fig.savefig(fname)
     if close:
-        plt.close(fig)
+        _pyplot().close(fig)
 
 
 class BeamTarget:
@@ -1590,6 +1602,8 @@ class BeamTarget:
             self.cm_xs[rxn] = np.zeros(shape)
             self.neutron_energy[rxn] = np.zeros(shape)
             self.lab_cosine[rxn] = np.zeros(shape)
+            # One position bin at a time: a row of CM angles fits in the CPU cache, which makes
+            # this faster than whole-array operations on many rows (measured)
             for i, E in enumerate(self.beam_energy_mids):
                 T3, cos_lab = cm_to_lab(E / 1000, self.cosine_mids, *masses)
                 self.neutron_energy[rxn][i, :] = T3
@@ -1756,11 +1770,13 @@ class BeamTarget:
 
             # Neutron energy mesh: spans this reaction's energies, aligned to energy_bin_width
             # (one bin from 0 if the reaction is below its threshold everywhere)
-            energies = self.neutron_energy[rxn][np.isfinite(self.neutron_energy[rxn])]
-            if len(energies) == 0:
-                energies = np.array([0.0])
-            energy_min = np.floor(np.min(energies) / self.energy_bin_width) * self.energy_bin_width
-            energy_max = np.ceil(np.max(energies) / self.energy_bin_width) * self.energy_bin_width
+            energies = self.neutron_energy[rxn]
+            if np.all(np.isnan(energies)):
+                lowest = highest = 0.0
+            else:
+                lowest, highest = np.nanmin(energies), np.nanmax(energies)
+            energy_min = np.floor(lowest / self.energy_bin_width) * self.energy_bin_width
+            energy_max = np.ceil(highest / self.energy_bin_width) * self.energy_bin_width
             self.num_energy_bins[rxn] = max(
                 1, int(round((energy_max - energy_min) / self.energy_bin_width))
             )
@@ -1772,56 +1788,51 @@ class BeamTarget:
                 self.neutron_energy_grid[rxn][:-1] + self.neutron_energy_grid[rxn][1:]
             ) / 2
 
-            # Output-mesh indices (i_out, j_out, k_out) of every internal (position, angle) cell
-            offsets = np.cumsum(np.concatenate(([0], self.position_bins_out[:-1])))
-            i_out = np.concatenate(
-                [
-                    np.floor_divide(np.arange(position_bins)[:, None], x_ratio) + offset
-                    for position_bins, x_ratio, offset in zip(
-                        self.position_bins, self.x_ratio_per_region, offsets
-                    )
-                ],
-                axis=0,
+            # Each internal (position, CM angle) cell adds its neutron rate [n/s], reduced by
+            # scraping (beam_fraction_mids also holds the nuclear losses), to the output cell
+            # of its position, lab angle, and energy. The flat output index and the rate of
+            # every cell are built a few rows at a time (CHUNK_CELLS: a cache-sized block, much
+            # faster than whole-array operations), then tallied with one bincount (much faster
+            # than np.add.at). Cells with no neutrons (below threshold) get zero weight.
+            factor = self.target_density_mids[rxn] * 1e-24 * self.dx * self.particle_rate
+            rate_per_row = factor * self.beam_fraction_mids
+            shape = (
+                self.position_bins_total_out,
+                self.num_angle_bins_out,
+                self.num_energy_bins[rxn],
             )
-            i_out = np.repeat(i_out, self.num_angle_bins, axis=1).astype(int).ravel()
-            lab_angle = np.degrees(np.arccos(np.clip(self.lab_cosine[rxn].ravel(), -1, 1)))
-            valid = np.isfinite(lab_angle)
-            j_out = np.zeros(len(lab_angle), dtype=int)
-            j_out[valid] = np.minimum(
-                (lab_angle[valid] / self.angle_bin_width_out).astype(int),
-                self.num_angle_bins_out - 1,
-            )
-            k_out = np.zeros(len(lab_angle), dtype=int)
-            k_out[valid] = np.clip(
-                np.searchsorted(
-                    self.neutron_energy_grid[rxn], self.neutron_energy[rxn].ravel()[valid]
+            grid = self.neutron_energy_grid[rxn]
+            i_out = self._output_position_index()
+            n_angles = self.num_angle_bins
+            flat = np.empty(self.position_bins_total * n_angles, dtype=np.int64)
+            weights = np.empty(self.position_bins_total * n_angles)
+            rows_per_chunk = max(1, CHUNK_CELLS // n_angles)
+            for start in range(0, self.position_bins_total, rows_per_chunk):
+                rows = slice(start, min(start + rows_per_chunk, self.position_bins_total))
+                cells = slice(rows.start * n_angles, rows.stop * n_angles)
+                lab_angle = np.degrees(np.arccos(np.clip(self.lab_cosine[rxn][rows], -1, 1)))
+                valid = np.isfinite(lab_angle)
+                j_out = np.minimum(
+                    (np.where(valid, lab_angle, 0.0) / self.angle_bin_width_out).astype(int),
+                    shape[1] - 1,
                 )
-                - 1,
-                0,
-                self.num_energy_bins[rxn] - 1,
-            )
-
-            # Neutron rate in each internal cell [n/s], with and without scraping
-            areas = np.tile(self.solid_angles, self.position_bins_total)
-            factor = (self.target_density_mids[rxn] * 1e-24 * self.dx * self.particle_rate)[:, None]
-            # With and without scraping (beam_fraction_mids also holds the nuclear losses)
-            vals_scr = (self.cm_xs[rxn] * factor * self.beam_fraction_mids[:, None]).ravel() * areas
-            vals_tot = (self.cm_xs[rxn] * factor * self.survival_mids[:, None]).ravel() * areas
-
-            self.neutrons[rxn] = np.zeros(
-                (self.position_bins_total_out, self.num_angle_bins_out, self.num_energy_bins[rxn])
-            )
-            np.add.at(
-                self.neutrons[rxn], (i_out[valid], j_out[valid], k_out[valid]), vals_scr[valid]
-            )
+                energy = np.where(valid, self.neutron_energy[rxn][rows], grid[0])
+                k_out = np.clip(np.searchsorted(grid, energy) - 1, 0, shape[2] - 1)
+                flat[cells] = ((i_out[rows, None] * shape[1] + j_out) * shape[2] + k_out).ravel()
+                rate = self.cm_xs[rxn][rows] * rate_per_row[rows, None] * self.solid_angles
+                weights[cells] = np.where(valid, rate, 0.0).ravel()
+            self.neutrons[rxn] = np.bincount(
+                flat, weights=weights, minlength=shape[0] * shape[1] * shape[2]
+            ).reshape(shape)
 
             self.yields[rxn] = np.sum(self.neutrons[rxn])
             logger.debug(f"{self.name}: {rxn} neutron yield = {self.yields[rxn]:.4e} n/s")
 
-            if np.sum(vals_tot) == 0:
-                self.neutron_scrape_fractions[rxn] = 0.0
-            else:
-                self.neutron_scrape_fractions[rxn] = 1 - np.sum(vals_scr) / np.sum(vals_tot)
+            # Fraction lost to scraping: the totals with and without it, summed over angle first
+            per_position = self.cm_xs[rxn] @ self.solid_angles * factor
+            total_scr = np.sum(per_position * self.beam_fraction_mids)
+            total_all = np.sum(per_position * self.survival_mids)
+            self.neutron_scrape_fractions[rxn] = 1 - total_scr / total_all if total_all else 0.0
 
         self.yield_total = sum(self.yields.values())
         if self.yield_total == 0:
@@ -2540,7 +2551,7 @@ class BeamTarget:
         2 x 2 grid."""
         scale, unit = self._position_units()
         x = self.x_grid_out * scale
-        fig, axes = plt.subplots(2, 2, sharex=True, figsize=(13, 9))
+        fig, axes = _pyplot().subplots(2, 2, sharex=True, figsize=(13, 9))
         (ax_energy, ax_radius), (ax_current, ax_power) = axes
 
         ax_energy.plot(x, self.beam_energy_grid_out)
@@ -2595,7 +2606,7 @@ class BeamTarget:
         if len(lines) > 1:
             lines.append(("Total", sum(values for _, values in lines)))
 
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = _pyplot().subplots(figsize=(8, 6))
         for label, per_cm in lines:
             ax.stairs(per_cm, x, label=label)
         self._set_position_axis(ax)
@@ -2623,7 +2634,7 @@ class BeamTarget:
         if len(lines) > 1:
             lines.append(("Total", sum(values for _, values in lines)))
 
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = _pyplot().subplots(figsize=(8, 6))
         for label, per_sr in lines:
             ax.stairs(per_sr, self.angle_grid_out, label=label)
         ax.set_xlim(0, 180)
@@ -2649,13 +2660,15 @@ class BeamTarget:
         two 7Li(p,n) lines), their total is shown too. The axes follow the neutron energies,
         so the plots suit any beam energy.
         """
+        from matplotlib.colors import LogNorm
+
         present = self.reactions_present()
         for rxn in present:
             by_angle = np.sum(self.neutrons[rxn], 0)  # (angle, energy) [n/s]
             density = by_angle / self.solid_angles_out[:, None] / self.energy_bin_width
             filled = np.flatnonzero(np.sum(by_angle, 0))
             lo, hi = filled[0], filled[-1] + 1
-            fig, ax = plt.subplots(figsize=(8, 6))
+            fig, ax = _pyplot().subplots(figsize=(8, 6))
             mesh = ax.pcolormesh(
                 self.angle_grid_out,
                 self.neutron_energy_grid[rxn][lo : hi + 1],
@@ -2674,7 +2687,7 @@ class BeamTarget:
 
         energy_grid, on_common_grid = self.neutrons_by_angle_and_energy()
         peak = 0.0
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = _pyplot().subplots(figsize=(8, 6))
         spectra = {rxn: np.sum(on_common_grid[rxn], 0) / self.energy_bin_width for rxn in present}
         lines = [(self.reactions[rxn].label, spectra[rxn], {}) for rxn in present]
         overlap = np.sum([spectrum > 0 for spectrum in spectra.values()], 0)
