@@ -164,7 +164,7 @@ def test_solid_plots_in_micrometres(tmp_path):
     assert s._position_units() == (1e4, r"$\mu$m")
     assert make_source()._position_units() == (1.0, "cm")
     s.make_plots(tmp_path)
-    assert len(list(tmp_path.glob("*.png"))) == 7  # DD only
+    assert len(list(tmp_path.glob("*.png"))) == 8  # DD only
 
 
 def test_solid_outputs_record_material(tmp_path):

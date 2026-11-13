@@ -104,6 +104,8 @@ SRIM_ISOTOPE_TABLES = {(1, 2): "D", (1, 3): "T", (2, 3): "He3"}
 SDEF_RADIUS_DECIMALS = 5
 # Longest line of summary.toml before a list of strings is written one item per line
 SUMMARY_LINE_LENGTH = 100
+# Most energy cells in a surface plot (see plot_neutron_energy_surface)
+SURFACE_MAX_CELLS = 300
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
 HDF5_FORMAT_VERSION = 10
@@ -2655,6 +2657,7 @@ class BeamTarget:
         self.plot_neutron_position(directory)
         self.plot_neutron_angle(directory)
         self.plot_neutron_energy(directory)
+        self.plot_neutron_energy_surface(directory)
 
     def _position_units(self):
         """Return (scale, unit) for position plots: micrometers if the whole source is shorter
@@ -2815,7 +2818,7 @@ class BeamTarget:
                 self.angle_grid_out,
                 self.neutron_energy_grid[rxn][lo : hi + 1],
                 np.ma.masked_less_equal(density[:, lo:hi].T, 0),
-                cmap="plasma",
+                cmap="Spectral_r",
                 norm=LogNorm(vmin=np.max(density) * 1e-4, vmax=np.max(density)),
             )
             fig.colorbar(mesh, ax=ax, label=r"Neutrons [n/(MeV$\cdot$s$\cdot$sr)]")
@@ -2856,3 +2859,52 @@ class BeamTarget:
         ax.set_yscale("log")
         ax.set_ylim(peak * 10**-5.25, peak * 10**0.25)
         _save_figure(fig, os.path.join(directory, "neutron_energy_log.png"))
+
+    @_plot_style
+    def plot_neutron_energy_surface(self, directory):
+        """Plot neutron energy against emission angle for each reaction as a surface, with a
+        linear vertical axis: the same neutrons per unit energy and solid angle as the maps of
+        plot_neutron_energy, over the energies the reaction gives.
+
+        A surface has at most SURFACE_MAX_CELLS energy cells; finer energy bins are averaged
+        in groups (which keeps the heights the same on average), because a surface of more
+        cells than that renders slowly and its narrow features are lost in the drawing anyway.
+        """
+        present = self.reactions_present()
+        for rxn in present:
+            by_angle = np.sum(self.neutrons[rxn], 0)  # (angle, energy) [n/s]
+            density = by_angle / self.solid_angles_out[:, None] / self.energy_bin_width
+            filled = np.flatnonzero(np.sum(by_angle, 0))
+            lo, hi = filled[0], filled[-1] + 1
+            density = density[:, lo:hi]
+            energies = self.neutron_energy_mids[rxn][lo:hi]
+            group = int(np.ceil(density.shape[1] / SURFACE_MAX_CELLS))
+            if group > 1:
+                n = density.shape[1] // group * group
+                density = density[:, :n].reshape(len(density), -1, group).mean(axis=2)
+                energies = energies[:n].reshape(-1, group).mean(axis=1)
+            angle, energy = np.meshgrid(self.angle_mids_out, energies, indexing="ij")
+
+            fig = _pyplot().figure(figsize=(9, 7))
+            ax = fig.add_subplot(projection="3d")
+            ax.plot_surface(
+                angle,
+                energy,
+                density,
+                cmap="Spectral_r",
+                rcount=density.shape[0],
+                ccount=density.shape[1],
+                linewidth=0,
+                antialiased=False,
+            )
+            ax.set_xlim(0, 180)
+            ax.set_xticks(np.arange(0, 181, 30))
+            ax.set_xlabel("Emission angle [degrees]")
+            ax.set_ylim(energy[-1, -1], energy[0, 0])
+            ax.set_ylabel("Neutron energy [MeV]")
+            ax.set_zlabel(r"Neutrons [n/(MeV$\cdot$s$\cdot$sr)]", labelpad=12)
+            ax.set_zlim(0, None)
+            ax.view_init(elev=30, azim=-60)
+            label = _plot_label(self.reactions[rxn].label)
+            ax.set_title(f"{label} neutron energy against emission angle ({self.name})")
+            _save_figure(fig, os.path.join(directory, f"neutron_energy_angle_surface_{rxn}.png"))
