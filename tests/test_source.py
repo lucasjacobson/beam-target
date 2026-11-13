@@ -9,7 +9,7 @@ import pytest
 from conftest import SMALL_CASE, make_source
 
 from beamtarget.nuclear import REACTIONS
-from beamtarget.source import HDF5_FORMAT_VERSION, SDEF_RADIUS_DECIMALS
+from beamtarget.source import HDF5_FORMAT_VERSION, SDEF_RADIUS_DECIMALS, _plot_label
 
 # Highest beam energy for SMALL_CASE (D and T): where T(d,np)T opens [keV]
 MAX_ENERGY = REACTIONS["DT"].complete_up_to()[0] * 1000
@@ -763,3 +763,17 @@ def test_value_calculated_in_first_region(quantity):
 def test_only_one_value_calculated():
     with pytest.raises(ValueError, match="the length of region 1 .*the length of region 2"):
         make_source(**{**TWO_REGIONS, "length": [None, None]}, beam_energy_backstop=150.0)
+
+
+@pytest.mark.parametrize(
+    "label, expected",
+    [
+        ("9Be(p,xn)", "$^{9}$Be(p,xn)"),
+        ("D(d,n)3He", "D(d,n)$^{3}$He"),
+        ("7Li(p,n0)7Be", "$^{7}$Li(p,n0)$^{7}$Be"),  # The 0 of n0 is not a mass number
+        ("7Li(p,n1)7Be*", "$^{7}$Li(p,n1)$^{7}$Be*"),
+        ("238U(p,xn)", "$^{238}$U(p,xn)"),
+    ],
+)
+def test_plot_labels_superscript_mass_numbers(label, expected):
+    assert _plot_label(label) == expected

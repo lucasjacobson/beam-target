@@ -600,6 +600,12 @@ def _pyplot():
     return pyplot
 
 
+def _plot_label(text):
+    """Return a reaction label with its mass numbers as superscripts for matplotlib, such as
+    "9Be(p,xn)" as "$^{9}$Be(p,xn)": a number directly followed by an element symbol."""
+    return re.sub(r"(?<![\w^])(\d+)(?=[A-Z])", r"$^{\1}$", text)
+
+
 def _plot_style(method):
     """Decorator: draw the plot with PLOT_STYLE, without changing global matplotlib settings."""
 
@@ -2600,7 +2606,10 @@ class BeamTarget:
         scale, unit = self._position_units()
         x = self.x_grid_out * scale
         lines = [
-            (self.reactions[rxn].label, np.sum(self.neutrons[rxn], (1, 2)) / (self.dx_out * scale))
+            (
+                _plot_label(self.reactions[rxn].label),
+                np.sum(self.neutrons[rxn], (1, 2)) / (self.dx_out * scale),
+            )
             for rxn in self.reactions_present()
         ]
         if len(lines) > 1:
@@ -2628,7 +2637,10 @@ class BeamTarget:
         The y axis is not forced to start at zero, so that small anisotropies show.
         """
         lines = [
-            (self.reactions[rxn].label, np.sum(self.neutrons[rxn], (0, 2)) / self.solid_angles_out)
+            (
+                _plot_label(self.reactions[rxn].label),
+                np.sum(self.neutrons[rxn], (0, 2)) / self.solid_angles_out,
+            )
             for rxn in self.reactions_present()
         ]
         if len(lines) > 1:
@@ -2681,7 +2693,7 @@ class BeamTarget:
             ax.set_xticks(np.arange(0, 181, 30))
             ax.set_xlabel("Emission angle from the beam direction [degrees]")
             ax.set_ylabel("Neutron energy [MeV]")
-            label = self.reactions[rxn].label
+            label = _plot_label(self.reactions[rxn].label)
             ax.set_title(f"{label} neutron energy against emission angle ({self.name})")
             _save_figure(fig, os.path.join(directory, f"neutron_energy_angle_{rxn}.png"))
 
@@ -2689,7 +2701,7 @@ class BeamTarget:
         peak = 0.0
         fig, ax = _pyplot().subplots(figsize=(8, 6))
         spectra = {rxn: np.sum(on_common_grid[rxn], 0) / self.energy_bin_width for rxn in present}
-        lines = [(self.reactions[rxn].label, spectra[rxn], {}) for rxn in present]
+        lines = [(_plot_label(self.reactions[rxn].label), spectra[rxn], {}) for rxn in present]
         overlap = np.sum([spectrum > 0 for spectrum in spectra.values()], 0)
         if np.any(overlap > 1):
             # Wide and gray, underneath the reactions, so that they stay visible
