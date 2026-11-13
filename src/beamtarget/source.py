@@ -102,6 +102,8 @@ SRIM_ISOTOPE_TABLES = {(1, 2): "D", (1, 3): "T", (2, 3): "He3"}
 
 # Decimal places for the beam radii in the SDEF card [cm]
 SDEF_RADIUS_DECIMALS = 5
+# Longest line of summary.toml before a list of strings is written one item per line
+SUMMARY_LINE_LENGTH = 100
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
 HDF5_FORMAT_VERSION = 10
@@ -560,7 +562,8 @@ def _toml_wrapped(text, width=90, indent="    "):
     words = text.replace("\\", "\\\\").replace('"', '\\"').split(" ")
     lines, line = [], words[0]
     for word in words[1:]:
-        if len(line) + 1 + len(word) > width:
+        # Never break before a space (an empty word): TOML would drop it with the indentation
+        if word and len(line) + 1 + len(word) > width:
             lines.append(line + " \\")
             line = word
         else:
@@ -2511,6 +2514,19 @@ class BeamTarget:
                     s += "]\n"
                     continue
                 text = f"{name:<{key_width}} = {_toml_value(value)}"
+                if (
+                    len(text) > SUMMARY_LINE_LENGTH
+                    and isinstance(value, (list, tuple))
+                    and all(isinstance(v, str) for v in value)
+                ):  # A long list of strings (such as paths): one per line
+                    head = f"{name:<{key_width}} = ["
+                    s += f"{head:<{comment_column}} # {comment}\n" if comment else head + "\n"
+                    s += "".join(f"    {_toml_value(v)},\n" for v in value) + "]\n"
+                    continue
+                if len(text) > SUMMARY_LINE_LENGTH and isinstance(value, str):  # Wrapped
+                    text = f"{name:<{key_width}} = " + _toml_wrapped(
+                        value, SUMMARY_LINE_LENGTH - key_width - 8, " " * (key_width + 6)
+                    )
                 s += f"{text:<{comment_column}} # {comment}\n" if comment else text + "\n"
         for material in self.unique_materials():
             s += f"\n[materials.{_toml_key(material.name)}]\n"
@@ -2525,7 +2541,14 @@ class BeamTarget:
         for rxn in self.reactions_present():
             s += f"\n[reactions.{_toml_key(rxn)}]\n"
             s += f"{'reaction':<{key_width}} = {_toml_value(self.reactions[rxn].label)}\n"
-            s += f"{'data':<{key_width}} = {_toml_value(self.reaction_data[rxn])}\n"
+            text = f"{'data':<{key_width}} = {_toml_value(self.reaction_data[rxn])}"
+            if len(text) > SUMMARY_LINE_LENGTH:
+                text = f"{'data':<{key_width}} = " + _toml_wrapped(
+                    self.reaction_data[rxn],
+                    SUMMARY_LINE_LENGTH - key_width - 8,
+                    " " * (key_width + 6),
+                )
+            s += text + "\n"
         return s
 
     def write_text_files(self, directory, run_info=None):

@@ -9,7 +9,7 @@ import pytest
 from conftest import SMALL_CASE, channel_warnings, make_source
 
 from beamtarget.nuclear import REACTIONS
-from beamtarget.source import HDF5_FORMAT_VERSION, SDEF_RADIUS_DECIMALS, _plot_label
+from beamtarget.source import HDF5_FORMAT_VERSION, SDEF_RADIUS_DECIMALS, _plot_label, _toml_wrapped
 
 # Highest beam energy for SMALL_CASE (D and T): where T(d,np)T opens [keV]
 MAX_ENERGY = REACTIONS["DT"].complete_up_to()[0] * 1000
@@ -366,6 +366,33 @@ def test_fine_position_mesh_not_warned():
     """The example cases' meshes (10 steps per position bin) are fine enough."""
     s = make_source(position_bins=[50], position_substeps=[10])
     assert s.warnings == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ENDF/B-VIII.1 | 4-Be-  9 LANL       EVAL-NOV88 P.G.Young, E.D.Arthur (p-004_Be_009.endf)",
+        "a" + "  b" * 40,  # Runs of spaces at every possible break
+        'quotes " and backslashes C:\\Users\\x ' * 5,
+        "short",
+    ],
+)
+def test_wrapped_toml_strings_read_back_unchanged(text):
+    wrapped = _toml_wrapped(text, width=20, indent="    ")
+    assert tomllib.loads(f"x = {wrapped}\n")["x"] == text
+    assert all(len(line) <= 60 for line in wrapped.splitlines())
+
+
+def test_long_summary_lists_one_per_line():
+    """Long lists of strings (such as nuclear_data_dirs) are written one item per line, and
+    the summary and SDEF header stay within their line lengths."""
+    long_dir = "C:/" + "/".join(["a_long_directory_name"] * 3)
+    s = make_source()
+    s.nuclear_data = ["drosg", long_dir + "/1", long_dir + "/2"]
+    text = s.get_summary()
+    assert tomllib.loads(text)["inputs"]["nuclear_data_dirs"] == s.nuclear_data
+    assert f'    "{long_dir}/1",\n' in text
+    assert max(len(line) for line in s.get_mcnp_sdef().splitlines()) <= 128
 
 
 def test_warnings_in_hdf5(tmp_path):
