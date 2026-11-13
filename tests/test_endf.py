@@ -32,7 +32,7 @@ MCNP_PROTONS = {10: 3.3893e-03, 18: 1.2004e-02, 30: 2.9426e-02}
 MCNP_ALPHAS = {30: 3.1157e-03, 70: 1.4677e-02}
 
 
-def thick_be(beam, energy_MeV, nuclear_data, length=1.0, position_bins=600, **kw):
+def thick_be(beam, energy_MeV, nuclear_data, length=1.0, position_bins=60, **kw):
     """A Be block thick enough to stop the beam."""
     return BeamTarget(
         name=f"{beam}{energy_MeV}",
@@ -42,14 +42,12 @@ def thick_be(beam, energy_MeV, nuclear_data, length=1.0, position_bins=600, **kw
                 length=length,
                 wall_radius=10.0,
                 position_bins=position_bins,
-                position_bins_out=position_bins // 10,
             )
         ],  # fmt: skip
         beam_energy_entry=energy_MeV * 1000,
         beam_current=1.0,
         beam_radius_entry=0.1,
-        angle_bin_width=1.0,
-        angle_bin_width_out=10.0,
+        angle_bin_width=10.0,
         energy_bin_width=0.1,
         beam=beam,
         nuclear_data=None if nuclear_data is None else [str(d) for d in nuclear_data],
@@ -129,9 +127,7 @@ def test_two_body_channels_at_each_beam_energy():
     edges = np.arange(0, 12.05, 0.1)
     full, total = x.lab_spectrum(12.0, angles, edges, num_cm_angles=360)
     rest, total_rest = x.lab_spectrum(12.0, angles, edges, num_cm_angles=360, two_body=False)
-    two_body, sigma = x.two_body_spectrum(
-        [12.0, 12.0], [1.0, 0.0], [0, 1], 2, angles, edges, num_cm_angles=360
-    )
+    two_body, sigma = x.two_body_spectrum([12.0, 12.0], [1.0, 0.0], [0, 1], 2, angles, edges)
     assert np.allclose(two_body[0], full - rest, rtol=1e-12, atol=1e-15)
     assert not two_body[1].any()  # Its weight is zero
     assert sigma[0] == pytest.approx(total - total_rest, rel=1e-12)
@@ -253,7 +249,7 @@ def test_protons_on_thick_be_match_mcnp(energy):
 @pytest.mark.parametrize("energy", list(MCNP_ALPHAS))
 def test_alphas_fall_through_to_tendl_and_match_mcnp(energy):
     """ENDF/B-VIII.1's alpha + 9Be ends at 15 MeV, so the next library is used."""
-    s = thick_be("alpha", energy, ["drosg", ENDFB, TENDL21], length=0.25, position_bins=500)
+    s = thick_be("alpha", energy, ["drosg", ENDFB, TENDL21], length=0.25, position_bins=50)
     assert s.beam_energy_grid[-1] == 0
     assert s.reaction_data["a9Be_xn"].startswith("TENDL-2021")
     assert s.yield_total / s.particle_rate == pytest.approx(MCNP_ALPHAS[energy], rel=0.02)
@@ -282,9 +278,9 @@ def test_drosg_first_keeps_its_reactions():
     results do not change; a Be atom in the gas uses the library."""
     gas = Material("DT + Be", "gas", molecules={"D2": 0.5, "T2": 0.5})
     regions = [Region(gas, length=50.0, pressure=5.0, temperature=25.0, wall_radius=1.0,
-                      position_bins=40, position_bins_out=10, divergence=30.0)]  # fmt: skip
+                      position_bins=10, position_substeps=4, divergence=30.0)]  # fmt: skip
     kw = dict(name="t", regions=regions, beam_energy_entry=280.0, beam_current=10.0,
-              beam_radius_entry=0.2, angle_bin_width=1.0, angle_bin_width_out=10.0,
+              beam_radius_entry=0.2, angle_bin_width=10.0,
               energy_bin_width=0.01)  # fmt: skip
     plain = BeamTarget(**kw)
     with_library = BeamTarget(**kw, nuclear_data=["drosg", str(ENDFB)])
@@ -297,7 +293,7 @@ def test_drosg_first_keeps_its_reactions():
 
 
 def test_data_recorded_in_outputs(tmp_path):
-    s = thick_be("proton", 18, ["drosg", ENDFB], length=0.5, position_bins=200)
+    s = thick_be("proton", 18, ["drosg", ENDFB], length=0.5, position_bins=20)
     summary = tomllib.loads(s.get_summary())
     assert summary["inputs"]["nuclear_data"] == ["drosg", str(ENDFB)]
     assert summary["reactions"]["p9Be_xn"]["reaction"] == "9Be(p,xn)"
@@ -324,11 +320,10 @@ beam = "proton"
 beam_energy_entry = 18000.0
 beam_current = 1.0
 beam_radius_entry = 0.1
-angle_bin_width = 1.0
-angle_bin_width_out = 10.0
+angle_bin_width = 10.0
 energy_bin_width = 0.1
 nuclear_data = ["drosg", "LIBRARY"]
-regions = [{ material = "Be", length = 0.5, wall_radius = 10.0, position_bins = 100, position_bins_out = 10 }]
+regions = [{ material = "Be", length = 0.5, wall_radius = 10.0, position_bins = 10, position_substeps = 10 }]
 """
 
 
@@ -432,6 +427,25 @@ def test_invalid_configuration(tmp_path, monkeypatch, text, message):
 FENDL_D = Path(os.environ.get("BEAM_TARGET_FENDL_DIR", r"C:\Users\LJ0489\Software\ENDF\FENDL-3.2c"))
 
 
+@pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
+@pytest.mark.parametrize("angle_bin_width", [2.0, 3.0, 5.0])
+def test_lab_tables_bin_smoothly_at_any_angle_bin(angle_bin_width):
+    """FENDL-3.2c's p + 181Ta is given as lab-frame tables every 10 degrees. Cells that ignored
+    the output bin edges gave some bins one cell more than their neighbors: a regular stripe
+    of up to 25% with 3-degree bins. Each bin must now be within 3% of its neighbors' mean."""
+    ta = Material("Ta", "solid", atoms={"181Ta": 1}, density=16.654)
+    s = BeamTarget(
+        name="ta", regions=[Region(ta, wall_radius=10.0, position_bins=4, position_substeps=10)],
+        beam_energy_entry=30000.0, beam_current=1e-3, beam_energy_backstop=10.0,
+        beam_radius_entry=0.5, angle_bin_width=angle_bin_width,
+        energy_bin_width=0.5, beam="proton", nuclear_data=[str(FENDL_D)],
+    )  # fmt: skip
+    assert s.reactions["p181Ta_xn"].production.channels[0].law == 7
+    per_sr = np.sum(s.neutrons["p181Ta_xn"], axis=(0, 2)) / s.solid_angles_out
+    neighbors = (per_sr[:-2] + per_sr[2:]) / 2
+    assert np.all(np.abs(per_sr[1:-1] / neighbors - 1) < 0.03)
+
+
 @pytest.mark.skipif(not (FENDL_D / "deuteron").is_dir(), reason="no local FENDL-3.2c library")
 def test_deuterons_with_lab_tables_match_mcnp():
     """FENDL-3.2c's d + 9Be (JENDL/DEU-2020) is given as lab-frame tables (LAW=7)."""
@@ -445,9 +459,9 @@ def thin_li7(energy_MeV, nuclear_data):
     li = Material("7Li", "solid", atoms={"7Li": 1}, density=0.534)
     return BeamTarget(
         name=f"p{energy_MeV}",
-        regions=[Region(li, length=2e-4, wall_radius=1.0, position_bins=4, position_bins_out=1)],
+        regions=[Region(li, length=2e-4, wall_radius=1.0, position_bins=1, position_substeps=4)],
         beam_energy_entry=energy_MeV * 1000, beam_current=1e-3, beam_radius_entry=0.1,
-        angle_bin_width=1.0, angle_bin_width_out=10.0, energy_bin_width=0.05, beam="proton",
+        angle_bin_width=10.0, energy_bin_width=0.05, beam="proton",
         nuclear_data=[str(d) for d in nuclear_data],
     )  # fmt: skip
 
@@ -523,10 +537,10 @@ def uranium_source(beam, energy_MeV, atoms, nuclear_data, length=0.2):
     material = Material("U target", "solid", atoms=atoms, density=18.95)
     return BeamTarget(
         name=f"{beam}U",
-        regions=[Region(material, length=length, wall_radius=10.0, position_bins=100,
-                        position_bins_out=1)],
+        regions=[Region(material, length=length, wall_radius=10.0, position_bins=1,
+                        position_substeps=100)],
         beam_energy_entry=energy_MeV * 1000, beam_current=1.0, beam_radius_entry=0.1,
-        angle_bin_width=1.0, angle_bin_width_out=10.0, energy_bin_width=0.1, beam=beam,
+        angle_bin_width=10.0, energy_bin_width=0.1, beam=beam,
         nuclear_data=[str(d) for d in nuclear_data],
     )  # fmt: skip
 

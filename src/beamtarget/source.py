@@ -29,7 +29,7 @@ Naming conventions used throughout:
 - An ``_out`` suffix marks the coarser output mesh; no suffix is the fine internal mesh the
   calculation runs on. Each output bin is a whole number of internal bins (a "ratio").
 - ``*_per_region`` arrays have one entry per gas region. The region inputs (pressure,
-  temperature, length, divergence, position_bins, position_bins_out) are also per region.
+  temperature, length, divergence, position_bins, position_substeps) are also per region.
 - Beam energies are in keV; neutron energies are in MeV.
 - ``rxn`` is a reaction key (see nuclear.REACTIONS), such as "DD" for D(d,n)3He.
 """
@@ -46,7 +46,6 @@ import time
 
 import h5py
 import numpy as np
-from numpy.polynomial.legendre import legval
 
 from .config import DROSG, ConfigError, load_config, resolve_nuclear_data
 from .endf import EndfReaction, find_evaluation, load_evaluation
@@ -55,14 +54,16 @@ from .nuclear import (
     REACTIONS,
     atom_name,
     beam_key,
+    bin_two_body,
     cm_energy,
-    cm_to_lab,
     coulomb_barrier,
     isotope_fractions,
+    legendre_cumulative,
     mean_atomic_mass,
     neutron_channels,
     nuclear_mass,
     parse_atom,
+    two_body_energy_range,
 )
 
 PACKAGE_NAME = "beam-target"
@@ -71,15 +72,13 @@ logger = logging.getLogger(__name__)
 # Beam-energy step [relative, and at least the absolute value in MeV] of the grid on which
 # the spectra of evaluated (ENDF) reactions are calculated and then interpolated
 ENDF_ENERGY_STEP = (0.02, 0.005)
-# Angle cells over which evaluated distributions are integrated before conversion to the lab:
-# this many per output angle bin, and at least ENDF_MIN_ANGLE_CELLS
+# Angle cells over which evaluated continuum distributions are integrated before conversion to
+# the lab: this many per output angle bin, and at least ENDF_MIN_ANGLE_CELLS (two-body lines
+# are binned exactly, see nuclear.bin_two_body)
 ENDF_ANGLE_CELLS_PER_BIN = 8
 ENDF_MIN_ANGLE_CELLS = 180
 # Warn if the explicit channels of an evaluation cover less than this fraction of its
 # non-elastic cross section at the beam energy (the neutrons of the rest are missing)
-# Cells (position x CM angle) handled at a time when binning the built-in reactions: a block that
-# fits in the CPU cache, which is much faster than whole-array operations on large meshes
-CHUNK_CELLS = 65_536
 ENDF_MISSING_WARNING = 0.01
 # Targets from thorium (Z = 90) up can fission: warn unless their evaluation gives fission
 # (MT=18) neutrons explicitly
@@ -105,7 +104,9 @@ SRIM_ISOTOPE_TABLES = {(1, 2): "D", (1, 3): "T", (2, 3): "He3"}
 SDEF_RADIUS_DECIMALS = 5
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
-HDF5_FORMAT_VERSION = 9
+HDF5_FORMAT_VERSION = 10
+# Internal position steps per output position bin, unless a region gives its own
+POSITION_SUBSTEPS = 10
 
 # Error message when a case produces no neutrons
 NO_NEUTRONS = (
@@ -327,8 +328,9 @@ class Region:
         wall_radius: Radius of the wall around the region [cm]; the part of the beam outside
             it is scraped off.
         divergence: Beam divergence in the region (growth in radius per unit length) [mrad].
-        position_bins: Number of position bins, internal mesh.
-        position_bins_out: Number of position bins, output mesh. Must divide position_bins.
+        position_bins: Number of position bins of the output mesh.
+        position_substeps: Number of steps the beam is followed in across each output
+            position bin (the internal mesh); default POSITION_SUBSTEPS.
         name: Optional name, used in messages and outputs.
     """
 
@@ -343,7 +345,7 @@ class Region:
         wall_radius,
         divergence=0.0,
         position_bins,
-        position_bins_out,
+        position_substeps=None,
         name="",
     ):
         self.material = material
@@ -354,7 +356,9 @@ class Region:
         self.wall_radius = wall_radius
         self.divergence = divergence
         self.position_bins = position_bins
-        self.position_bins_out = position_bins_out
+        self.position_substeps = (
+            POSITION_SUBSTEPS if position_substeps is None else position_substeps
+        )
         self.name = str(name)
 
     def __repr__(self):
@@ -368,7 +372,7 @@ class Region:
                 "wall_radius",
                 "divergence",
                 "position_bins",
-                "position_bins_out",
+                "position_substeps",
                 "name",
             )
             if getattr(self, key) is not None and getattr(self, key) != ""
@@ -659,9 +663,9 @@ class BeamTarget:
             each reaction used (DROSG Legendre tables, or the top energy of an evaluation).
         beam_current: Beam current [mA]; None to calculate it from yield_total.
         beam_radius_entry: Beam radius where it enters the first region [cm].
-        angle_bin_width: Width of the emission-angle bins of the internal mesh [deg].
-        angle_bin_width_out: Width of the emission-angle bins of the output mesh [deg]. Must
-            divide 180 and be a multiple of angle_bin_width. 180 gives an isotropic source.
+        angle_bin_width: Width of the emission-angle bins of the output mesh [deg]. Must
+            divide 180; 180 gives an isotropic source. (There is no internal angle mesh: each
+            reaction is binned straight onto the output mesh.)
         energy_bin_width: Width of the neutron energy bins of the output mesh [MeV].
         data_dir: Directory holding the data files (see data/README.md). Defaults to the
             data directory next to this file.
@@ -688,7 +692,6 @@ class BeamTarget:
         beam_current,
         beam_radius_entry,
         angle_bin_width,
-        angle_bin_width_out,
         energy_bin_width,
         data_dir=None,
         stopping_power="srim",
@@ -707,7 +710,6 @@ class BeamTarget:
         self.beam_current_calculated = self.beam_current is None
         self.beam_radius_entry = float(beam_radius_entry)
         self.angle_bin_width = float(angle_bin_width)
-        self.angle_bin_width_out = float(angle_bin_width_out)
         self.energy_bin_width = float(energy_bin_width)
         self.data_dir = DEFAULT_DATA_DIR if data_dir is None else str(data_dir)
         self.stopping_power = str(stopping_power)
@@ -746,7 +748,7 @@ class BeamTarget:
         self.divergence = column("divergence")
         # Bin counts are converted to int after check_input confirms they are whole numbers
         self.position_bins = column("position_bins")
-        self.position_bins_out = column("position_bins_out")
+        self.position_substeps = column("position_substeps")
         self.solid = np.array([getattr(m, "phase", None) == "solid" for m in self.materials])
         # A gas region with a temperature is given by pressure; without one, by density
         self.by_pressure = ~self.solid & ~np.isnan(self.temperature)
@@ -769,7 +771,8 @@ class BeamTarget:
 
         self.check_input()
         self.position_bins = self.position_bins.astype(int)
-        self.position_bins_out = self.position_bins_out.astype(int)
+        self.position_substeps = self.position_substeps.astype(int)
+        self.position_bins_internal = self.position_bins * self.position_substeps
         self.select_reactions()
 
         self.read_stopping_power()
@@ -876,27 +879,18 @@ class BeamTarget:
             "radius at entry)",
         )
         require(np.all(self.divergence >= 0), "divergences must not be negative")
-        for attr in ["position_bins", "position_bins_out"]:
+        for attr in ["position_bins", "position_substeps"]:
             counts = getattr(self, attr)
             require(np.all(counts == np.round(counts)), f"{attr} must be whole numbers")
             require(np.all(counts > 0), f"{attr} must be positive")
         require(self.angle_bin_width > 0, "angle_bin_width must be positive")
-        require(self.angle_bin_width_out > 0, "angle_bin_width_out must be positive")
         require(self.energy_bin_width > 0, "energy_bin_width must be positive")
         require(
             self.stopping_power in STOPPING_POWERS,
             f"stopping_power must be one of {', '.join(STOPPING_POWERS)}, "
             f"got {self.stopping_power!r}",
         )
-        require(_is_multiple(180, self.angle_bin_width_out), "angle_bin_width_out must divide 180")
-        require(
-            _is_multiple(self.angle_bin_width_out, self.angle_bin_width),
-            "angle_bin_width_out must be a multiple of angle_bin_width",
-        )
-        require(
-            np.all(self.position_bins % self.position_bins_out == 0),
-            "position_bins_out must divide position_bins in every region",
-        )
+        require(_is_multiple(180, self.angle_bin_width), "angle_bin_width must divide 180")
 
     @property
     def beam_power_entry(self):
@@ -992,10 +986,10 @@ class BeamTarget:
             for rxn, reaction in self.reactions.items()
         }
         self.target_density_mids = {
-            rxn: np.repeat(density, self.position_bins)
+            rxn: np.repeat(density, self.position_bins_internal)
             for rxn, density in self.target_density_per_region.items()
         }
-        self.divergence_mids = np.repeat(self.divergence, self.position_bins)
+        self.divergence_mids = np.repeat(self.divergence, self.position_bins_internal)
 
     def _target_fractions(self, reaction):
         """Return the fraction of each region's atoms that are the reaction's target isotope."""
@@ -1021,7 +1015,7 @@ class BeamTarget:
         [1/cm^3] and length [cm] of each of them. See slow_down."""
         grid = [np.array([E0])]
         for r in regions:
-            n = self.position_bins[r]
+            n = self.position_bins_internal[r]
             E_table, eps_table = self.stopping_per_region[r]
             region_grid = slow_down(
                 grid[-1][-1],
@@ -1034,41 +1028,34 @@ class BeamTarget:
         return np.concatenate(grid)
 
     def setup_meshes(self):
-        """Build the internal and output meshes in position and emission angle."""
+        """Build the internal and output position meshes and the output angle mesh."""
 
         # Angle mesh [deg], cosines, and the solid angle of each bin [sr]
-        self.num_angle_bins = int(round(180 / self.angle_bin_width))
-        self.num_angle_bins_out = int(round(180 / self.angle_bin_width_out))
-        self.angle_ratio = int(round(self.num_angle_bins / self.num_angle_bins_out))
-        self.angle_grid = np.linspace(0, 180, self.num_angle_bins + 1)
+        self.num_angle_bins_out = int(round(180 / self.angle_bin_width))
         self.angle_grid_out = np.linspace(0, 180, self.num_angle_bins_out + 1)
-        self.angle_mids = (self.angle_grid[:-1] + self.angle_grid[1:]) / 2
         self.angle_mids_out = (self.angle_grid_out[:-1] + self.angle_grid_out[1:]) / 2
-        self.cosine_grid = np.cos(self.angle_grid * np.pi / 180)
         self.cosine_grid_out = np.cos(self.angle_grid_out * np.pi / 180)
-        self.cosine_mids = np.cos(self.angle_mids * np.pi / 180)
         self.cosine_mids_out = np.cos(self.angle_mids_out * np.pi / 180)
-        self.solid_angles = (self.cosine_grid[:-1] - self.cosine_grid[1:]) * 2 * np.pi
         self.solid_angles_out = (self.cosine_grid_out[:-1] - self.cosine_grid_out[1:]) * 2 * np.pi
 
         # Position mesh [cm]. Each region is divided into equal bins.
+        self.position_bins_internal_total = np.sum(self.position_bins_internal)
         self.position_bins_total = np.sum(self.position_bins)
-        self.position_bins_total_out = np.sum(self.position_bins_out)
         self.x_ratio_per_region = np.array(
-            np.round(self.position_bins / self.position_bins_out), dtype=int
+            np.round(self.position_bins_internal / self.position_bins), dtype=int
         )
-        self.dx_per_region = self.length / self.position_bins
-        self.dx_per_region_out = self.length / self.position_bins_out
-        self.dx = np.repeat(self.dx_per_region, self.position_bins)
-        self.dx_out = np.repeat(self.dx_per_region_out, self.position_bins_out)
+        self.dx_per_region = self.length / self.position_bins_internal
+        self.dx_per_region_out = self.length / self.position_bins
+        self.dx = np.repeat(self.dx_per_region, self.position_bins_internal)
+        self.dx_out = np.repeat(self.dx_per_region_out, self.position_bins)
         self.x_grid = np.append(0, np.cumsum(self.dx))
         self.x_grid_out = np.append(0, np.cumsum(self.dx_out))
         self.x_mids = (self.x_grid[:-1] + self.x_grid[1:]) / 2
         self.x_mids_out = (self.x_grid_out[:-1] + self.x_grid_out[1:]) / 2
 
-        # Number of internal bins in each output bin (angle_ratio for angle), and the
-        # internal grid index of each output grid point
-        self.x_ratio_out = np.repeat(self.x_ratio_per_region, self.position_bins_out)
+        # Number of internal bins in each output bin, and the internal grid index of each
+        # output grid point
+        self.x_ratio_out = np.repeat(self.x_ratio_per_region, self.position_bins)
         self.out_grid_inds = np.append(0, np.cumsum(self.x_ratio_out))
 
     def read_stopping_power(self):
@@ -1443,7 +1430,7 @@ class BeamTarget:
         # Wall radius at each grid point: that of the bin ending there, so that the beam
         # scraped off by a narrower wall is scraped (and its power deposited) inside the
         # region with that wall, starting one bin in
-        wall_mids = np.repeat(self.wall_radius, self.position_bins)
+        wall_mids = np.repeat(self.wall_radius, self.position_bins_internal)
         self.wall_grid = np.append(wall_mids[0], wall_mids)
         kept = np.minimum.accumulate(np.minimum(1.0, self.wall_grid / free_radius))
         self.scrape_grid = 1 - kept**2
@@ -1474,7 +1461,7 @@ class BeamTarget:
         versions, and self.beam_fraction_mids: the fraction of the beam still present
         (neither scraped nor removed), averaged over each internal bin.
         """
-        removal = np.zeros(self.position_bins_total)  # [1/cm]
+        removal = np.zeros(self.position_bins_internal_total)  # [1/cm]
         E = self.beam_energy_mids / 1000
         for rxn, reaction in self.reactions.items():
             if self._is_endf(rxn):
@@ -1497,12 +1484,8 @@ class BeamTarget:
         particles_per_mA = 1e-3 / (ee * BEAMS[self.beam].charge)  # [1/s]
         yield_per_mA = 0.0
         for rxn in self.reactions:
-            if self._is_endf(rxn):
-                per_bin = self.endf_spectra[rxn]["sigma_mids"]
-            else:
-                per_bin = np.sum(self.cm_xs[rxn] * self.solid_angles[None, :], axis=1)
             yield_per_mA += np.sum(
-                per_bin
+                self.spectra[rxn]["sigma_mids"]
                 * self.target_density_mids[rxn]
                 * 1e-24
                 * self.dx
@@ -1574,71 +1557,104 @@ class BeamTarget:
         )
 
     def calculate_reactions(self):
-        """Calculate the cross sections and neutron energies and directions.
+        """Calculate each reaction's neutrons on the output mesh, per beam particle.
 
-        The internal angle mesh is in the center-of-mass (CM) frame: for each reaction and
-        each (position, CM angle) cell this sets self.cm_xs[rxn], the CM differential cross
-        section [b/sr] at the beam energy at the bin midpoint, and, from relativistic
-        two-body kinematics (see nuclear.cm_to_lab), self.neutron_energy[rxn], the neutron's
-        lab energy [MeV], and self.lab_cosine[rxn], the cosine of its lab angle. Every CM
-        angle has one lab angle and energy, so this also holds for endothermic reactions near
-        threshold, where neutrons at one lab angle have two energies. Cells below a
-        reaction's threshold have no neutrons (NaN energy and angle, zero cross section).
-
-        For an inverse reaction (data for the target as the beam), the data are evaluated at
-        the same CM energy and with the CM angle measured from the other particle, so the CM
-        cosine changes sign.
+        Sets self.spectra[rxn] (see _two_body_spectrum for the DROSG reactions and
+        _endf_spectrum for evaluated data).
         """
-        self.cm_xs = {}
-        self.neutron_energy = {}
-        self.lab_cosine = {}
-        self.endf_spectra = {}
-
-        for rxn, reaction in self.reactions.items():
+        self.spectra = {}
+        for rxn in self.reactions:
             if self._is_endf(rxn):
-                self.endf_spectra[rxn] = self._endf_spectrum(rxn)
-                continue
-            masses = reaction.masses()
-            E_table = self.xs_data[rxn]["E"]
-            coeff_table = self.xs_data[rxn]["coeffs"]
-            mu = -self.cosine_mids if reaction.inverse else self.cosine_mids
-            present = np.any(self._target_fractions(reaction) > 0)
-
-            shape = (self.position_bins_total, self.num_angle_bins)
-            self.cm_xs[rxn] = np.zeros(shape)
-            self.neutron_energy[rxn] = np.zeros(shape)
-            self.lab_cosine[rxn] = np.zeros(shape)
-            # One position bin at a time: a row of CM angles fits in the CPU cache, which makes
-            # this faster than whole-array operations on many rows (measured)
-            for i, E in enumerate(self.beam_energy_mids):
-                T3, cos_lab = cm_to_lab(E / 1000, self.cosine_mids, *masses)
-                self.neutron_energy[rxn][i, :] = T3
-                self.lab_cosine[rxn][i, :] = cos_lab
-                if not present or np.isnan(T3[0]):
-                    continue  # No target atoms, or below the threshold
-                E_data = reaction.data_energy(E)
-                total = np.interp(E_data, E_table, self.xs_data[rxn]["total"], left=0, right=np.nan)
-                coeffs = np.array(
-                    [
-                        np.interp(E_data, E_table, coeff_table[:, j], left=0, right=np.nan)
-                        for j in range(coeff_table.shape[1])
-                    ]
-                )
-                # Evaluate the Legendre series only up to its last non-zero coefficient: the
-                # higher coefficients are zero at low beam energies
-                nonzero = np.flatnonzero(coeffs)
-                coeffs = coeffs[: nonzero[-1] + 1] if len(nonzero) else coeffs[:1]
-                self.cm_xs[rxn][i, :] = total * legval(mu, coeffs)
+                self.spectra[rxn] = self._endf_spectrum(rxn)
+            else:
+                self.spectra[rxn] = self._two_body_spectrum(rxn)
 
     def _output_position_index(self):
         """Return the output position bin of each internal position bin."""
-        offsets = np.cumsum(np.concatenate(([0], self.position_bins_out[:-1])))
+        offsets = np.cumsum(np.concatenate(([0], self.position_bins[:-1])))
         return np.concatenate(
             [
                 np.floor_divide(np.arange(n), ratio) + offset
-                for n, ratio, offset in zip(self.position_bins, self.x_ratio_per_region, offsets)
+                for n, ratio, offset in zip(
+                    self.position_bins_internal, self.x_ratio_per_region, offsets
+                )
             ]
         ).astype(int)
+
+    def _two_body_spectrum(self, rxn):
+        """Calculate the neutrons of a DROSG two-body reaction on the output mesh, per beam
+        particle.
+
+        The center-of-mass (CM) differential cross section at the beam energy E in each
+        internal bin is
+
+            dsigma/dOmega_cm(E, mu) = total(E) * sum_l coeffs[l](E) * P_l(mu)
+
+        with the DROSG data (see read_cross_sections) interpolated linearly to the energy the
+        data are tabulated at (see nuclear.Reaction.data_energy); zero below the data. Each
+        internal bin adds n_target dx times the fraction of the beam still present (see
+        calculate_attenuation). The line the neutrons make at each beam energy is split where
+        it crosses the output bin edges and binned exactly, with relativistic two-body
+        kinematics (see nuclear.bin_two_body). For an inverse reaction (data for the target as
+        the beam), the CM angle in the data is measured from the other particle, so the odd
+        Legendre terms change sign.
+
+        The neutron energy mesh spans the reaction's energies over the beam energies in the
+        case, aligned to energy_bin_width (one bin from 0 if the reaction is below its
+        threshold everywhere).
+
+        Returns a dict like _endf_spectrum's.
+        """
+        reaction = self.reactions[rxn]
+        masses = reaction.masses()
+        E = self.beam_energy_mids / 1000  # MeV
+        width = self.energy_bin_width
+        low, high = two_body_energy_range(E, *masses)
+        if np.all(np.isnan(low)):
+            lowest = highest = 0.0
+        else:
+            lowest, highest = np.nanmin(low), np.nanmax(high)
+        energy_min = np.floor(lowest / width) * width
+        num = max(1, int(round((np.ceil(highest / width) * width - energy_min) / width)))
+        grid = np.linspace(energy_min, energy_min + num * width, num + 1)
+
+        density = self.target_density_mids[rxn]
+        idx = np.flatnonzero((density > 0) & (E > 0))
+        # dsigma/dmu = 2 pi total sum_l coeffs[l] P_l(mu) [b], at each active bin
+        data = self.xs_data[rxn]
+        E_data = reaction.data_energy(self.beam_energy_mids[idx])
+        total = np.interp(E_data, data["E"], data["total"], left=0, right=np.nan)
+        coeffs = np.column_stack(
+            [
+                np.interp(E_data, data["E"], column, left=0, right=np.nan)
+                for column in data["coeffs"].T
+            ]
+        ).reshape(len(idx), -1)
+        # Only up to the last coefficient that is not zero anywhere (the higher ones are zero
+        # at low beam energies)
+        used = np.flatnonzero(np.any(coeffs != 0, axis=0))
+        coeffs = coeffs[:, : used[-1] + 1] if len(used) else coeffs[:, :1]
+        b = 2 * np.pi * total[:, None] * coeffs
+        if reaction.inverse:
+            b[:, 1::2] *= -1
+
+        def cumulative(index, x):
+            return legendre_cumulative(b[index], x)
+
+        coef = density[idx] * 1e-24 * self.dx[idx] * self.beam_fraction_mids[idx]
+        per_particle, sigma = bin_two_body(
+            E[idx],
+            coef,
+            self._output_position_index()[idx],
+            self.position_bins_total,
+            self.angle_grid_out,
+            grid,
+            masses,
+            cumulative,
+        )
+        sigma_mids = np.zeros(len(E))
+        sigma_mids[idx] = sigma
+        return {"energy_grid": grid, "per_particle": per_particle, "sigma_mids": sigma_mids}
 
     def _endf_spectrum(self, rxn):
         """Calculate the neutrons of an evaluated reaction on the output mesh, per beam
@@ -1667,7 +1683,7 @@ class BeamTarget:
         sigma_mids = np.zeros(len(E))
         if not np.any(active):
             grid = np.array([0.0, width])
-            per_particle = np.zeros((self.position_bins_total_out, self.num_angle_bins_out, 1))
+            per_particle = np.zeros((self.position_bins_total, self.num_angle_bins_out, 1))
             return {"energy_grid": grid, "per_particle": per_particle, "sigma_mids": sigma_mids}
 
         # Beam energies to calculate at, from the top down
@@ -1680,7 +1696,7 @@ class BeamTarget:
 
         num = max(1, int(np.ceil(production.max_lab_energy(top) / width)))
         grid = np.arange(num + 1) * width
-        per_particle = np.zeros((self.position_bins_total_out, self.num_angle_bins_out, num))
+        per_particle = np.zeros((self.position_bins_total, self.num_angle_bins_out, num))
 
         # Interpolation: each active bin between energies[k] (above) and energies[k + 1]
         idx = np.flatnonzero(active)
@@ -1715,7 +1731,7 @@ class BeamTarget:
                     two_body=False,
                 )
                 by_row = np.bincount(
-                    rows[use], coef[use] * weight[use], minlength=self.position_bins_total_out
+                    rows[use], coef[use] * weight[use], minlength=self.position_bins_total
                 )
                 touched = np.flatnonzero(by_row)
                 per_particle[touched] += by_row[touched, None, None] * spectrum[None]
@@ -1725,25 +1741,20 @@ class BeamTarget:
                 E[idx],
                 coef,
                 rows,
-                self.position_bins_total_out,
+                self.position_bins_total,
                 self.angle_grid_out,
                 grid,
-                num_cm_angles=num_cm_angles,
             )
             per_particle += two_body
             sigma_mids[idx] += sigma_two_body
         return {"energy_grid": grid, "per_particle": per_particle, "sigma_mids": sigma_mids}
 
     def bin_neutrons(self):
-        """Tally neutrons onto the output (position, angle, energy) mesh.
-
-        The neutron rate from each internal (position, CM angle) cell is
-        sigma_cm [b/sr] * 1e-24 [cm^2/b] * n_target [1/cm^3] * dx [cm] * dOmega_cm [sr]
-        * beam particle rate [1/s], reduced by the scrape fraction. It is added to the output
-        cell containing that position, the neutron's lab angle, and its energy.
+        """Scale each reaction's neutrons per beam particle (see calculate_reactions) by the
+        beam particle rate.
 
         Sets, for each reaction, self.neutrons[rxn] [n/s] with shape
-        (position_bins_total_out, num_angle_bins_out, num_energy_bins[rxn]), its energy mesh
+        (position_bins_total, num_angle_bins_out, num_energy_bins[rxn]), its energy mesh
         self.neutron_energy_grid[rxn] [MeV], the yield self.yields[rxn] [n/s] and the fraction
         of neutrons lost to scraping self.neutron_scrape_fractions[rxn]. The totals over the
         reactions are self.yield_total and self.neutron_scrape_fraction.
@@ -1756,89 +1767,22 @@ class BeamTarget:
         self.neutron_scrape_fractions = {}
 
         for rxn in self.reactions:
-            if self._is_endf(rxn):  # Evaluated data: already on the output mesh
-                spectra = self.endf_spectra[rxn]
-                grid = spectra["energy_grid"]
-                self.neutron_energy_grid[rxn] = grid
-                self.neutron_energy_mids[rxn] = (grid[:-1] + grid[1:]) / 2
-                self.num_energy_bins[rxn] = len(grid) - 1
-                self.neutrons[rxn] = spectra["per_particle"] * self.particle_rate
-                self.yields[rxn] = np.sum(self.neutrons[rxn])
-                unscraped = np.sum(
-                    spectra["sigma_mids"] * self.target_density_mids[rxn] * 1e-24 * self.dx
-                    * self.survival_mids
-                ) * self.particle_rate  # fmt: skip
-                self.neutron_scrape_fractions[rxn] = (
-                    1 - self.yields[rxn] / unscraped if unscraped > 0 else 0.0
-                )
-                logger.debug(f"{self.name}: {rxn} neutron yield = {self.yields[rxn]:.4e} n/s")
-                continue
-
-            # Neutron energy mesh: spans this reaction's energies, aligned to energy_bin_width
-            # (one bin from 0 if the reaction is below its threshold everywhere)
-            energies = self.neutron_energy[rxn]
-            if np.all(np.isnan(energies)):
-                lowest = highest = 0.0
-            else:
-                lowest, highest = np.nanmin(energies), np.nanmax(energies)
-            energy_min = np.floor(lowest / self.energy_bin_width) * self.energy_bin_width
-            energy_max = np.ceil(highest / self.energy_bin_width) * self.energy_bin_width
-            self.num_energy_bins[rxn] = max(
-                1, int(round((energy_max - energy_min) / self.energy_bin_width))
-            )
-            energy_max = energy_min + self.num_energy_bins[rxn] * self.energy_bin_width
-            self.neutron_energy_grid[rxn] = np.linspace(
-                energy_min, energy_max, self.num_energy_bins[rxn] + 1
-            )
-            self.neutron_energy_mids[rxn] = (
-                self.neutron_energy_grid[rxn][:-1] + self.neutron_energy_grid[rxn][1:]
-            ) / 2
-
-            # Each internal (position, CM angle) cell adds its neutron rate [n/s], reduced by
-            # scraping (beam_fraction_mids also holds the nuclear losses), to the output cell
-            # of its position, lab angle, and energy. The flat output index and the rate of
-            # every cell are built a few rows at a time (CHUNK_CELLS: a cache-sized block, much
-            # faster than whole-array operations), then tallied with one bincount (much faster
-            # than np.add.at). Cells with no neutrons (below threshold) get zero weight.
-            factor = self.target_density_mids[rxn] * 1e-24 * self.dx * self.particle_rate
-            rate_per_row = factor * self.beam_fraction_mids
-            shape = (
-                self.position_bins_total_out,
-                self.num_angle_bins_out,
-                self.num_energy_bins[rxn],
-            )
-            grid = self.neutron_energy_grid[rxn]
-            i_out = self._output_position_index()
-            n_angles = self.num_angle_bins
-            flat = np.empty(self.position_bins_total * n_angles, dtype=np.int64)
-            weights = np.empty(self.position_bins_total * n_angles)
-            rows_per_chunk = max(1, CHUNK_CELLS // n_angles)
-            for start in range(0, self.position_bins_total, rows_per_chunk):
-                rows = slice(start, min(start + rows_per_chunk, self.position_bins_total))
-                cells = slice(rows.start * n_angles, rows.stop * n_angles)
-                lab_angle = np.degrees(np.arccos(np.clip(self.lab_cosine[rxn][rows], -1, 1)))
-                valid = np.isfinite(lab_angle)
-                j_out = np.minimum(
-                    (np.where(valid, lab_angle, 0.0) / self.angle_bin_width_out).astype(int),
-                    shape[1] - 1,
-                )
-                energy = np.where(valid, self.neutron_energy[rxn][rows], grid[0])
-                k_out = np.clip(np.searchsorted(grid, energy) - 1, 0, shape[2] - 1)
-                flat[cells] = ((i_out[rows, None] * shape[1] + j_out) * shape[2] + k_out).ravel()
-                rate = self.cm_xs[rxn][rows] * rate_per_row[rows, None] * self.solid_angles
-                weights[cells] = np.where(valid, rate, 0.0).ravel()
-            self.neutrons[rxn] = np.bincount(
-                flat, weights=weights, minlength=shape[0] * shape[1] * shape[2]
-            ).reshape(shape)
-
+            spectra = self.spectra[rxn]
+            grid = spectra["energy_grid"]
+            self.neutron_energy_grid[rxn] = grid
+            self.neutron_energy_mids[rxn] = (grid[:-1] + grid[1:]) / 2
+            self.num_energy_bins[rxn] = len(grid) - 1
+            self.neutrons[rxn] = spectra["per_particle"] * self.particle_rate
             self.yields[rxn] = np.sum(self.neutrons[rxn])
+            # Fraction lost to scraping: the yields with and without it
+            unscraped = np.sum(
+                spectra["sigma_mids"] * self.target_density_mids[rxn] * 1e-24 * self.dx
+                * self.survival_mids
+            ) * self.particle_rate  # fmt: skip
+            self.neutron_scrape_fractions[rxn] = (
+                1 - self.yields[rxn] / unscraped if unscraped > 0 else 0.0
+            )
             logger.debug(f"{self.name}: {rxn} neutron yield = {self.yields[rxn]:.4e} n/s")
-
-            # Fraction lost to scraping: the totals with and without it, summed over angle first
-            per_position = self.cm_xs[rxn] @ self.solid_angles * factor
-            total_scr = np.sum(per_position * self.beam_fraction_mids)
-            total_all = np.sum(per_position * self.survival_mids)
-            self.neutron_scrape_fractions[rxn] = 1 - total_scr / total_all if total_all else 0.0
 
         self.yield_total = sum(self.yields.values())
         if self.yield_total == 0:
@@ -1915,9 +1859,8 @@ class BeamTarget:
                 ("wall_radius", self.wall_radius, "cm"),
                 ("divergence", self.divergence, "mrad"),
                 ("position_bins", self.position_bins, ""),
-                ("position_bins_out", self.position_bins_out, ""),
+                ("position_substeps", self.position_substeps, "per position bin"),
                 ("angle_bin_width", self.angle_bin_width, "deg"),
-                ("angle_bin_width_out", self.angle_bin_width_out, "deg"),
                 ("energy_bin_width", self.energy_bin_width, "MeV"),
                 ("stopping_power", self.stopping_power, ""),
                 ("nuclear_data", self.nuclear_data_given, "libraries, searched in order"),
@@ -2060,7 +2003,7 @@ class BeamTarget:
 
         # The radius varies along the beam if it diverges or a narrower wall scrapes it
         divergent = np.ptp(self.radius_mids_out) > 0
-        isotropic = self.angle_bin_width_out == 180
+        isotropic = self.angle_bin_width == 180
         dashed_line = "c " + "-" * 78 + "\n"
 
         run = {
@@ -2112,7 +2055,7 @@ class BeamTarget:
 
         # Extent distribution: region boundaries, with interpolated points inside each region
         ext = sum(np.sum(self.neutrons[rxn], (1, 2)) for rxn in self.reactions)
-        nvals = self.position_bins_out
+        nvals = self.position_bins
         Lvals = self.length
         if reverse_x:
             ext = ext[::-1]
@@ -2332,7 +2275,7 @@ class BeamTarget:
                     "MeV, over all angles",
                 )
             )
-        region_ends = np.cumsum(self.position_bins)
+        region_ends = np.cumsum(self.position_bins_internal)
         results += [
             ("atom_density", self.atom_density_per_region, "atoms/cm3, in each region"),
             (
@@ -2685,7 +2628,7 @@ class BeamTarget:
                 self.angle_grid_out,
                 self.neutron_energy_grid[rxn][lo : hi + 1],
                 np.ma.masked_less_equal(density[:, lo:hi].T, 0),
-                cmap="viridis",
+                cmap="plasma",
                 norm=LogNorm(vmin=np.max(density) * 1e-4, vmax=np.max(density)),
             )
             fig.colorbar(mesh, ax=ax, label=r"Neutrons [n/(MeV$\cdot$s$\cdot$sr)]")
@@ -2693,6 +2636,7 @@ class BeamTarget:
             ax.set_xticks(np.arange(0, 181, 30))
             ax.set_xlabel("Emission angle from the beam direction [degrees]")
             ax.set_ylabel("Neutron energy [MeV]")
+            ax.grid()
             label = _plot_label(self.reactions[rxn].label)
             ax.set_title(f"{label} neutron energy against emission angle ({self.name})")
             _save_figure(fig, os.path.join(directory, f"neutron_energy_angle_{rxn}.png"))

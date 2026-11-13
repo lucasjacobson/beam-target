@@ -33,8 +33,8 @@ pressure = 5.0
 temperature = 25.0
 wall_radius = 1.0
 divergence = 30.0
-position_bins = 20
-position_bins_out = 10
+position_bins = 10
+position_substeps = 2
 
 [regions.stage]
 material = "DT50"
@@ -42,13 +42,12 @@ length = 10.0
 pressure = 1e-3
 temperature = 25.0
 wall_radius = 0.5
-position_bins = 4
-position_bins_out = 1
+position_bins = 1
+position_substeps = 4
 
 [defaults]
 regions = ["gas"]
-angle_bin_width = 1.0
-angle_bin_width_out = 10.0
+angle_bin_width = 10.0
 energy_bin_width = 0.01
 beam_energy_entry = 280.0
 beam_current = 10.0
@@ -64,6 +63,40 @@ def write_input(tmp_path, text, name="input.toml"):
 
 def regions_of(path, case="a"):
     return load_input(path)[case]["source"]["regions"]
+
+
+def test_position_substeps_from_defaults_case_or_region(tmp_path):
+    """position_substeps can be set in [defaults] or a case, for the regions that do not set
+    their own; a region's own setting wins."""
+    text = BASE.replace("position_substeps = 2\n", "", 1)  # The gas region's own setting
+    text = text.replace("[defaults]\n", "[defaults]\nposition_substeps = 5\n")
+    text += (
+        "\n[cases.a]\n"
+        "\n[cases.b]\nposition_substeps = 3\n"
+        '\n[cases.c]\nposition_substeps = 3\nregions = [{ use = "gas", position_substeps = 2 }]\n'
+    )
+    cases = load_input(write_input(tmp_path, text))
+    steps = {name: [r.position_substeps for r in case["source"]["regions"]]
+             for name, case in cases.items()}  # fmt: skip
+    assert steps == {"a": [5], "b": [3], "c": [2]}
+    assert "position_substeps" not in cases["a"]["source"]
+
+
+@pytest.mark.parametrize("where", ["defaults", "case"])
+def test_renamed_setting_is_an_error(tmp_path, where):
+    """angle_bin_width_out is now angle_bin_width. An old file (with the old internal
+    angle_bin_width, such as 0.01 deg, too) is an error that says what to change, not a run
+    with the internal width taken for the output one."""
+    text = BASE + "\n[cases.a]\n"
+    old = "angle_bin_width_out = 10.0\n"
+    if where == "defaults":
+        text = text.replace("[defaults]\n", "[defaults]\n" + old)
+        match = r"\[defaults\]: angle_bin_width_out: it is now angle_bin_width"
+    else:
+        text += old
+        match = r"\[cases.a\]: angle_bin_width_out: it is now angle_bin_width"
+    with pytest.raises(InputError, match=match):
+        load_input(write_input(tmp_path, text))
 
 
 # --- The example input -----------------------------------------------------------------------
@@ -97,21 +130,22 @@ def test_example_input():
     assert dd["beam_direction"] == "-z"
     assert dd["source"]["stopping_power"] == "srim"
     assert dd["source"]["beam"] == "deuteron"
-    assert dd["source"]["angle_bin_width"] == 0.01
+    assert dd["source"]["angle_bin_width"] == 3.0
     (chamber,) = dd["source"]["regions"]
     assert chamber.name == "chamber" and chamber.material.name == "D2"
-    assert chamber.position_bins == 1370 and chamber.pressure == 38.0
+    assert chamber.position_bins == 137 and chamber.position_substeps == 10
+    assert chamber.pressure == 38.0
 
 
 @pytest.fixture(scope="module")
 def example_sources():
-    """Every example case, run on a coarse mesh (1 degree, one internal bin per output bin)."""
+    """Every example case, run on a coarse mesh (one internal bin per output bin)."""
     sources = {}
     for name, settings in load_input(EXAMPLE_INPUT).items():
         s = settings["source"]
         for region in s["regions"]:
-            region.position_bins = region.position_bins_out
-        sources[name] = BeamTarget(name=name, **{**s, "angle_bin_width": 1.0})
+            region.position_substeps = 1
+        sources[name] = BeamTarget(name=name, **s)
     return sources
 
 
@@ -164,7 +198,7 @@ def test_regions_by_name_inline_and_use(tmp_path):
 regions = ["stage", "gas"]
 
 [cases.inline]
-regions = [{ material = "D2", length = 5, density = 1e-6, wall_radius = 2, position_bins = 4, position_bins_out = 2 }]
+regions = [{ material = "D2", length = 5, density = 1e-6, wall_radius = 2, position_bins = 2, position_substeps = 2 }]
 
 [cases.use]
 regions = [{ use = "gas", material = "D2", length = false }]
@@ -256,7 +290,7 @@ def test_solid_region(tmp_path):
         BASE
         + """
 [cases.a]
-regions = [{ material = "TiD1.5", length = 5e-4, wall_radius = 1.0, position_bins = 40, position_bins_out = 10 }]
+regions = [{ material = "TiD1.5", length = 5e-4, wall_radius = 1.0, position_bins = 10, position_substeps = 4 }]
 """,
     )
     (film,) = regions_of(path)
@@ -297,8 +331,8 @@ def test_beam_setting(tmp_path):
     lithium = (
         '\n[materials.Li]\nphase = "solid"\ndensity = 0.534\natoms = { 7Li = 1 }\n'
         '\n[cases.d]\n\n[cases.p]\nbeam = "proton"\nbeam_energy_entry = 2500.0\n'
-        'regions = [{ material = "Li", length = 1e-3, wall_radius = 1.0, position_bins = 4, '
-        "position_bins_out = 2 }]\n"
+        'regions = [{ material = "Li", length = 1e-3, wall_radius = 1.0, position_bins = 2, '
+        "position_substeps = 2 }]\n"
     )
     cases = load_input(write_input(tmp_path, BASE + lithium))
     assert cases["d"]["source"]["beam"] == "deuteron"
@@ -472,8 +506,8 @@ def test_shine_systems_example(name, expected):
         and s["beam_energy_backstop"] == 10.0
     )
     for region in s["regions"]:
-        region.position_bins = region.position_bins_out  # A coarse mesh, for speed
-    source = BeamTarget(name=name, **{**s, "angle_bin_width": 1.0})
+        region.position_substeps = 1  # A coarse mesh, for speed
+    source = BeamTarget(name=name, **s)
     assert source.calculated == "pressure"
     assert source.yield_total == pytest.approx(expected, rel=0.01)
     assert source.warnings == []
@@ -487,8 +521,8 @@ def test_simple_example():
     (chamber,) = s["regions"]
     assert chamber.material.atom_fractions["T"] == pytest.approx(0.9)
     assert chamber.pressure == 38.0 and s["beam_current"] == 50.0 and s["beam"] == "deuteron"
-    chamber.position_bins = chamber.position_bins_out  # A coarse mesh, for speed
-    source = BeamTarget(name="DT90", **{**s, "angle_bin_width": 1.0})
+    chamber.position_substeps = 1  # A coarse mesh, for speed
+    source = BeamTarget(name="DT90", **s)
     assert source.calculated == "beam_energy_backstop"
     assert source.yields["DT"] > 10 * source.yields["DD"] > 0
 

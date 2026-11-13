@@ -63,14 +63,14 @@ CASES = {
             length=[10.0, 20.0, 30.0],
             pressure=[5.0, 5.0, 5.0],
             temperature=[25.0, 25.0, 25.0],
-            position_bins=[2, 4, 6],
-            position_bins_out=[1, 2, 3],
+            position_bins=[1, 2, 3],
+            position_substeps=[2, 2, 2],
             divergence=[30.0, 30.0, 30.0],
         ),
         "-z", "backstop_position", (0.0, 0.0, 0.0),
     ),
     # One angle bin: an isotropic source (no d2, one energy distribution)
-    "isotropic": (dict(angle_bin_width_out=180.0), "-z", "backstop_position", (0.0, 0.0, 0.0)),
+    "isotropic": (dict(angle_bin_width=180.0), "-z", "backstop_position", (0.0, 0.0, 0.0)),
     # No divergence: one radius (rad = d3, no fext)
     "parallel": (dict(divergence=[0.0], wall_radius=1.0), "+x", "entry_position", (0.0, 0.0, 0.0)),
     # 2.5 MeV protons on 7Li: the n0 and n1 lines overlap, so their energies share segments
@@ -83,8 +83,8 @@ CASES = {
             temperature=[None],
             length=[1e-3],
             divergence=[0.0],
-            position_bins=[20],
-            position_bins_out=[5],
+            position_bins=[5],
+            position_substeps=[4],
         ),
         "+y", "backstop_position", (0.0, 0.0, 0.0),
     ),
@@ -105,8 +105,8 @@ CASES = {
             temperature=[None],
             length=[0.5],
             divergence=[0.0],
-            position_bins=[100],
-            position_bins_out=[10],
+            position_bins=[10],
+            position_substeps=[10],
             energy_bin_width=0.1,
             nuclear_data=["drosg", str(ENDF_DIR)],
         ),
@@ -178,7 +178,7 @@ def sampled(request, tmp_path_factory):
         "mu": mu,
         "E": E,
         "i": np.searchsorted(s.x_grid_out, along, side="right") - 1,
-        "j": np.minimum((angle / s.angle_bin_width_out).astype(int), s.num_angle_bins_out - 1),
+        "j": np.minimum((angle / s.angle_bin_width).astype(int), s.num_angle_bins_out - 1),
         "across_unit": across / np.maximum(rho, 1e-300)[:, None],
         "u_across_unit": u_across / np.linalg.norm(u_across, axis=1)[:, None],
     }
@@ -206,7 +206,7 @@ def test_radius_and_azimuth(sampled):
     s = sampled["source"]
     from beamtarget.source import SDEF_RADIUS_DECIMALS
 
-    for k in range(s.position_bins_total_out):
+    for k in range(s.position_bins_total):
         in_bin = sampled["i"] == k
         if not np.any(in_bin):  # No neutrons there (past where the beam stops, for example)
             continue
@@ -231,7 +231,7 @@ def test_angles(sampled):
     angular = _total(s, (0, 2))
     counts = np.bincount(sampled["j"], minlength=s.num_angle_bins_out)
     assert_counts_match(counts, angular, f"{name}: angles")
-    joint = np.zeros((s.position_bins_total_out, s.num_angle_bins_out))
+    joint = np.zeros((s.position_bins_total, s.num_angle_bins_out))
     np.add.at(joint, (sampled["i"], sampled["j"]), 1)
     independent = np.outer(_total(s, (1, 2)), angular)
     assert_counts_match(joint, independent, f"{name}: position x angle (independent)")
@@ -265,7 +265,7 @@ def test_energy_does_not_depend_on_position(sampled):
     mean = np.sum(spectrum * mids) / spectrum.sum()
     variance = np.sum(spectrum * (mids**2 + s.energy_bin_width**2 / 12)) / spectrum.sum()
     variance -= mean**2
-    for k in range(s.position_bins_total_out):
+    for k in range(s.position_bins_total):
         energies = sampled["E"][sampled["i"] == k]
         if len(energies) == 0:  # No neutrons there (the axial check covers that)
             continue

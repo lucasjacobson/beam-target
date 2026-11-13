@@ -115,7 +115,7 @@ def _bins(s, sampled):
     """Output-mesh bin of each particle: position i, angle j."""
     i = np.searchsorted(s.x_grid_out, sampled["along"], side="right") - 1
     angle = np.degrees(np.arccos(np.clip(sampled["mu"], -1, 1)))
-    j = np.minimum((angle / s.angle_bin_width_out).astype(int), s.num_angle_bins_out - 1)
+    j = np.minimum((angle / s.angle_bin_width).astype(int), s.num_angle_bins_out - 1)
     return i, j
 
 
@@ -136,7 +136,7 @@ def test_radius_and_azimuth(sampled, mixed_source):
     area (rho^2 / R^2 uniform on [0, 1]), at every azimuth around the axis."""
     s = mixed_source
     i, _ = _bins(s, sampled)
-    for k in range(s.position_bins_total_out):
+    for k in range(s.position_bins_total):
         in_bin = i == k
         R = s.radius_mids_out[k]
         rho = sampled["rho"][in_bin]
@@ -153,7 +153,7 @@ def test_angles_and_their_correlation_with_position(sampled, mixed_source):
     joint (position, angle) distribution matches the source bin by bin."""
     s = mixed_source
     i, j = _bins(s, sampled)
-    joint = np.zeros((s.position_bins_total_out, s.num_angle_bins_out))
+    joint = np.zeros((s.position_bins_total, s.num_angle_bins_out))
     np.add.at(joint, (i, j), 1)
     expected = sum(np.sum(s.neutrons[rxn], 2) for rxn in s.reactions)
     assert_counts_match(joint.sum(0), expected.sum(0), f"{sampled['name']}: angles")
@@ -175,7 +175,7 @@ def test_energies_and_their_correlation(sampled, mixed_source):
     width = s.energy_bin_width
     mids = {rxn: s.neutron_energy_mids[rxn] for rxn in s.reactions}
     i, j = _bins(s, sampled)
-    groups = [("angle", j, s.num_angle_bins_out), ("position", i, s.position_bins_total_out)]
+    groups = [("angle", j, s.num_angle_bins_out), ("position", i, s.position_bins_total)]
     for axis_name, index, num in groups:
         for k in range(num):
             weights = {

@@ -23,8 +23,8 @@ def stopping_per_atom(stopping_power):
     """Return (E [keV], stopping [eV/(1e15 atoms/cm^2)]) for deuterons in tritium."""
     # A minimal pure-tritium case; only its stopping-power table is used
     region = Region(
-        dt_gas(1.0), 20.0, pressure=10.0, temperature=1.0, wall_radius=4.0, position_bins=2,
-        position_bins_out=1,
+        dt_gas(1.0), 20.0, pressure=10.0, temperature=1.0, wall_radius=4.0, position_bins=1,
+        position_substeps=2,
     )  # fmt: skip
     source = BeamTarget(
         "plot", [region], 280.0, 1.0, 0.2, 90.0, 90.0, 0.5, stopping_power=stopping_power

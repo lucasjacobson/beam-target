@@ -31,8 +31,7 @@ beam_current      = 50.0   # mA
 beam_radius_entry = 0.2    # cm, beam radius where it enters the first region
 
 # Angle and energy mesh (the position mesh belongs to each region)
-angle_bin_width     = 0.01  # deg, internal calculation
-angle_bin_width_out = 3.0   # deg, output (180 gives an isotropic source)
+angle_bin_width     = 3.0   # deg, output (180 gives an isotropic source)
 energy_bin_width    = 0.01  # MeV, width of the output neutron energy bins
 
 # MCNP SDEF card: where the source goes in the MCNP geometry. Place it by where the beam
@@ -98,8 +97,8 @@ pressure          = 38.0    # torr
 temperature       = 1800.0  # degC
 wall_radius       = 4.1783  # cm; the beam outside it is scraped off
 divergence        = 36.0    # mrad
-position_bins     = 1370    # position bins, internal calculation
-position_bins_out = 137     # position bins, output
+position_bins     = 137     # position bins
+# position_substeps = 10     # steps the beam is followed in across each bin (default 10)
 
 # Two differential-pumping stages in front of the chamber (illustrative values)
 [regions.stage1]
@@ -108,8 +107,7 @@ length            = 50.0
 pressure          = 0.05
 temperature       = 25.0
 wall_radius       = 1.0
-position_bins     = 10
-position_bins_out = 1
+position_bins     = 1
 
 [regions.stage2]
 material          = "DT50"
@@ -117,8 +115,7 @@ length            = 50.0
 pressure          = 0.5
 temperature       = 25.0
 wall_radius       = 1.0
-position_bins     = 10
-position_bins_out = 1
+position_bins     = 1
 
 # A 1 cm aperture with a 2 cm radius inside the chamber gas (illustrative)
 [regions.aperture]
@@ -128,8 +125,7 @@ pressure          = 38.0
 temperature       = 1800.0
 wall_radius       = 2.0
 divergence        = 36.0
-position_bins     = 10
-position_bins_out = 1
+position_bins     = 1
 
 # A titanium deuteride film 5 micrometers thick. Divergence means nothing over micrometers,
 # so it is left at its default of 0 (a constant beam radius).
@@ -137,16 +133,14 @@ position_bins_out = 1
 material          = "TiD1.5"
 length            = 5e-4  # cm
 wall_radius       = 4.1783
-position_bins     = 1370
-position_bins_out = 137
+position_bins     = 137
 
 # A lithium metal film 10 micrometers thick
 [regions.Li_film]
 material          = "Li"
 length            = 1e-3  # cm
 wall_radius       = 4.1783
-position_bins     = 1000
-position_bins_out = 100
+position_bins     = 100
 
 # --- Gas mixtures ----------------------------------------------------------------------------
 
@@ -205,7 +199,7 @@ beam              = "proton"
 beam_energy_entry = 18000.0  # keV
 beam_current      = 0.1      # mA
 nuclear_data      = ["drosg", "../tests/data/endf/ENDF-B-VIII.1"]
-regions           = [{ material = "Be", length = 0.5, wall_radius = 4.1783, position_bins = 500, position_bins_out = 50 }]
+regions           = [{ material = "Be", length = 0.5, wall_radius = 4.1783, position_bins = 50 }]
 
 # --- Physics -------------------------------------------------------------------------------
 
@@ -247,13 +241,13 @@ entry_position = [-100.0, 0.0, 0.0]  # cm
 # own wall radius)
 [cases.DT50_aperture]
 regions = [
-    { use = "chamber", length = 68.0, position_bins = 680, position_bins_out = 68 },
+    { use = "chamber", length = 68.0, position_bins = 68 },
     "aperture",
-    { use = "chamber", length = 68.0, position_bins = 680, position_bins_out = 68 },
+    { use = "chamber", length = 68.0, position_bins = 68 },
 ]
 
 # No divergence (a constant beam radius, so no scraping) and one output angle bin (an
 # isotropic source)
 [cases.DT50_isotropic]
 regions             = [{ use = "chamber", divergence = 0.0 }]
-angle_bin_width_out = 180.0  # deg
+angle_bin_width     = 180.0  # deg

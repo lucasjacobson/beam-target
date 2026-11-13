@@ -5,9 +5,10 @@ import re
 import numpy as np
 import pytest
 from conftest import make_source
+from numpy.polynomial.legendre import legval
 
 from beamtarget import Material
-from beamtarget.nuclear import REACTIONS, beam_key, mean_atomic_mass
+from beamtarget.nuclear import REACTIONS, beam_key, cm_to_lab, mean_atomic_mass
 
 LI7 = Material("7Li", "solid", atoms={"7Li": 1}, density=0.534)
 
@@ -20,8 +21,8 @@ LITHIUM_CASE = dict(
     temperature=[None],
     length=[1e-3],
     divergence=[0.0],
-    position_bins=[20],
-    position_bins_out=[5],
+    position_bins=[5],
+    position_substeps=[4],
 )
 
 
@@ -36,6 +37,13 @@ def _sdef_energies(si):
     return [(float(tokens[i]), float(tokens[i + 2])) for i in range(0, len(tokens), 3)]
 
 
+def _energy_range(s, rxn):
+    """Lowest and highest neutron energy [MeV] of a reaction: the edges of the filled bins."""
+    filled = np.flatnonzero(s.neutrons[rxn].sum(axis=(0, 1)))
+    grid = s.neutron_energy_grid[rxn]
+    return grid[filled[0]], grid[filled[-1] + 1]
+
+
 def test_proton_on_lithium():
     s = make_source(**LITHIUM_CASE)
     # No tritium in the target, so no T(p,n) reaction at all
@@ -46,9 +54,9 @@ def test_proton_on_lithium():
     assert 0 < s.yields["p7Li_n1"] < 0.3 * s.yields["p7Li_n0"]
     # At 2.5 MeV, n0 neutrons run from about 0.78 MeV forward to 0.24 MeV backward (less
     # as the beam slows), n1 neutrons below 0.4 MeV
-    E0 = s.neutron_energy["p7Li_n0"]
-    assert 0.2 < np.nanmin(E0) and np.nanmax(E0) < 0.79
-    assert np.nanmax(s.neutron_energy["p7Li_n1"]) < 0.4
+    low, high = _energy_range(s, "p7Li_n0")
+    assert 0.2 <= low and high <= 0.79  # Bin edges
+    assert _energy_range(s, "p7Li_n1")[1] < 0.4
     assert s.backstop_power > 0
 
 
@@ -92,7 +100,7 @@ def test_unmodelled_channels_warned(energy, expected):
     """Deuterons on CD4: the carbon (d,n) channels are open but not modeled, so the case
     runs (with the DD neutrons) and warns about each."""
     s = make_source(
-        material=_gas("CD4"), beam_energy_entry=energy, position_bins=[4], position_bins_out=[2]
+        material=_gas("CD4"), beam_energy_entry=energy, position_bins=[2], position_substeps=[2]
     )
     assert [w.split(" is open")[0] for w in s.warnings] == expected
     assert s.yields["DD"] > 0
@@ -105,7 +113,7 @@ def test_coulomb_barrier_suppresses_warnings():
     gas = Material("DT_argon", "gas", molecules={"D2": 0.49, "T2": 0.49, "Ar": 0.02})
     assert make_source(material=gas).warnings == []
     s = make_source(
-        material=gas, beam_energy_entry=1000.0, position_bins=[4], position_bins_out=[2]
+        material=gas, beam_energy_entry=1000.0, position_bins=[2], position_substeps=[2]
     )
     assert any(w.startswith("40Ar(d,n)41K") for w in s.warnings)
 
@@ -118,8 +126,8 @@ def test_no_warnings_for_the_small_case(mixed_source):
 def test_overlapping_lines_share_sdef_segments():
     """The n0 and n1 lines overlap in energy, so the SDEF energy distributions add them on one
     segment: energies must increase through each SI card."""
-    for angle_bin_width_out in (180.0, 10.0):
-        s = make_source(**{**LITHIUM_CASE, "angle_bin_width_out": angle_bin_width_out})
+    for angle_bin_width in (180.0, 10.0):
+        s = make_source(**{**LITHIUM_CASE, "angle_bin_width": angle_bin_width})
         sdef = s.get_mcnp_sdef()
         cards = re.findall(r"^  si(?:4 |5\d\d)(.*)$", sdef, flags=re.M)
         assert cards
@@ -132,19 +140,35 @@ def test_proton_on_tritium():
     s = make_source(beam="proton", material=_gas("T2"), beam_energy_entry=2000.0)
     assert s.reactions_present() == ["pT"]
     # T(p,n)3He at 2 MeV: about 1.2 MeV neutrons forward
-    E = s.neutron_energy["pT"]
-    assert 1.0 < np.nanmax(E) < 1.25
+    assert 1.0 < _energy_range(s, "pT")[1] < 1.25
 
 
 def test_inverse_reaction_uses_flipped_data():
     """D(t,n)4He at E_t has the T(d,n)4He cross section at E_d = E_t m_d / m_t, with the CM
     angle measured from the other particle."""
-    thin = dict(length=[1e-6], position_bins=[1], position_bins_out=[1], divergence=[0.0])
+    thin = dict(length=[1e-6], position_bins=[1], position_substeps=[1], divergence=[0.0])
     E_t = 600.0
     E_d = REACTIONS["tD"].data_energy(E_t)
     tD = make_source(beam="triton", material=_gas("D2"), beam_energy_entry=E_t, **thin)
     dT = make_source(beam="deuteron", material=_gas("T2"), beam_energy_entry=E_d, **thin)
-    np.testing.assert_allclose(tD.cm_xs["tD"][0], dT.cm_xs["DT"][0][::-1], rtol=1e-6)
+    # The same cross section, at the same CM energy
+    np.testing.assert_allclose(
+        tD.spectra["tD"]["sigma_mids"], dT.spectra["DT"]["sigma_mids"], rtol=1e-6
+    )
+    # The lab angular distribution, worked out here on a fine CM mesh from the T(d,n) data
+    # with the cosine flipped
+    xs = dT.xs_data["DT"]
+    E_data = REACTIONS["tD"].data_energy(tD.beam_energy_mids[0])
+    coeffs = [np.interp(E_data, xs["E"], c) for c in xs["coeffs"].T]
+    n = 2_000_000  # Each cell is binned whole: about 1e-6 of the total misplaced per edge
+    theta = np.linspace(0, np.pi, n + 1)
+    mu = np.cos((theta[:-1] + theta[1:]) / 2)
+    weight = legval(-mu, coeffs) * (np.cos(theta[:-1]) - np.cos(theta[1:]))
+    _, cos_lab = cm_to_lab(tD.beam_energy_mids[0] / 1000, mu, *REACTIONS["tD"].masses())
+    angles = np.degrees(np.arccos(np.clip(cos_lab, -1, 1)))
+    expected, _ = np.histogram(angles, tD.angle_grid_out, weights=weight)
+    got = tD.neutrons["tD"].sum(axis=(0, 2))
+    np.testing.assert_allclose(got / got.sum(), expected / expected.sum(), atol=1e-6)
 
 
 def test_triton_on_hydrogen_is_a_forward_cone():

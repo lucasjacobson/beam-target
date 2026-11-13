@@ -14,8 +14,9 @@ default; set it with `-o`):
 All the text files are ASCII with Unix (LF) line endings. Beam energies are in keV, and
 neutron energies in MeV; positions are in cm, measured along the beam from where it enters the
 first region; emission angles are in degrees from the beam direction (0° is forward). The
-calculation itself runs on a finer internal mesh; every file holds the coarser output mesh,
-set by `position_bins_out` (per region), `angle_bin_width_out`, and `energy_bin_width`.
+calculation itself follows the beam in `position_substeps` steps (default 10) across each
+position bin; every file holds the output mesh, set by `position_bins` (per region),
+`angle_bin_width`, and `energy_bin_width`.
 
 Each reaction has a key, used in dataset and field names: `DD`, `DT`, `pT`, `tD`, `p7Li_n0`,
 and so on for the built-in DROSG reactions, and `<beam><target>_xn` (such as `p9Be_xn`) for

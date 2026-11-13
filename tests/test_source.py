@@ -19,10 +19,10 @@ MAX_ENERGY = REACTIONS["DT"].complete_up_to()[0] * 1000
 
 @pytest.mark.parametrize("rxn", ["DD", "DT"])
 def test_cross_section_integrates_to_total(rxn):
-    """At every position, the CM cross section summed over the CM angle mesh equals the total
+    """At every position, the cross section integrated over the CM angle equals the total
     cross section 4 pi sigma_0 C_0 from the data, and every neutron lands in an output bin
     (none are lost converting to lab angles and energies)."""
-    source = make_source(angle_bin_width=0.25)
+    source = make_source()
     xs = source.xs_data[rxn]
     total = (
         4
@@ -30,11 +30,11 @@ def test_cross_section_integrates_to_total(rxn):
         * np.interp(source.beam_energy_mids, xs["E"], xs["total"])
         * np.interp(source.beam_energy_mids, xs["E"], xs["coeffs"][:, 0])
     )
-    cm = np.sum(source.cm_xs[rxn] * source.solid_angles[None, :], axis=1)
-    np.testing.assert_allclose(cm, total, rtol=1e-4)
+    cm = source.spectra[rxn]["sigma_mids"]
+    np.testing.assert_allclose(cm, total, rtol=1e-12)
     per_bin = cm * source.target_density_mids[rxn] * 1e-24 * source.dx * source.particle_rate
     expected = np.sum(per_bin * (1 - source.scrape_mids))
-    assert source.yields[rxn] == pytest.approx(expected, rel=1e-4)
+    assert source.yields[rxn] == pytest.approx(expected, rel=1e-12)
 
 
 def test_yields_add_up(mixed_source):
@@ -82,8 +82,8 @@ def test_beam_stops_inside_target(T_frac, stopping_power):
         stopping_power=stopping_power,
         pressure=[40.0],
         length=[300.0],
-        position_bins=[600],
-        position_bins_out=[60],
+        position_bins=[60],
+        position_substeps=[10],
         wall_radius=10.0,
     )
     EB = source.beam_energy_grid
@@ -95,7 +95,7 @@ def test_beam_stops_inside_target(T_frac, stopping_power):
     rxn = "DT" if T_frac else "DD"
     assert np.all(EB[i_stop + 1 :] == 0)
     assert np.all(source.beam_energy_mids[i_stop + 1 :] == 0)
-    assert np.all(source.cm_xs[rxn][i_stop + 1 :] == 0)
+    assert np.all(source.spectra[rxn]["sigma_mids"][i_stop + 1 :] == 0)
     neutrons_per_bin = source.neutrons[rxn].sum(axis=(1, 2))
     beyond = source.x_grid_out[:-1] >= x_stop  # Output bins entirely past the stop
     assert beyond.sum() > 50
@@ -138,8 +138,8 @@ def test_calculate_with_upstream_regions(calculated):
         temperature=[25.0, 25.0],
         length=[20.0, 50.0],
         divergence=[0.0, 30.0],
-        position_bins=[4, 40],
-        position_bins_out=[1, 10],
+        position_bins=[1, 10],
+        position_substeps=[4, 4],
     )
     forward = make_source(**regions)
     values = {calculated: [regions[calculated][0], None]}
@@ -169,8 +169,8 @@ def test_target_chamber_needs_two_of_three():
                 temperature=[25.0, 25.0],
                 length=[20.0, None],
                 divergence=[0.0, 30.0],
-                position_bins=[4, 40],
-                position_bins_out=[1, 10],
+                position_bins=[1, 10],
+                position_substeps=[4, 4],
                 beam_energy_backstop=100.0,
             ),
             "only one value can be calculated.*the pressure of region 1",
@@ -181,8 +181,8 @@ def test_target_chamber_needs_two_of_three():
                 temperature=[25.0, 25.0],
                 length=[100.0, 50.0],
                 divergence=[0.0, 30.0],
-                position_bins=[40, 40],
-                position_bins_out=[1, 10],
+                position_bins=[1, 10],
+                position_substeps=[40, 4],
                 beam_energy_backstop=100.0,
             ),
             "even without region 2 .*the beam reaches the backstop with",
@@ -270,21 +270,26 @@ def test_beam_power_without_scraping():
 def test_neutron_energies(mixed_source):
     """Neutron energies lie in the expected bands for a 280 keV beam."""
     for rxn, lo, hi in [("DD", 1.9, 3.3), ("DT", 12.9, 15.5)]:
-        neutron_energy = mixed_source.neutron_energy[rxn]
-        assert lo < neutron_energy.min() and neutron_energy.max() < hi
-        assert np.all(np.diff(neutron_energy, axis=1) < 0)  # Faster forward than backward
+        grid = mixed_source.neutron_energy_grid[rxn]
+        by_energy = mixed_source.neutrons[rxn].sum(axis=(0, 1))
+        filled = np.flatnonzero(by_energy)
+        assert lo < grid[filled[0]] and grid[filled[-1] + 1] < hi
+        # Faster forward than backward: the mean energy falls with the angle
+        by_angle = mixed_source.neutrons[rxn].sum(axis=0)
+        mean = by_angle @ mixed_source.neutron_energy_mids[rxn] / by_angle.sum(axis=1)
+        assert np.all(np.diff(mean) < 0)
 
 
 # Reference results for SMALL_CASE: (DD yield [n/s], DT yield [n/s], beam energy at the end
 # [keV], fraction of neutrons lost to scraping). These pin the physics: if a change moves them,
 # check that it was meant to and update them.
 REFERENCE = {
-    (0.0, "srim"): (3.6281319841e10, 0.0, 194.2685042747, 1.7222154825e-01),
-    (0.0, "icru49"): (3.6135512429e10, 0.0, 191.6598797222, 1.7142870030e-01),
-    (0.5, "srim"): (1.8140958175e10, 7.8054183702e11, 194.2802627760, 2.3018646410e-01),
-    (0.5, "icru49"): (1.8068057129e10, 7.8737785819e11, 191.6716694943, 2.3159260225e-01),
-    (1.0, "srim"): (0.0, 1.5610281756e12, 194.2920207672, 2.3152708373e-01),
-    (1.0, "icru49"): (0.0, 1.5746989030e12, 191.6834643214, 2.3296652994e-01),
+    (0.0, "srim"): (3.6280995176e10, 0.0, 194.2685042747, 1.7222163350e-01),
+    (0.0, "icru49"): (3.6135189661e10, 0.0, 191.6598797221, 1.7142878816e-01),
+    (0.5, "srim"): (1.8140795839e10, 7.8054192052e11, 194.2802627760, 2.3018647368e-01),
+    (0.5, "icru49"): (1.8067895741e10, 7.8737794161e11, 191.6716694942, 2.3159261200e-01),
+    (1.0, "srim"): (0.0, 1.5610283426e12, 194.2920207672, 2.3152707935e-01),
+    (1.0, "icru49"): (0.0, 1.5746990699e12, 191.6834643212, 2.3296652543e-01),
 }
 
 
@@ -309,17 +314,15 @@ def test_reference_results(T_frac, stopping_power):
         (dict(T_frac=1.5), "T_frac must be between 0 and 1"),
         (dict(beam_current=0.0), "beam_current must be positive"),
         (dict(pressure=[0.0]), "pressures must be positive"),
-        (dict(angle_bin_width_out=7.0), "angle_bin_width_out must divide 180"),
-        (dict(angle_bin_width=4.0), "multiple of angle_bin_width"),
-        (dict(position_bins_out=[7]), "must divide position_bins"),
+        (dict(angle_bin_width=7.0), "angle_bin_width must divide 180"),
         (dict(divergence=[-1.0]), "divergences must not be negative"),
         (
-            dict(angle_bin_width=200.0, angle_bin_width_out=200.0),
-            "angle_bin_width_out must divide 180",
+            dict(angle_bin_width=200.0),
+            "angle_bin_width must divide 180",
         ),
-        (dict(position_bins=[0], position_bins_out=[1]), "position_bins must be positive"),
-        (dict(position_bins=[2.5], position_bins_out=[1]), "must be whole numbers"),
-        (dict(position_bins_out=[float("nan")]), "must be whole numbers"),
+        (dict(position_bins=[1], position_substeps=[0]), "position_substeps must be positive"),
+        (dict(position_bins=[1], position_substeps=[2.5]), "must be whole numbers"),
+        (dict(position_bins=[float("nan")]), "must be whole numbers"),
         (dict(wall_radius=0.1), "must not be smaller than beam_radius_entry"),
     ],
 )
@@ -332,16 +335,16 @@ def test_voltage_limit_accepted():
     """Up to where the next DT channel opens there is no warning; above, a warning (in the
     summary and the HDF5 file too), but the case runs."""
     assert (
-        make_source(beam_energy_entry=MAX_ENERGY, position_bins=[2], position_bins_out=[1]).warnings
+        make_source(beam_energy_entry=MAX_ENERGY, position_bins=[1], position_substeps=[2]).warnings
         == []
     )
-    s = make_source(beam_energy_entry=MAX_ENERGY + 1, position_bins=[2], position_bins_out=[1])
+    s = make_source(beam_energy_entry=MAX_ENERGY + 1, position_bins=[1], position_substeps=[2])
     assert [w.split(" is open")[0] for w in s.warnings] == ["T(d,np)T"]
     assert tomllib.loads(s.get_summary())["run"]["warnings"] == s.warnings
 
 
 def test_warnings_in_hdf5(tmp_path):
-    s = make_source(beam_energy_entry=MAX_ENERGY + 1, position_bins=[2], position_bins_out=[1])
+    s = make_source(beam_energy_entry=MAX_ENERGY + 1, position_bins=[1], position_substeps=[2])
     s.write_hdf5(tmp_path / "s.h5")
     with h5py.File(tmp_path / "s.h5") as f:
         assert list(f.attrs["warnings"]) == s.warnings
@@ -350,13 +353,9 @@ def test_warnings_in_hdf5(tmp_path):
 @pytest.mark.parametrize(
     "overrides",
     [
-        dict(
-            angle_bin_width=0.1, angle_bin_width_out=0.3
-        ),  # 0.3 / 0.1 = 2.9999999999999996 in floating point
-        dict(
-            angle_bin_width=0.01, angle_bin_width_out=3.0, position_bins=[4], position_bins_out=[2]
-        ),
-        dict(position_bins=[40.0], position_bins_out=[10.0]),  # Whole numbers given as floats
+        dict(angle_bin_width=0.3),  # 180 / 0.3 = 600.0000000000001 in floating point
+        dict(angle_bin_width=3.0, position_bins=[2], position_substeps=[2]),
+        dict(position_bins=[10.0], position_substeps=[4]),  # Whole numbers given as floats
         dict(wall_radius=0.2, divergence=[0.0]),  # Wall exactly at the beam radius
     ],
 )
@@ -380,8 +379,8 @@ def test_multiple_regions():
         temperature=[25.0, 25.0],
         length=[20.0, 50.0],
         divergence=[0.0, 30.0],
-        position_bins=[4, 40],
-        position_bins_out=[1, 10],
+        position_bins=[1, 10],
+        position_substeps=[4, 4],
     )
     assert len(source.x_grid_out) == 12
     assert source.x_grid_out[-1] == pytest.approx(70.0)
@@ -466,8 +465,8 @@ def test_sdef_invalid_direction(mixed_source):
 
 
 def test_isotropic_source_sdef():
-    """angle_bin_width_out = 180 gives an isotropic source: no direction distribution."""
-    text = make_source(angle_bin_width_out=180.0).get_mcnp_sdef()
+    """angle_bin_width = 180 gives an isotropic source: no direction distribution."""
+    text = make_source(angle_bin_width=180.0).get_mcnp_sdef()
     assert "dir = d2" not in text and "si2" not in text
 
 
@@ -499,15 +498,15 @@ def test_sdef_energy_labels_match_angles(mixed_source):
     "overrides",
     [
         {},
-        dict(angle_bin_width_out=180.0),  # Isotropic
+        dict(angle_bin_width=180.0),  # Isotropic
         dict(T_frac=0.0),
         dict(
             pressure=[1e-6, 1e-4, 1e-3, 1e-2, 0.1, 5.0],
             temperature=[25.0] * 6,
             length=[12.345, 23.456, 34.567, 45.678, 56.789, 50.0],
             divergence=[0.0] * 5 + [30.0],
-            position_bins=[10] * 5 + [40],
-            position_bins_out=[1] * 5 + [10],
+            position_bins=[1] * 5 + [10],
+            position_substeps=[10] * 5 + [4],
         ),
     ],
     ids=["mixed", "isotropic", "pure D", "six regions"],
@@ -543,8 +542,8 @@ def test_sdef_extent_without_float_artefacts():
         temperature=[25.0, 25.0],
         length=[0.1, 0.2],
         divergence=[30.0, 30.0],
-        position_bins=[2, 4],
-        position_bins_out=[1, 2],
+        position_bins=[1, 2],
+        position_substeps=[2, 2],
     )
     assert _sdef_entries(source.get_mcnp_sdef("+z"), "si1") == ["0", "0.1", "i", "0.3"]
 
@@ -691,7 +690,7 @@ def test_plots(tmp_path, T_frac, num_plots):
     "overrides",
     [
         dict(beam_energy_entry=1000.0),  # DT neutrons above 16 MeV
-        dict(beam_energy_entry=MAX_ENERGY, position_bins=[4], position_bins_out=[2]),
+        dict(beam_energy_entry=MAX_ENERGY, position_bins=[2], position_substeps=[2]),
         dict(energy_bin_width=5.0),  # Energy bins coarser than the spectra
         dict(energy_bin_width=0.03),  # Bins that do not divide 16 MeV
     ],
@@ -712,8 +711,8 @@ TWO_REGIONS = dict(
     temperature=[25.0, 25.0],
     length=[25.0, 25.0],
     divergence=[30.0, 30.0],
-    position_bins=[20, 20],
-    position_bins_out=[5, 5],
+    position_bins=[5, 5],
+    position_substeps=[4, 4],
 )
 
 
@@ -736,7 +735,7 @@ def test_narrow_aperture_scrapes():
     assert narrow.wall_power > wide.wall_power
     # The beam left after the aperture: (0.5 / r)^2 at the end of the first region
     r_end_first = 0.2 + 30e-3 * 25.0
-    i = narrow.position_bins[0]
+    i = narrow.position_bins_internal[0]  # End of the first region
     assert narrow.scrape_grid[i] == pytest.approx(1 - (0.5 / r_end_first) ** 2, rel=1e-12)
     # The beam edge is clipped to the aperture there, then grows from it
     assert narrow.radius_grid[i] == pytest.approx(0.5, rel=1e-12)

@@ -19,8 +19,8 @@ pressure          = 38.0    # torr
 temperature       = 1800.0  # degC
 wall_radius       = 4.1783  # cm
 divergence        = 36.0    # mrad
-position_bins     = 1370    # position bins, internal calculation
-position_bins_out = 137     # position bins, output
+position_bins     = 137     # position bins
+# position_substeps = 10     # steps the beam is followed in across each bin (default 10)
 
 [cases.DT90]
 # Beam particle: "proton" or "1H", "deuteron" or "2H", "triton" or "3H", "helion" or "3He",
@@ -30,8 +30,7 @@ regions             = ["chamber"]
 beam_energy_entry   = 280.0   # keV
 beam_current        = 50.0    # mA
 beam_radius_entry   = 0.2     # cm, beam radius at entry
-angle_bin_width     = 0.01    # deg, internal calculation
-angle_bin_width_out = 3.0     # deg, output
+angle_bin_width     = 3.0     # deg, output
 energy_bin_width    = 0.01    # MeV, output
 stopping_power      = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
 beam_direction      = "-z"    # beam direction in MCNP and OpenMC: -x, +x, -y, +y, -z, or +z

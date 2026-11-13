@@ -375,6 +375,159 @@ def cm_to_lab(T1, cos_cm, m1, m2, m3, m4):
     return T3, np.where(below, np.nan, cos_lab)
 
 
+def _cm_frame(T1, m1, m2, m3, m4):
+    """Return (beta, gamma, E3_cm, p3_cm, above) for 1 + 2 -> 3 + 4 with particle 2 at rest,
+    at lab beam energies T1 [MeV]: the velocity of the center of mass (CM) and its Lorentz
+    factor, the total energy and momentum of particle 3 in the CM [MeV], and whether T1 is
+    above the threshold."""
+    T1 = np.asarray(T1, dtype=float)
+    E1 = T1 + m1
+    p1 = np.sqrt(E1**2 - m1**2)
+    E_tot = E1 + m2
+    s = m1**2 + m2**2 + 2 * E1 * m2
+    sqrt_s = np.sqrt(s)
+    E3_cm = (s + m3**2 - m4**2) / (2 * sqrt_s)
+    p3_cm = np.sqrt(np.clip(E3_cm**2 - m3**2, 0, None))
+    return p1 / E_tot, E_tot / sqrt_s, E3_cm, p3_cm, sqrt_s > m3 + m4
+
+
+def two_body_energy_range(T1, m1, m2, m3, m4):
+    """Return (lowest, highest) lab kinetic energy [MeV] of particle 3 at lab beam energies T1
+    [MeV] (emitted backward and forward in the CM); NaN below the threshold."""
+    beta, gamma, E3_cm, p3_cm, above = _cm_frame(T1, m1, m2, m3, m4)
+    low = gamma * (E3_cm - beta * p3_cm) - m3
+    high = gamma * (E3_cm + beta * p3_cm) - m3
+    return np.where(above, low, np.nan), np.where(above, high, np.nan)
+
+
+def legendre_cumulative(b, x):
+    """Integrate a Legendre series from -1 to x, row by row.
+
+    Args:
+        b: Coefficients, shape (n, L + 1): row i is the density sum_l b[i, l] P_l(u).
+        x: Upper limits, shape (n, m).
+
+    Returns the integrals, shape (n, m), from the integral of P_l from -1 to x:
+    (P_l+1(x) - P_l-1(x)) / (2l + 1) for l >= 1, and x + 1 for l = 0.
+    """
+    F = b[:, :1] * (x + 1)
+    P_prev, P = np.ones_like(x), x
+    for n in range(1, b.shape[1]):
+        P_next = ((2 * n + 1) * x * P - n * P_prev) / (n + 1)
+        F += b[:, n : n + 1] * (P_next - P_prev) / (2 * n + 1)
+        P_prev, P = P, P_next
+    return F
+
+
+def bin_two_body(
+    T1, weights, rows, num_rows, angle_edges, energy_edges, masses, cumulative,
+    max_size=2_000_000,
+):  # fmt: skip
+    """Bin the neutrons of a two-body reaction 1 + 2 -> n + 4 exactly into lab bins of
+    (position row, emission angle, neutron energy), at many beam energies at once.
+
+    At one beam energy the neutron's lab energy and angle are set by its CM angle, so the
+    neutrons form a line. The lab energy is linear in the CM cosine (relativistically too),
+    and the lab angle is a fixed function of it, so the CM cosines where the line crosses an
+    energy bin edge or an angle bin edge are found in closed form (a linear and a quadratic
+    equation). They split [-1, 1] into pieces that each lie inside one lab bin, and each
+    piece's cross section is the exact integral of the angular distribution over it. The
+    result does not depend on any internal angle mesh.
+
+    Args:
+        T1: Lab beam energies [MeV], one per internal position bin.
+        weights: Weight of each (n_target dx times the beam fraction, for neutrons per
+            beam particle).
+        rows: Output position row of each.
+        num_rows: Number of output position rows.
+        angle_edges: Lab emission-angle bin edges [deg], from 0 to 180.
+        energy_edges: Lab neutron-energy bin edges [MeV], increasing; neutrons outside them
+            go into the first or last bin.
+        masses: (m1, m2, m_n, m4), rest-mass energies [MeV] (m4 includes any excitation).
+        cumulative: Function (index, x) -> cross section [b] for CM cosines from -1 to x,
+            shape of x (n, m), at the beam energies T1[index] (n of them); the neutron's CM
+            angle is measured from the beam direction.
+        max_size: Largest number of pieces handled per pass, to bound memory.
+
+    Returns (out, sigma): out with shape (num_rows, angle bins, energy bins), the weighted
+    cross sections, and sigma [b], the production cross section at each beam energy (zero
+    below the threshold). Negative parts of an angular distribution (an imperfect Legendre
+    fit) are set to zero and the rest scaled so that each beam energy still adds up to sigma.
+    """
+    T1 = np.atleast_1d(np.asarray(T1, dtype=float))
+    weights = np.broadcast_to(np.asarray(weights, dtype=float), T1.shape)
+    rows = np.broadcast_to(np.asarray(rows, dtype=int), T1.shape)
+    angle_edges = np.asarray(angle_edges, dtype=float)
+    energy_edges = np.asarray(energy_edges, dtype=float)
+    num_angles, num_energies = len(angle_edges) - 1, len(energy_edges) - 1
+    size = num_rows * num_angles * num_energies
+    out = np.zeros(size)
+    sigma = np.zeros(len(T1))
+    m3 = masses[2]
+    beta, gamma, E3_cm, p3_cm, above = _cm_frame(T1, *masses)
+    index = np.flatnonzero(above & (weights != 0))
+    if len(index) == 0:
+        return out.reshape(num_rows, num_angles, num_energies), sigma
+
+    # Energy bin edges inside each line: k_lo <= k < k_hi
+    low = gamma * (E3_cm - beta * p3_cm) - m3
+    high = gamma * (E3_cm + beta * p3_cm) - m3
+    k_lo = np.searchsorted(energy_edges, low, side="right")
+    k_hi = np.searchsorted(energy_edges, high, side="left")
+    count = np.where(above, np.maximum(k_hi - k_lo, 0), 0)
+    edge_cos = np.cos(np.radians(angle_edges[1:-1]))[None, :]  # Inside 0 to 180
+    s2 = 1 - edge_cos**2
+    columns = 2 + int(count[index].max()) + 2 * edge_cos.shape[1]
+    per_pass = max(1, max_size // columns)
+    for start in range(0, len(index), per_pass):
+        i = index[start : start + per_pass]
+        b, g = beta[i, None], gamma[i, None]
+        E, p = E3_cm[i, None], p3_cm[i, None]
+        a = b * E  # p_parallel = gamma (p x + a), x the CM cosine
+        with np.errstate(invalid="ignore", divide="ignore"):
+            # Energy edges: E_lab = gamma (E + beta p x) is linear in x
+            j = np.arange(int(count[i].max()))[None, :]
+            k = np.minimum(k_lo[i, None] + j, len(energy_edges) - 1)
+            x_energy = ((energy_edges[k] + m3) / g - E) / (b * p)
+            x_energy = np.where(j < count[i, None], x_energy, np.nan)
+            # Angle edges: cos_lab = c gives A x^2 + B x + C = 0 (squared, so keep the roots
+            # that give c itself)
+            A = p**2 * (g**2 * s2 + edge_cos**2)
+            B = 2 * g**2 * p * a * s2
+            C = g**2 * a**2 * s2 - edge_cos**2 * p**2
+            root = np.sqrt(np.clip(B**2 - 4 * A * C, 0, None))
+            x_angle = np.concatenate(((-B - root) / (2 * A), (-B + root) / (2 * A)), axis=1)
+            par = g * (p * x_angle + a)
+            perp = p * np.sqrt(np.clip(1 - x_angle**2, 0, None))
+            cos_lab = par / np.hypot(par, perp)
+            c2 = np.concatenate((edge_cos, edge_cos), axis=1)
+            ok = (np.abs(x_angle) < 1) & (np.abs(cos_lab - c2) < 1e-6)
+            x_angle = np.where(ok, x_angle, np.nan)
+        ends = np.broadcast_to(np.array([-1.0, 1.0]), (len(i), 2))
+        x = np.concatenate((ends, x_energy, x_angle), axis=1)
+        x = np.sort(np.where(np.isfinite(x), x, 1.0), axis=1)  # Unused columns: zero width
+
+        F = cumulative(i, x)
+        total = F[:, -1] - F[:, 0]
+        prob = np.clip(np.diff(F, axis=1), 0, None)
+        kept = prob.sum(axis=1)
+        prob *= np.where(kept > 0, total / np.where(kept > 0, kept, 1), 0)[:, None]
+        sigma[i] = total
+
+        # Each piece lies in one lab bin: bin it at its middle
+        mid = (x[:, :-1] + x[:, 1:]) / 2
+        par = g * (p * mid + a)
+        perp = p * np.sqrt(np.clip(1 - mid**2, 0, None))
+        with np.errstate(invalid="ignore", divide="ignore"):
+            angle = np.degrees(np.arccos(np.clip(par / np.hypot(par, perp), -1, 1)))
+        T3 = g * (E + b * p * mid) - m3
+        ja = np.clip(np.searchsorted(angle_edges, angle, side="right") - 1, 0, num_angles - 1)
+        ke = np.clip(np.searchsorted(energy_edges, T3, side="right") - 1, 0, num_energies - 1)
+        flat = (rows[i, None] * num_angles + ja) * num_energies + ke
+        out += np.bincount(flat.ravel(), (weights[i, None] * prob).ravel(), minlength=size)
+    return out.reshape(num_rows, num_angles, num_energies), sigma
+
+
 # Radius parameter of the Coulomb barrier [fm], and e^2 / (4 pi eps0) [MeV fm]
 R0_COULOMB = 1.3
 E2_COULOMB = 1.439964548

@@ -21,7 +21,8 @@ and handles any light-ion beam on any target that nuclear data cover.
 - **Neutrons:** from the built-in DROSG-2000 reactions D(d,n)³He, T(d,n)⁴He, T(p,n)³He, and
   ⁷Li(p,n)⁷Be, or from any ENDF-6 evaluation (ENDF/B, FENDL, TENDL, etc.), including
   multi-body breakup, converted to the lab frame with relativistic kinematics, on a (position,
-  angle, energy) mesh.
+  angle, energy) mesh. Two-body lines (the DROSG reactions and the discrete levels of an
+  evaluation) are split exactly at the bin edges, so they need no internal angle mesh.
 - **Solving for a setting:** give the beam energy wanted at the backstop, and the code finds
   a region's length, pressure, or density; give the neutron yield wanted, and it finds the
   beam current.

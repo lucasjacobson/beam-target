@@ -38,10 +38,9 @@ SMALL_CASE = dict(
     beam_radius_entry=0.2,
     wall_radius=1.0,
     divergence=[30.0],
-    position_bins=[40],
-    position_bins_out=[10],
-    angle_bin_width=1.0,
-    angle_bin_width_out=10.0,
+    position_bins=[10],
+    position_substeps=[4],
+    angle_bin_width=10.0,
     energy_bin_width=0.01,
 )
 
@@ -55,7 +54,7 @@ REGION_SETTINGS = (
     "wall_radius",
     "divergence",
     "position_bins",
-    "position_bins_out",
+    "position_substeps",
 )
 
 

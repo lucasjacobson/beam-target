@@ -18,7 +18,15 @@ import tomllib
 
 from .config import DROSG, ConfigError, load_config, resolve_nuclear_data
 from .nuclear import BEAM_NAMES, BEAMS, beam_key
-from .source import PHASES, SDEF_DIRECTIONS, STOPPING_POWERS, BeamTarget, Material, Region
+from .source import (
+    PHASES,
+    POSITION_SUBSTEPS,
+    SDEF_DIRECTIONS,
+    STOPPING_POWERS,
+    BeamTarget,
+    Material,
+    Region,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +36,21 @@ CASE_SETTINGS = {
     "regions": list,  # The regions the beam passes through, in order (see REGION_SETTINGS)
     "beam_energy_entry": float,  # Beam energy where it enters the first region [keV]
     "beam_radius_entry": float,  # Beam radius where it enters the first region [cm]
-    "angle_bin_width": float,  # Width of the emission-angle bins [deg] (internal mesh)
-    "angle_bin_width_out": float,  # Width of the emission-angle bins [deg] (output mesh)
+    "angle_bin_width": float,  # Width of the emission-angle bins [deg] (output mesh)
     "energy_bin_width": float,  # Width of the neutron energy bins [MeV] (output mesh)
+}
+
+# Settings that were renamed: old name -> what to do. An error, not a warning: the old
+# angle_bin_width was a fine internal mesh (such as 0.01 deg), which must not be taken for the
+# output bin width.
+RENAMED_SETTINGS = {
+    "angle_bin_width_out": "it is now angle_bin_width; the old angle_bin_width (the internal "
+    "angle mesh) is no longer used, as two-body lines are binned exactly onto the output mesh: "
+    "remove it, then rename angle_bin_width_out to angle_bin_width",
+    "position_bins_out": "it is now position_bins (the output bins), and the internal mesh is "
+    "set by position_substeps (steps per output bin, default 10): remove the old "
+    "position_bins (the internal count), then rename position_bins_out to position_bins and, "
+    "if the old ratio was not 10, set position_substeps to it",
 }
 
 # Beam settings: every case needs exactly one of these (directly or from [defaults]), and
@@ -54,6 +74,9 @@ OPTIONAL_CASE_SETTINGS = {
     # config.py), or directories of evaluated files (relative to the input file's directory).
     # None: the configuration's [defaults] nuclear_data, or ["drosg"].
     "nuclear_data": None,
+    # Steps the beam is followed in across each position bin, for every region that does not
+    # set its own position_substeps
+    "position_substeps": POSITION_SUBSTEPS,
 }
 
 # MCNP SDEF placement: give at most one (with neither, the beam enters at the origin). If a
@@ -73,13 +96,14 @@ PLACEMENT_SETTINGS = {
 REGION_SETTINGS = {
     "material": (str, None),  # Name of the [materials.<name>] table filling the region
     "wall_radius": (float, None),  # Radius of the wall around the region [cm]
-    "position_bins": (int, None),  # Position bins (internal mesh)
-    "position_bins_out": (int, None),  # Position bins (output mesh)
+    "position_bins": (int, None),  # Position bins (output mesh)
     "length": (float, ""),  # Length along the beam [cm]
     "pressure": (float, ""),  # Gas pressure [torr], with temperature
     "temperature": (float, ""),  # Gas temperature [degC], with pressure
     "density": (float, ""),  # Gas density [g/cm3], instead of pressure and temperature
     "divergence": (float, 0.0),  # Beam divergence [mrad]
+    # Steps the beam is followed in across each position bin (the internal mesh)
+    "position_substeps": (int, POSITION_SUBSTEPS),
 }
 
 # Material settings: name -> type. A solid needs atoms and density, a gas molecules (see
@@ -112,6 +136,8 @@ def _check_type(where, key, value, expected):
 
 
 def _check_keys(where, table, allowed, what="setting"):
+    for key in sorted(set(table) & set(RENAMED_SETTINGS)):
+        raise InputError(f"{where}: {key}: {RENAMED_SETTINGS[key]}")
     unknown = sorted(set(table) - set(allowed))
     if unknown:
         raise InputError(f"{where}: unknown {what}(s) {', '.join(unknown)}")
@@ -142,11 +168,14 @@ def _read_material(where, name, table):
         raise InputError(f"{where}: {str(e).split(': ', 1)[-1]}") from None
 
 
-def _make_region(where, settings, materials, name=""):
-    """Validate region settings (a dict) and return the Region."""
+def _make_region(where, settings, materials, name="", substeps=POSITION_SUBSTEPS):
+    """Validate region settings (a dict) and return the Region; substeps is its
+    position_substeps unless it sets its own."""
     _check_keys(where, settings, REGION_SETTINGS)
     values = {}
     for key, (expected, default) in REGION_SETTINGS.items():
+        if key == "position_substeps":
+            default = substeps
         if key not in settings:
             if default is None:
                 raise InputError(f"{where}: missing {key}")
@@ -160,9 +189,10 @@ def _make_region(where, settings, materials, name=""):
     return Region(**values, name=name)
 
 
-def _read_regions(where, items, named, materials):
+def _read_regions(where, items, named, materials, substeps=POSITION_SUBSTEPS):
     """Return the Regions of a case's regions list: names of [regions.<name>] tables, or inline
-    tables (optionally starting from one with use = "<name>")."""
+    tables (optionally starting from one with use = "<name>"). substeps is the case's
+    position_substeps, for the regions that do not set their own."""
     if not items:
         raise InputError(f"{where}: regions must list at least one region")
     regions = []
@@ -171,7 +201,7 @@ def _read_regions(where, items, named, materials):
         if isinstance(item, str):
             if item not in named:
                 raise InputError(f"{here}: no [regions.{item}] table")
-            regions.append(_make_region(f"{here} ({item})", named[item], materials, item))
+            regions.append(_make_region(f"{here} ({item})", named[item], materials, item, substeps))
         elif isinstance(item, dict):
             settings = dict(item)
             base, name = {}, ""
@@ -185,7 +215,7 @@ def _read_regions(where, items, named, materials):
             # false leaves out a setting of the named region (to calculate it, for example)
             merged = {**base, **settings}
             merged = {k: v for k, v in merged.items() if not (v is False and k in base)}
-            regions.append(_make_region(here, merged, materials, name))
+            regions.append(_make_region(here, merged, materials, name, substeps))
         else:
             raise InputError(
                 f"{here}: each region is the name of a [regions.<name>] table or an inline "
@@ -284,7 +314,10 @@ def load_input(path):
             raise InputError(f"{where}: missing {', '.join(missing)}")
         for key, expected in CASE_SETTINGS.items():
             _check_type(where, key, s[key], expected)
-        regions = _read_regions(where, s["regions"], named_regions, materials)
+        _check_type(where, "position_substeps", s["position_substeps"], int)
+        regions = _read_regions(
+            where, s["regions"], named_regions, materials, s["position_substeps"]
+        )
 
         given = [key for key in BEAM_SETTINGS if key in s]
         if len(given) > 1:  # The case's own setting overrides the other from [defaults]
@@ -340,7 +373,6 @@ def load_input(path):
                 "yield_total": rate["yield_total"],
                 "beam_radius_entry": s["beam_radius_entry"],
                 "angle_bin_width": s["angle_bin_width"],
-                "angle_bin_width_out": s["angle_bin_width_out"],
                 "energy_bin_width": s["energy_bin_width"],
                 "stopping_power": s["stopping_power"],
                 "beam_energy_backstop": s["beam_energy_backstop"],
