@@ -133,6 +133,12 @@ including:
   misses channels that an evaluation in your libraries gives (such as FENDL-3.2c's p + ⁷Li
   above 3.7 MeV), a further warning names it and says to list it before `"drosg"`. A beam
   energy beyond the end of a built-in reaction's data is refused.
+- **Position mesh:** the beam is followed in `position_substeps` steps (default 10) across
+  each position bin, and its energy is taken at the middle of each step. A warning names any
+  region where the steps are too long: where the two-body neutron lines of neighboring steps
+  are more than half an energy bin apart (the energy spectrum then shows stripes, most in the
+  first and last angle bins), or where the yield is off by more than 0.1% (estimated with
+  Simpson's rule); it gives the `position_substeps` to use.
 - **Evaluated data** come with their own limitations, including fission (often missing from
   the libraries) and neutrons from secondary charged particles; see the
   [data README](src/beamtarget/data/README.md).

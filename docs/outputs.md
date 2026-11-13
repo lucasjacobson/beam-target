@@ -33,7 +33,7 @@ The complete result, from which the other files can all be remade. Its file attr
 | `name`, `created`, `code_version` | Case name, UTC creation time, and the code version: the git commit (with `-dirty` if there were uncommitted changes) when run from a checkout, otherwise the package version |
 | `input_file` | The input file, when run from one |
 | `direction`, `entry_position`, `backstop_position` | Where the source was placed for the case: the beam direction, and the points where the beam enters and reaches the backstop [cm] |
-| `warnings` | Open neutron channels that were not modeled (empty if none) |
+| `warnings` | Open neutron channels that were not modeled, and regions whose position mesh is too coarse (empty if none) |
 
 Every dataset has a `units` attribute, and those at the top level a `description` too. Arrays
 named `*_grid` hold values at mesh boundaries (one more entry than there are bins); `*_mids`

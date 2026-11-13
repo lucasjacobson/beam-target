@@ -6,7 +6,7 @@ import tomllib
 
 import h5py
 import pytest
-from conftest import EXAMPLE_INPUT
+from conftest import EXAMPLE_INPUT, channel_warnings
 
 from beamtarget import BeamTarget, InputError, load_input, main
 
@@ -453,7 +453,12 @@ def test_main_list(tmp_path, capsys):
 def test_main_default_messages(tmp_path, caplog):
     """By default: a start line, one line per case, and a closing line; no details."""
     main([str(write_input(tmp_path, TWO_CASES)), "-o", str(tmp_path / "out"), "-j", "1"])
-    messages = [r.getMessage() for r in caplog.records]
+    # (The coarse test mesh gets a position-mesh warning, which is not checked here)
+    messages = [
+        r.getMessage()
+        for r in caplog.records
+        if "position mesh is too coarse" not in r.getMessage()
+    ]
     assert messages[0].startswith("Running 2 case(s)")
     assert messages[0].endswith(f"results in {tmp_path / 'out'}{os.sep}")
     assert [m.split(":")[0] for m in messages[1:3]] == ["mix", "pureD"]
@@ -510,7 +515,7 @@ def test_shine_systems_example(name, expected):
     source = BeamTarget(name=name, **s)
     assert source.calculated == "pressure"
     assert source.yield_total == pytest.approx(expected, rel=0.01)
-    assert source.warnings == []
+    assert channel_warnings(source) == []
 
 
 def test_simple_example():

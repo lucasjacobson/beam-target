@@ -4,7 +4,7 @@ import re
 
 import numpy as np
 import pytest
-from conftest import make_source
+from conftest import channel_warnings, make_source
 from numpy.polynomial.legendre import legval
 
 from beamtarget import Material
@@ -78,7 +78,9 @@ def test_lithium_limits():
     """Above 3.70 MeV, 7Li(p,n3He)4He opens: a warning, not an error. Above the end of the
     Legendre data (23 MeV) there is nothing to calculate with: an error."""
     s = make_source(**{**LITHIUM_CASE, "beam_energy_entry": 3700.0})
-    assert len(s.warnings) == 1 and s.warnings[0].startswith("7Li(p,n3He)4He is open")
+    assert len(channel_warnings(s)) == 1 and channel_warnings(s)[0].startswith(
+        "7Li(p,n3He)4He is open"
+    )
     assert s.yield_total > 0
     with pytest.raises(ValueError, match="above the end of the 7Li"):
         make_source(**{**LITHIUM_CASE, "beam_energy_entry": 23500.0})
@@ -102,7 +104,7 @@ def test_unmodelled_channels_warned(energy, expected):
     s = make_source(
         material=_gas("CD4"), beam_energy_entry=energy, position_bins=[2], position_substeps=[2]
     )
-    assert [w.split(" is open")[0] for w in s.warnings] == expected
+    assert [w.split(" is open")[0] for w in channel_warnings(s)] == expected
     assert s.yields["DD"] > 0
     assert "warnings" in s.get_summary()
 
@@ -111,7 +113,7 @@ def test_coulomb_barrier_suppresses_warnings():
     """2% argon at 280 keV: 40Ar(d,n) is exothermic, but the beam is at 6% of the Coulomb
     barrier, so it is negligible and not warned about. At 1 MeV it is."""
     gas = Material("DT_argon", "gas", molecules={"D2": 0.49, "T2": 0.49, "Ar": 0.02})
-    assert make_source(material=gas).warnings == []
+    assert channel_warnings(make_source(material=gas)) == []
     s = make_source(
         material=gas, beam_energy_entry=1000.0, position_bins=[2], position_substeps=[2]
     )
@@ -119,8 +121,7 @@ def test_coulomb_barrier_suppresses_warnings():
 
 
 def test_no_warnings_for_the_small_case(mixed_source):
-    assert mixed_source.warnings == []
-    assert "warnings" not in mixed_source.get_summary()
+    assert channel_warnings(mixed_source) == []
 
 
 def test_overlapping_lines_share_sdef_segments():

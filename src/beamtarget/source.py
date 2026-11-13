@@ -107,6 +107,12 @@ SDEF_RADIUS_DECIMALS = 5
 HDF5_FORMAT_VERSION = 10
 # Internal position steps per output position bin, unless a region gives its own
 POSITION_SUBSTEPS = 10
+# Position-mesh check (see check_position_mesh): warn if two-body lines move more than
+# MESH_LINE_SHIFT energy bins per internal step (median over their neutrons), or if the
+# yield's midpoint-rule error is more than MESH_YIELD_ERROR
+MESH_LINE_SHIFT = 0.5
+MESH_YIELD_ERROR = 1e-3
+MESH_MARGIN = 1.2  # The position_substeps suggested: this much more than the estimate
 
 # Error message when a case produces no neutrons
 NO_NEUTRONS = (
@@ -547,6 +553,22 @@ def _toml_value(value):
     return text if any(c in text for c in ".enai") else text + ".0"
 
 
+def _toml_wrapped(text, width=90, indent="    "):
+    """Format a string as a TOML multi-line basic string wrapped at spaces, each line ending in
+    a backslash (TOML drops it, the line break, and the indentation after it), so that a long
+    text reads back unchanged."""
+    words = text.replace("\\", "\\\\").replace('"', '\\"').split(" ")
+    lines, line = [], words[0]
+    for word in words[1:]:
+        if len(line) + 1 + len(word) > width:
+            lines.append(line + " \\")
+            line = word
+        else:
+            line += " " + word
+    lines.append(line)
+    return '"""' + ("\n" + indent).join(lines) + '"""'
+
+
 def _toml_key(key):
     """Return key as a TOML key: bare if it can be, quoted otherwise."""
     return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else _toml_value(key)
@@ -793,6 +815,7 @@ class BeamTarget:
         self.calculate_beam_current()
         self.calculate_beam_power()
         self.bin_neutrons()
+        self.check_position_mesh()
 
         # Recorded once, so every output of this case has the same creation time
         self.created = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
@@ -1426,6 +1449,7 @@ class BeamTarget:
         else:
             divergence_mids = self.divergence_mids / 1000
         free_radius = self.beam_radius_entry + np.append(0, np.cumsum(divergence_mids * self.dx))
+        self.free_radius_grid = free_radius  # Radius without the walls [cm]
 
         # Wall radius at each grid point: that of the bin ending there, so that the beam
         # scraped off by a narrower wall is scraped (and its power deposited) inside the
@@ -1568,6 +1592,145 @@ class BeamTarget:
                 self.spectra[rxn] = self._endf_spectrum(rxn)
             else:
                 self.spectra[rxn] = self._two_body_spectrum(rxn)
+
+    def _production_at(self, rxn, E):
+        """Return the neutron production cross section [b] of a reaction at lab beam energies
+        E [keV] (array), and its two-body lines as [(masses, cross section [b])]."""
+        reaction = self.reactions[rxn]
+        E = np.asarray(E, dtype=float)
+        if self._is_endf(rxn):
+            production = reaction.production
+            total = np.zeros(len(E))
+            lines = []
+            m1, m2 = BEAMS[self.beam].mass, nuclear_mass(*reaction.target)
+            m_n = nuclear_mass(0, 1)
+            for channel in production.channels:
+                sigma = channel.xs(E * 1e3) * channel.yield_(E * 1e3)  # keV -> eV
+                total += sigma
+                if channel.law == 2:
+                    lines.append(((m1, m2, m_n, m1 + m2 - m_n - channel.q), sigma))
+            return total, lines
+        data = self.xs_data[rxn]
+        E_data = reaction.data_energy(E)
+        total = np.interp(E_data, data["E"], data["total"], left=0, right=np.nan)
+        c0 = np.interp(E_data, data["E"], data["coeffs"][:, 0], left=0, right=np.nan)
+        sigma = np.nan_to_num(4 * np.pi * total * c0)
+        return sigma, [(reaction.masses(), sigma)]
+
+    def check_position_mesh(self):
+        """Warn if the internal position mesh (position_substeps steps per position bin) is
+        too coarse.
+
+        The beam energy is taken at the middle of each internal step, which can cause two
+        errors:
+
+        - Stripes in energy: at one beam energy a two-body reaction gives a line (each
+          emission angle has one neutron energy), so each step adds a sharp line. If the
+          lines of neighboring steps are more than MESH_LINE_SHIFT energy bins apart, the
+          spectrum shows them separately instead of a smooth band, most clearly in the first
+          and last angle bins. For each region and two-body line, the shift per step is the
+          larger change in the line's lowest or highest neutron energy across the step, and
+          a warning is given if its median over the line's neutrons is more than
+          MESH_LINE_SHIFT energy bins. (Measured against much finer meshes, a median of half a
+          bin leaves stripes of a few percent in the first and last angle bins; 3 bins,
+          about 15%; 7 bins, about 40%.)
+        - Yield: each step's neutrons are its length times the cross section at its middle
+          times the average beam left over it, which is inexact if either changes much across
+          the step (such as where the beam edge reaches the wall and scraping starts). The
+          error is estimated against Simpson's rule on each step, with the cross section and
+          the beam left at the step's ends and middle (where the beam left is worked out from
+          the beam radius there); a warning is given if the region's error is more than
+          MESH_YIELD_ERROR of the reaction's yield in the whole case. (Checked against much
+          finer meshes, the estimate is within about a factor of 1.5 of the actual error.)
+
+        Each warning names the position_substeps that would avoid it, from how the errors
+        scale (shifts with the step length, yield errors with its square), with a margin of
+        MESH_MARGIN. Appends to self.warnings.
+        """
+        E_grid = self.beam_energy_grid
+        width = self.energy_bin_width
+        start = np.concatenate(([0], np.cumsum(self.position_bins_internal)))
+        # The beam left at each grid point and at each step's middle (see calculate_scraping)
+        m_grid = np.sqrt(1 - self.scrape_grid)
+        free_mid = (self.free_radius_grid[:-1] + self.free_radius_grid[1:]) / 2
+        m_mid = np.minimum(m_grid[:-1], np.minimum(1.0, self.wall_grid[1:] / free_mid))
+        left_grid = m_grid**2 * self.survival_grid
+        left_mid = m_mid**2 * self.survival_mids
+        # Each reaction's yield over the whole case (per beam particle), which the yield errors
+        # are compared with
+        case_total = {
+            rxn: np.sum(
+                self.target_density_mids[rxn]
+                * self.dx
+                * self.beam_fraction_mids
+                * self._production_at(rxn, self.beam_energy_mids)[0]
+            )
+            for rxn in self.reactions
+        }
+        for r in range(self.num_regions):
+            steps = slice(start[r], start[r + 1])
+            grid = slice(start[r], start[r + 1] + 1)
+            substeps = self.position_substeps[r]
+            needed = substeps
+            details = []
+            for rxn, reaction in self.reactions.items():
+                weight = (
+                    self.target_density_mids[rxn][steps]
+                    * self.dx[steps]
+                    * self.beam_fraction_mids[steps]
+                )
+                if not np.any(weight > 0):
+                    continue
+                at_mids, lines = self._production_at(rxn, self.beam_energy_mids[steps])
+                at_grid, _ = self._production_at(rxn, E_grid[grid])
+                total = np.sum(weight * at_mids)
+                if total <= 0:
+                    continue
+                problems = []
+
+                # Yield: the sum used against Simpson's rule
+                n_dx = self.target_density_mids[rxn][steps] * self.dx[steps]
+                f_grid = at_grid * left_grid[grid]
+                simpson = np.sum(
+                    n_dx * (f_grid[:-1] + 4 * at_mids * left_mid[steps] + f_grid[1:]) / 6
+                )
+                error = abs(total - simpson) / case_total[rxn]
+                if error > MESH_YIELD_ERROR:
+                    factor = np.sqrt(error / MESH_YIELD_ERROR)
+                    needed = max(needed, int(np.ceil(MESH_MARGIN * substeps * factor)))
+                    problems.append(f"the case's yield off by about {error:.1%}")
+
+                # Stripes: how far each line moves across a step (median over its neutrons)
+                worst = 0.0
+                for masses, sigma in lines:
+                    produced = weight * sigma
+                    if np.sum(produced) <= 0:
+                        continue
+                    low, high = two_body_energy_range(E_grid[grid] / 1000, *masses)
+                    with np.errstate(invalid="ignore"):
+                        shift = np.fmax(np.abs(np.diff(low)), np.abs(np.diff(high)))
+                    shift = np.where(np.isfinite(shift), shift, 0.0)
+                    order = np.argsort(shift)
+                    share = np.cumsum(produced[order]) / np.sum(produced)
+                    worst = max(
+                        worst, shift[order[min(np.searchsorted(share, 0.5), len(order) - 1)]]
+                    )
+                if worst > MESH_LINE_SHIFT * width:
+                    factor = worst / (MESH_LINE_SHIFT * width)
+                    needed = max(needed, int(np.ceil(MESH_MARGIN * substeps * factor)))
+                    problems.append(
+                        f"neutron lines move {worst / width:.2g} energy bins per step, so the "
+                        "energy spectrum can show stripes"
+                    )
+                if problems:
+                    details.append(f"{reaction.label}: " + ", ".join(problems))
+            if details:
+                message = (
+                    f"{self.region_label(r)}: the position mesh is too coarse "
+                    f"(position_substeps = {substeps}); use {needed} or more. " + "; ".join(details)
+                )
+                self.warnings.append(message)
+                logger.warning(f"{self.name}: warning: {message}")
 
     def _output_position_index(self):
         """Return the output position bin of each internal position bin."""
@@ -1912,7 +2075,7 @@ class BeamTarget:
             hf.attrs["name"] = self.name
             hf.attrs["code_version"] = get_code_version()
             hf.attrs["created"] = self.created
-            hf.attrs["warnings"] = self.warnings  # Open neutron channels not modeled
+            hf.attrs["warnings"] = self.warnings  # See check_channels and check_position_mesh
             hf.attrs["direction"] = direction
             hf.attrs["entry_position"] = entry
             hf.attrs["backstop_position"] = backstop
@@ -2331,11 +2494,7 @@ class BeamTarget:
                 ("created", self.created, ""),  # ISO 8601 with "+00:00": UTC
             ]
             + [(name, value, "") for name, value in (run_info or {}).items()]
-            + (
-                [("warnings", self.warnings, "open neutron channels not modeled")]
-                if self.warnings
-                else []
-            ),
+            + ([("warnings", self.warnings, "")] if self.warnings else []),
             "inputs": self.get_inputs(),
             "results": self.get_results(),
         }
@@ -2346,6 +2505,11 @@ class BeamTarget:
         for i, (section, entries) in enumerate(sections.items()):
             s += ("\n" if i else "") + f"[{section}]\n"
             for name, value, comment in entries:
+                if name == "warnings":  # Long texts: one per line, wrapped
+                    s += f"{name:<{key_width}} = [\n"
+                    s += "".join(f"    {_toml_wrapped(w, indent='    ')},\n" for w in value)
+                    s += "]\n"
+                    continue
                 text = f"{name:<{key_width}} = {_toml_value(value)}"
                 s += f"{text:<{comment_column}} # {comment}\n" if comment else text + "\n"
         for material in self.unique_materials():

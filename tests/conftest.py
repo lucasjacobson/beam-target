@@ -58,6 +58,12 @@ REGION_SETTINGS = (
 )
 
 
+def channel_warnings(source):
+    """The warnings of a case other than the position-mesh one (see
+    BeamTarget.check_position_mesh), for tests that use coarse meshes for speed."""
+    return [w for w in source.warnings if "position mesh is too coarse" not in w]
+
+
 def make_regions(settings):
     """Split per-region settings (lists, or scalars for every region) into Regions."""
     n = len(settings["length"]) if isinstance(settings["length"], list) else 1

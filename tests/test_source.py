@@ -6,7 +6,7 @@ import tomllib
 import h5py
 import numpy as np
 import pytest
-from conftest import SMALL_CASE, make_source
+from conftest import SMALL_CASE, channel_warnings, make_source
 
 from beamtarget.nuclear import REACTIONS
 from beamtarget.source import HDF5_FORMAT_VERSION, SDEF_RADIUS_DECIMALS, _plot_label
@@ -335,12 +335,37 @@ def test_voltage_limit_accepted():
     """Up to where the next DT channel opens there is no warning; above, a warning (in the
     summary and the HDF5 file too), but the case runs."""
     assert (
-        make_source(beam_energy_entry=MAX_ENERGY, position_bins=[1], position_substeps=[2]).warnings
+        channel_warnings(
+            make_source(beam_energy_entry=MAX_ENERGY, position_bins=[1], position_substeps=[2])
+        )
         == []
     )
     s = make_source(beam_energy_entry=MAX_ENERGY + 1, position_bins=[1], position_substeps=[2])
-    assert [w.split(" is open")[0] for w in s.warnings] == ["T(d,np)T"]
+    assert [w.split(" is open")[0] for w in channel_warnings(s)] == ["T(d,np)T"]
     assert tomllib.loads(s.get_summary())["run"]["warnings"] == s.warnings
+
+
+def test_coarse_position_mesh_warned():
+    """A position mesh that is too coarse is warned about, with the yield error it causes
+    (about right, against a fine mesh) and a position_substeps that removes the warning."""
+    coarse = make_source(position_bins=[1], position_substeps=[3])
+    (message,) = [w for w in coarse.warnings if "position mesh is too coarse" in w]
+    assert message.startswith("region 1 (D/T gas): the position mesh is too coarse")
+    assert "stripes" in message
+    needed = int(re.search(r"use (\d+) or more", message).group(1))
+    assert make_source(position_bins=[1], position_substeps=[needed]).warnings == []
+    reference = make_source(position_bins=[1], position_substeps=[400])
+    for label, rxn in (("D(d,n)3He", "DD"), ("T(d,n)4He", "DT")):
+        found = re.search(re.escape(label) + r": the case's yield off by about ([\d.]+)%", message)
+        estimate = float(found.group(1)) / 100
+        actual = abs(coarse.yields[rxn] / reference.yields[rxn] - 1)
+        assert actual / 2 < estimate < actual * 2
+
+
+def test_fine_position_mesh_not_warned():
+    """The example cases' meshes (10 steps per position bin) are fine enough."""
+    s = make_source(position_bins=[50], position_substeps=[10])
+    assert s.warnings == []
 
 
 def test_warnings_in_hdf5(tmp_path):

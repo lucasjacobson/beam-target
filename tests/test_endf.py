@@ -7,6 +7,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
+from conftest import channel_warnings
 
 from beamtarget import BeamTarget, Material, Region, endf, load_input
 from beamtarget.endf import (
@@ -243,7 +244,7 @@ def test_protons_on_thick_be_match_mcnp(energy):
     assert s.beam_energy_grid[-1] == 0  # The beam stops in the target
     assert s.yield_total / s.particle_rate == pytest.approx(MCNP_PROTONS[energy], rel=0.01)
     assert s.reaction_data["p9Be_xn"].startswith("ENDF/B-VIII.1")
-    assert s.warnings == []
+    assert channel_warnings(s) == []
 
 
 @pytest.mark.parametrize("energy", list(MCNP_ALPHAS))
@@ -253,7 +254,7 @@ def test_alphas_fall_through_to_tendl_and_match_mcnp(energy):
     assert s.beam_energy_grid[-1] == 0
     assert s.reaction_data["a9Be_xn"].startswith("TENDL-2021")
     assert s.yield_total / s.particle_rate == pytest.approx(MCNP_ALPHAS[energy], rel=0.02)
-    assert s.warnings == []
+    assert channel_warnings(s) == []
 
 
 def test_no_evaluation_reaching_the_beam_energy():
