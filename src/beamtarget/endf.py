@@ -41,6 +41,7 @@ import numba
 import numpy as np
 
 from .nuclear import BEAMS, atom_name, bin_two_body, cm_to_lab, nuclear_mass
+from .parallel import in_parallel, threads_set
 
 # ENDF sub-library number (NSUB) of each beam particle's incident data
 NSUB_BEAMS = {10010: "p", 10020: "d", 10030: "t", 20030: "h", 20040: "a"}
@@ -298,6 +299,42 @@ def _cm_energy_step(beta, angle_bin, energy_bin):
 
 
 @numba.njit(cache=True, nogil=True)
+def _integrals_over_bins_all(x, y, starts, histogram, scale, edges):
+    """Integrals of tabulated densities f(e) [1/MeV] (histogram, or linear between points)
+    over the bins between edges [MeV], for many spectra at once (flattened, see
+    _LabTable.flat), with their energies multiplied by scale and densities divided by it:
+    exact, with the parts outside the edges added to the first and last bins. Returns an
+    array (spectra, bins)."""
+    n_bins = len(edges) - 1
+    out = np.zeros((len(starts) - 1, n_bins))
+    F = np.empty(len(edges))
+    for s in range(len(starts) - 1):
+        a, b = starts[s], starts[s + 1]
+        e = x[a:b] * scale
+        f = y[a:b] / scale
+        n = b - a
+        cum = np.zeros(n)
+        for i in range(n - 1):
+            w = e[i + 1] - e[i]
+            cum[i + 1] = cum[i] + (f[i] * w if histogram[s] else 0.5 * (f[i] + f[i + 1]) * w)
+        for k in range(len(edges)):
+            xk = min(max(edges[k], e[0]), e[-1])
+            i = min(max(np.searchsorted(e, xk, "right") - 1, 0), n - 2)
+            t = xk - e[i]
+            if histogram[s]:
+                F[k] = cum[i] + f[i] * t
+            else:
+                w = e[i + 1] - e[i]
+                slope = (f[i + 1] - f[i]) / w if w > 0 else 0.0
+                F[k] = cum[i] + f[i] * t + 0.5 * slope * t * t
+        for k in range(n_bins):
+            out[s, k] = F[k + 1] - F[k]
+        out[s, 0] += F[0]  # Below the first edge
+        out[s, n_bins - 1] += cum[n - 1] - F[len(edges) - 1]  # Above the last edge
+    return out
+
+
+@numba.njit(cache=True, nogil=True)
 def _bin_cm_pieces(
     out, Eb, lo, hi, prob, interval, energies, f0, lep, mu_mid, sin_mid, beta, gamma,
     E_c, two_a, floor, half_bin, max_pieces, angle_edges, angle_step, e0, inv_width,
@@ -409,6 +446,51 @@ class _LabTable:
     @property
     def top(self):
         return max(s.x[-1] for s in self.spectra)
+
+    def angle_weights(self, angle_edges, num_angles):
+        """Matrix (output angle bins, tabulated cosines): the weight of each tabulated
+        spectrum in each lab angle bin, with the density linear in the cosine between
+        tabulated cosines (INT=2). A cell between cosines mu_k and mu_k+1 holds (1 - t) of the
+        spectrum at mu_k and t of the one at mu_k+1, integrated over the cell; the cells are
+        split at the bin edges, so each lies in one bin. It depends only on the cosines and
+        the bins, so it is kept for each set of bins."""
+        key = np.asarray(angle_edges, float).tobytes()
+        cache = self.__dict__.setdefault("_angle_weights", {})
+        if key not in cache:
+            edge_angles = np.radians(angle_edges)
+            weights = np.zeros((num_angles, len(self.cosines)))
+            mu = self.cosines
+            for i in range(len(mu) - 1):
+                a, b = mu[i], mu[i + 1]
+                if b <= a:
+                    continue
+                theta_a, theta_b = np.arccos(a), np.arccos(b)  # theta_a > theta_b
+                inside = edge_angles[(edge_angles > theta_b) & (edge_angles < theta_a)]
+                thetas = np.concatenate(([theta_a], np.sort(inside)[::-1], [theta_b]))
+                cell_mu = np.cos(thetas)  # Increasing
+                lo, hi = cell_mu[:-1], cell_mu[1:]
+                # Integrals over the cell of (1 - t) and t, with t = (mu - a) / (b - a)
+                t_int = ((hi - a) ** 2 - (lo - a) ** 2) / (2 * (b - a))
+                mid = np.degrees(np.arccos(0.5 * (lo + hi)))
+                j = np.searchsorted(angle_edges, mid, side="right") - 1
+                j = np.clip(j, 0, num_angles - 1)
+                np.add.at(weights[:, i], j, (hi - lo) - t_int)
+                np.add.at(weights[:, i + 1], j, t_int)
+            cache[key] = weights
+        return cache[key]
+
+    def flat(self):
+        """The spectra as flat arrays, for compiled code: (energies [MeV], densities, start of
+        each spectrum in them (and the end), whether each is a histogram)."""
+        if not hasattr(self, "_flat"):
+            starts = np.concatenate(([0], np.cumsum([len(s.x) for s in self.spectra])))
+            self._flat = (
+                np.concatenate([np.asarray(s.x, float) for s in self.spectra]),
+                np.concatenate([np.asarray(s.y, float) for s in self.spectra]),
+                starts.astype(np.int64),
+                np.array([set(s.codes) == {1} for s in self.spectra]),
+            )
+        return self._flat
 
 
 class _Channel:
@@ -704,6 +786,7 @@ class NeutronProduction:
         max_step=None,
         two_body=True,
         laws=None,
+        cache=None,
     ):
         """Return the neutron production cross section [b] in each (lab angle, lab energy)
         bin at beam energy E [MeV], and the total [b].
@@ -719,6 +802,9 @@ class NeutronProduction:
             two_body: Include the two-body (LAW=2) channels; leave them out to calculate
                 them separately with two_body_spectrum.
             laws: Only the other channels with these LAW numbers (default: all of them).
+            cache: A dict kept between calls for the same mesh (such as the beam energies of
+                one case), holding lab-frame tables (LAW=7) already binned on the mesh: they
+                do not depend on the beam energy, so each is binned once.
 
         Each piece of each distribution (outgoing energy, angle cell) is converted to the
         lab (boosted from the center of mass of beam + target with relativistic kinematics,
@@ -751,7 +837,7 @@ class NeutronProduction:
                     continue
                 w = sigma * weight
                 if channel.law == 7:
-                    out += self._bin_lab_table(dist, scale, w, max_step, grid)
+                    out += self._bin_lab_table(dist, scale, w, grid, cache)
                 else:
                     out += self._bin_continuum(
                         dist,
@@ -774,6 +860,33 @@ class NeutronProduction:
         return out, total
 
     def two_body_spectrum(self, E, weights, rows, num_rows, angle_edges, energy_edges):
+        """Bin the neutrons of the two-body (LAW=2) channels (see _two_body_rows), sharing the
+        output position rows out between threads (see parallel.set_parallel): each thread
+        fills its own block of rows, so the results do not depend on the threads."""
+        E = np.atleast_1d(np.asarray(E, dtype=float))
+        weights = np.broadcast_to(np.asarray(weights, dtype=float), E.shape)
+        rows = np.broadcast_to(np.asarray(rows, dtype=int), E.shape)
+        shape = (num_rows, len(angle_edges) - 1, len(energy_edges) - 1)
+        # One block per thread, at most 8: numpy holds the GIL for part of the work, so more
+        # (smaller) blocks only contend (measured: 0.4 s at 4-8 blocks, 0.9 s at 64)
+        blocks = np.array_split(np.arange(num_rows), max(1, min(num_rows, threads_set(), 8)))
+        blocks = [b for b in blocks if len(b)]
+
+        def block(rows_in):
+            first, last = rows_in[0], rows_in[-1] + 1
+            sel = np.flatnonzero((rows >= first) & (rows < last))
+            return sel, self._two_body_rows(
+                E[sel], weights[sel], rows[sel] - first, last - first, angle_edges, energy_edges
+            )
+
+        out = np.zeros(shape)
+        sigma = np.zeros(len(E))
+        for rows_in, (sel, (part, s)) in zip(blocks, in_parallel(block, blocks)):
+            out[rows_in[0] : rows_in[-1] + 1] = part
+            sigma[sel] = s
+        return out, sigma
+
+    def _two_body_rows(self, E, weights, rows, num_rows, angle_edges, energy_edges):
         """Bin the neutrons of the two-body (LAW=2) channels at many beam energies at once,
         each with its own kinematics: no interpolation between beam energies, so the sharp
         line each level makes at one beam energy is smeared exactly as the beam slows down.
@@ -886,7 +999,7 @@ class NeutronProduction:
         )  # fmt: skip
         return out
 
-    def _bin_lab_table(self, dist, scale, w, max_step, grid):
+    def _bin_lab_table(self, dist, scale, w, grid, cache=None):
         """Bin a LAW=7 distribution (weight w [b]) into the lab bins. Between tabulated
         cosines the density is linear in the cosine (INT=2): a cosine cell between mu_k and
         mu_k+1 holds (1 - t) of the spectrum at mu_k and t of the one at mu_k+1, integrated
@@ -894,40 +1007,24 @@ class NeutronProduction:
         output angle-bin edges, so each lies in one output bin and the integral over each bin
         is exact. (Cells of a fixed width, placed by their midpoints, gave some bins one cell
         more than their neighbors: a regular stripe of up to 25% in the angular distribution.)"""
+        key = id(dist)
+        if cache is not None and scale == 1.0 and key in cache:
+            return cache[key][1] * w
+        table = self._lab_table_on_mesh(dist, scale, grid)
+        if cache is not None and scale == 1.0:
+            cache[key] = (dist, table)  # dist kept, so its id is not reused
+        return table * w
+
+    @staticmethod
+    def _lab_table_on_mesh(dist, scale, grid):
+        """A LAW=7 distribution binned on the lab mesh (see _bin_lab_table), normalized to 1."""
         angle_edges, energy_edges, width, shape = grid
-        edge_angles = np.radians(angle_edges)
-        spectra = []
-        for s in dist.spectra:  # Each spectrum in the lab energy bins (unnormalized)
-            e = s.x * scale
-            f = s.y / scale
-            lep = 1 if set(s.codes) == {1} else 2  # Histogram (INT=1) or linear (INT=2)
-            Eb, p, _ = _energy_points(e, f, lep, max_step)
-            if lep == 1:
-                norm = np.sum(f[:-1] * np.diff(e))
-            else:
-                norm = np.sum(0.5 * (f[1:] + f[:-1]) * np.diff(e))
-            k = np.clip(np.floor((Eb - energy_edges[0]) / width).astype(int), 0, shape[1] - 1)
-            spectra.append(np.bincount(k, p * norm, minlength=shape[1]))
-        out = np.zeros(shape)
-        mu = dist.cosines
-        for i in range(len(mu) - 1):
-            a, b = mu[i], mu[i + 1]
-            if b <= a:
-                continue
-            theta_a, theta_b = np.arccos(a), np.arccos(b)  # theta_a > theta_b
-            inside = edge_angles[(edge_angles > theta_b) & (edge_angles < theta_a)]
-            thetas = np.concatenate(([theta_a], np.sort(inside)[::-1], [theta_b]))
-            cell_mu = np.cos(thetas)  # Increasing
-            lo, hi = cell_mu[:-1], cell_mu[1:]
-            # Integrals over the cell of (1 - t) and t, with t = (mu - a) / (b - a)
-            t_int = ((hi - a) ** 2 - (lo - a) ** 2) / (2 * (b - a))
-            one_minus = (hi - lo) - t_int
-            mid = np.degrees(np.arccos(0.5 * (lo + hi)))
-            j = np.clip(np.searchsorted(angle_edges, mid, side="right") - 1, 0, shape[0] - 1)
-            for jj, wa, wb in zip(j, one_minus, t_int):
-                out[jj] += wa * spectra[i] + wb * spectra[i + 1]
+        # Each spectrum integrated exactly over the lab energy bins (unnormalized): lab
+        # energies need no pieces, so no max_step
+        spectra = _integrals_over_bins_all(*dist.flat(), scale, np.asarray(energy_edges, float))
+        out = dist.angle_weights(angle_edges, shape[0]) @ spectra
         total = out.sum()
-        return out * (w / total) if total > 0 else out
+        return out / total if total > 0 else out
 
     def _angular_cells(self, dist, index, Eb, E, mu_edges):
         """Return the probability of each CM angle cell (between mu_edges, decreasing) for

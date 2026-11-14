@@ -18,6 +18,7 @@ import tomllib
 
 from .config import DROSG, ConfigError, load_config, resolve_nuclear_data
 from .nuclear import BEAM_NAMES, BEAMS, beam_key
+from .parallel import set_parallel
 from .source import (
     PHASES,
     POSITION_SUBSTEPS,
@@ -26,7 +27,6 @@ from .source import (
     BeamTarget,
     Material,
     Region,
-    set_parallel,
 )
 
 logger = logging.getLogger(__name__)
@@ -397,11 +397,11 @@ def setup_logging(verbose=False):
         package_logger.addHandler(handler)
 
 
-def run_case(name, settings, output_dir="output", input_file=None, name_width=0):
+def run_case(name, settings, output_dir="output", input_file=None, name_width=0, plots=True):
     """Calculate one case from load_input() and write its outputs to <output_dir>/<name>/.
 
-    Writes source.h5, source.sdef, summary.toml, the profiles, and plots/*.png (see
-    docs/outputs.md), and returns the BeamTarget. input_file, if given, is recorded in the
+    Writes source.h5, source.sdef, summary.toml, the profiles, and (unless plots is False)
+    plots/*.png (see docs/outputs.md), and returns the BeamTarget. input_file, if given, is recorded in the
     summary and the SDEF header. The case's result line pads its name to name_width
     characters (the longest name of the run), so the lines line up.
     """
@@ -426,7 +426,8 @@ def run_case(name, settings, output_dir="output", input_file=None, name_width=0)
     )
     source.write_hdf5(os.path.join(case_dir, "source.h5"), run_info, direction, entry)
     source.write_mcnp_sdef(os.path.join(case_dir, "source.sdef"), direction, run_info, entry)
-    source.make_plots(os.path.join(case_dir, "plots"))
+    if plots:
+        source.make_plots(os.path.join(case_dir, "plots"))
     sdef_info = {
         "sdef_direction": direction,
         "sdef_entry_position": entry,
@@ -444,7 +445,7 @@ def run_case(name, settings, output_dir="output", input_file=None, name_width=0)
 
 def _start_worker(verbose, cores, tokens):
     """Set up a worker process: logging, and up to cores threads within each case, sharing
-    the cores with the other workers through tokens (see source.set_parallel)."""
+    the cores with the other workers through tokens (see parallel.set_parallel)."""
     setup_logging(verbose)
     set_parallel(cores, tokens)
 
@@ -497,6 +498,9 @@ def main(argv=None):
         action="store_true",
         help="also show each case's settings and detailed results",
     )
+    parser.add_argument(
+        "--no-plots", action="store_true", help="skip the plots (about 2 s per case)"
+    )
     parser.add_argument("--list", action="store_true", help="list the cases and exit")
     args = parser.parse_args(argv)
 
@@ -525,8 +529,11 @@ def main(argv=None):
     # The likely slowest first, so that none starts last and holds up the end
     order = sorted(cases, key=lambda name: -_expected_cost(cases[name]))
     if processes > 1:
-        work = [(name, cases[name], args.output_dir, args.input, width) for name in order]
-        # One token per core, shared by the workers (see source.set_parallel). Each worker
+        work = [
+            (name, cases[name], args.output_dir, args.input, width, not args.no_plots)
+            for name in order
+        ]
+        # One token per core, shared by the workers (see parallel.set_parallel). Each worker
         # sets up logging; close() and join() let workers exit normally (the context manager
         # alone would terminate them, which can lose their last output)
         tokens = mp.Semaphore(cores)
@@ -539,5 +546,5 @@ def main(argv=None):
     else:
         set_parallel(cores)
         for name in order:
-            run_case(name, cases[name], args.output_dir, args.input, width)
+            run_case(name, cases[name], args.output_dir, args.input, width, not args.no_plots)
     logger.info(f"Done: {len(cases)} case(s) in {time.time() - t0:.1f} s")

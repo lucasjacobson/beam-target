@@ -438,6 +438,12 @@ def test_entry_position_reaches_sdef(tmp_path):
         assert tomllib.load(f)["run"]["sdef_entry_position"] == [5.0, 0.0, 10.5]
 
 
+def test_main_without_plots(tmp_path):
+    out = tmp_path / "out"
+    main([str(write_input(tmp_path, TWO_CASES)), "-o", str(out), "-c", "mix", "--no-plots"])
+    assert (out / "mix" / "source.h5").is_file() and not (out / "mix" / "plots").exists()
+
+
 def test_main_selected_case_in_parallel(tmp_path):
     path = write_input(tmp_path, TWO_CASES)
     out = tmp_path / "out"

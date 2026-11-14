@@ -15,6 +15,7 @@ logging is configured (the command line shows it; see setup_logging).
 import logging
 
 from .cli import InputError, load_input, main, run_case, setup_logging
+from .parallel import set_parallel
 from .source import (
     BeamTarget,
     Material,
@@ -24,7 +25,6 @@ from .source import (
     get_code_version,
     get_package_version,
     parse_formula,
-    set_parallel,
 )
 
 __version__ = get_package_version()

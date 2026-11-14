@@ -637,3 +637,23 @@ def test_fission_warning_for_an_evaluation_without_fission():
     s = uranium_source("deuteron", 30.0, {"238U": 1}, [FENDL_D])
     [message] = fission_warnings(s)
     assert "d_9237_92-U-238.endf" in message and "no fission (MT=18)" in message
+
+
+@pytest.mark.parametrize("histogram", [True, False])
+def test_spectra_integrated_exactly_over_bins(histogram):
+    """A tabulated spectrum integrated over energy bins equals the limit of ever narrower
+    pieces placed at their middles, and keeps the whole integral (the parts outside the
+    bins going to the end bins)."""
+    e = np.array([0.0, 0.3, 0.31, 1.7, 2.6, 4.0])
+    f = np.array([0.0, 5.0, 0.2, 1.0, 3.0, 0.0])
+    edges = np.arange(0.5, 3.6, 0.25)
+    starts = np.array([0, len(e)])
+    exact = endf._integrals_over_bins_all(e, f, starts, np.array([histogram]), 1.0, edges)[0]
+    Eb, p, _ = endf._energy_points(e, f, 1 if histogram else 2, 1e-5)
+    total = (
+        np.sum(f[:-1] * np.diff(e)) if histogram else np.sum(0.5 * (f[1:] + f[:-1]) * np.diff(e))
+    )
+    k = np.clip(np.floor((Eb - edges[0]) / 0.25).astype(int), 0, len(edges) - 2)
+    pieces = np.bincount(k, p * total, minlength=len(edges) - 1)
+    np.testing.assert_allclose(exact, pieces, rtol=1e-4, atol=1e-9)
+    assert exact.sum() == pytest.approx(total, rel=1e-12)

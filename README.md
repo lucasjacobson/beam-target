@@ -48,7 +48,8 @@ runs the case in `examples/simple.toml` and writes its results to `output/DT90/`
 works as `python -m beamtarget`. Options: `-c NAME` runs one case, `-o DIR` sets the
 output directory, `-j N` sets the number of CPU cores to use (default: all; cases run in
 parallel and share them, and a long case takes over the cores of those that finish), `--list`
-lists the cases, and `-v` shows more detail.
+lists the cases, `--no-plots` skips the plots (about 2 s per case), and `-v` shows more
+detail.
 
     python -m beamtarget.view output/DT90/source.h5
 

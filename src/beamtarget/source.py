@@ -45,6 +45,7 @@ import textwrap
 import time
 
 import h5py
+import numba
 import numpy as np
 
 from .config import DROSG, ConfigError, load_config, resolve_nuclear_data
@@ -65,6 +66,7 @@ from .nuclear import (
     parse_atom,
     two_body_energy_range,
 )
+from .parallel import in_parallel
 
 PACKAGE_NAME = "beam-target"
 logger = logging.getLogger(__name__)
@@ -430,15 +432,37 @@ def slow_down(E0, stopping_E, stopping_eps, atom_density, dx):
     stopping-power table; atom_density [1/cm^3] and dx [cm] are per bin. The energy loss in
     each bin uses the stopping power at the bin's average energy, found by fixed-point
     iteration. If the beam stops or leaves the stopping-power table, the remaining energies
-    are zero. The result has len(dx) + 1 entries.
+    are zero. The result has len(dx) + 1 entries. (Compiled: solve_region calls it many
+    times.)
     """
+    as_array = lambda a: np.ascontiguousarray(a, dtype=float)  # noqa: E731
+    return _slow_down(
+        float(E0), as_array(stopping_E), as_array(stopping_eps), as_array(atom_density),
+        as_array(dx),
+    )  # fmt: skip
+
+
+@numba.njit(cache=True)
+def _interp_or_nan(x, xp, fp):
+    """np.interp(x, xp, fp, left=nan, right=nan) for one x."""
+    if not (xp[0] <= x <= xp[-1]):  # Also NaN
+        return np.nan
+    i = np.searchsorted(xp, x, "right") - 1
+    if i >= len(xp) - 1:
+        return fp[-1]
+    return fp[i] + (x - xp[i]) * (fp[i + 1] - fp[i]) / (xp[i + 1] - xp[i])
+
+
+@numba.njit(cache=True)
+def _slow_down(E0, stopping_E, stopping_eps, atom_density, dx):
     grid = np.zeros(len(dx) + 1)
     grid[0] = E0
     for i in range(len(dx)):
         E_start = grid[i]
         E_avg = grid[i]
+        E_end = np.nan
         for _ in range(5):
-            eps = np.interp(E_avg, stopping_E, stopping_eps, left=np.nan, right=np.nan)
+            eps = _interp_or_nan(E_avg, stopping_E, stopping_eps)
             E_end = E_start - eps * atom_density[i] * dx[i]
             E_avg = (E_start + E_end) / 2
         if np.isnan(E_end) or E_end < 0:
@@ -835,43 +859,6 @@ def _save_figure(fig, fname, close=True):
     fig.savefig(fname)
     if close:
         _pyplot().close(fig)
-
-
-# Threads for the work within a case, and an optional semaphore shared between processes that
-# limits how many such tasks run at once across them (see set_parallel)
-_PARALLEL = {"threads": 1, "tokens": None}
-
-
-def set_parallel(threads=1, tokens=None):
-    """Use up to threads threads (in this process) for the work within each case that can be
-    shared out: the spectra of evaluated continua at their beam energies, each computed in
-    compiled code that runs in parallel. tokens, if given, is a semaphore shared between
-    processes (multiprocessing.Semaphore) with one token per core: each task holds one while
-    it runs, so that processes running several cases at once share the cores between them,
-    and a case still running when others finish takes over their cores. Results do not
-    depend on these settings."""
-    _PARALLEL["threads"] = max(1, int(threads))
-    _PARALLEL["tokens"] = tokens
-
-
-def _in_parallel(function, items):
-    """Return function(item) for each of items, in order, using the threads and the tokens
-    set with set_parallel."""
-    tokens = _PARALLEL["tokens"]
-
-    def task(item):
-        if tokens is None:
-            return function(item)
-        with tokens:
-            return function(item)
-
-    threads = min(_PARALLEL["threads"], len(items))
-    if threads <= 1:
-        return [task(item) for item in items]
-    from concurrent.futures import ThreadPoolExecutor
-
-    with ThreadPoolExecutor(threads) as executor:
-        return list(executor.map(task, items))
 
 
 class BeamTarget:
@@ -2117,7 +2104,9 @@ class BeamTarget:
                 if np.any((k == j) & (t < 1)) or np.any((k1 == j) & (k1 != k) & (t > 0))
             ]
 
-            def spectrum_at(j, group=group):
+            binned = {}  # Lab-frame tables binned on this mesh, shared by the beam energies
+
+            def spectrum_at(j, group=group, binned=binned):
                 return production.lab_spectrum(
                     energies[j],
                     self.angle_grid_out,
@@ -2125,10 +2114,11 @@ class BeamTarget:
                     num_cm_angles=num_cm_angles,
                     two_body=False,
                     laws=group,
+                    cache=binned,
                 )
 
             # In order, so the sums do not depend on how the work is shared out
-            for j, (spectrum, totals[j]) in zip(needed, _in_parallel(spectrum_at, needed)):
+            for j, (spectrum, totals[j]) in zip(needed, in_parallel(spectrum_at, needed)):
                 weight = np.where(k == j, 1 - t, 0.0) + np.where((k1 == j) & (k1 != k), t, 0.0)
                 use = weight > 0
                 by_row = np.bincount(
@@ -2344,7 +2334,11 @@ class BeamTarget:
                 g.attrs["isotopes"] = [atom_name(Z, A) for Z, A in material.isotope_fractions]
                 g.attrs["isotope_fractions"] = list(material.isotope_fractions.values())
             for key, data, units, description in datasets:
-                hf.create_dataset(key, data=data, compression="gzip")
+                # gzip level 1 with shuffle: readable everywhere, and smaller and faster to
+                # write than the default level 4 (measured: 0.8 against 1.4 s for 100 MB)
+                hf.create_dataset(
+                    key, data=data, compression="gzip", compression_opts=1, shuffle=True
+                )
                 hf[key].attrs["units"] = units
                 hf[key].attrs["description"] = description
             for rxn, reaction in self.reactions.items():
