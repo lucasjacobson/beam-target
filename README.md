@@ -48,6 +48,11 @@ works as `python -m beamtarget`. Options: `-c NAME` runs one case, `-o DIR` sets
 output directory, `-j N` sets the number of cases run in parallel, `--list` lists the cases,
 and `-v` shows more detail.
 
+    python -m beamtarget.view output/DT90/source.h5
+
+opens the energy-angle surface plots of a case in windows, to turn them around with the
+mouse (`--energy LOW HIGH` shows only those neutron energies [MeV]).
+
 From Python:
 
 ```python

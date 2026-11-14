@@ -9,7 +9,13 @@ import pytest
 from conftest import SMALL_CASE, channel_warnings, make_source
 
 from beamtarget.nuclear import REACTIONS
-from beamtarget.source import HDF5_FORMAT_VERSION, SDEF_RADIUS_DECIMALS, _plot_label, _toml_wrapped
+from beamtarget.source import (
+    HDF5_FORMAT_VERSION,
+    SDEF_RADIUS_DECIMALS,
+    _height_bands,
+    _plot_label,
+    _toml_wrapped,
+)
 
 # Highest beam energy for SMALL_CASE (D and T): where T(d,np)T opens [keV]
 MAX_ENERGY = REACTIONS["DT"].complete_up_to()[0] * 1000
@@ -393,6 +399,32 @@ def test_long_summary_lists_one_per_line():
     assert tomllib.loads(text)["inputs"]["nuclear_data_dirs"] == s.nuclear_data
     assert f'    "{long_dir}/1",\n' in text
     assert max(len(line) for line in s.get_mcnp_sdef().splitlines()) <= 128
+
+
+def test_height_bands_partition_the_surface():
+    """The pieces of a surface cut at height levels cover each triangle exactly (their areas
+    in the x-y plane add up) and each lies within its band, so its color can follow its
+    height alone. All-zero triangles are left out."""
+    rng = np.random.default_rng(0)
+    x, y = np.meshgrid(np.arange(6.0), np.arange(5.0), indexing="ij")
+    z = rng.random(x.shape) * 3
+    z[:2, :2] = 0  # One all-zero cell corner region
+    levels = np.linspace(0, z.max(), 9)
+    pieces, band = _height_bands(x, y, z, levels)
+    assert np.all(pieces[:, :, 2] >= levels[band][:, None] - 1e-12)
+    assert np.all(pieces[:, :, 2] <= levels[band + 1][:, None] + 1e-12)
+
+    def area(P):  # Shoelace, in the x-y plane (repeated padding vertices add nothing)
+        xs, ys = P[..., 0], P[..., 1]
+        return 0.5 * np.abs(np.sum(xs * np.roll(ys, -1, -1) - np.roll(xs, -1, -1) * ys, -1))
+
+    pts = np.stack([x, y, z], -1)
+    a, b, c, d = pts[:-1, :-1], pts[1:, :-1], pts[1:, 1:], pts[:-1, 1:]
+    tri = np.concatenate([np.stack([a, b, c], 2).reshape(-1, 3, 3),
+                          np.stack([a, c, d], 2).reshape(-1, 3, 3)])  # fmt: skip
+    drawn = tri[np.any(tri[:, :, 2] > 0, axis=1)]
+    assert len(drawn) < len(tri)
+    assert area(pieces).sum() == pytest.approx(area(drawn).sum(), rel=1e-12)
 
 
 def test_warnings_in_hdf5(tmp_path):

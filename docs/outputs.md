@@ -139,7 +139,8 @@ columns and units.
 | `neutron_position.png`, `neutron_position_log.png` | Neutrons per unit length along the beam |
 | `neutron_angle.png` | Neutrons per steradian against emission angle |
 | `neutron_energy_angle_<rxn>.png` | Neutron energy against emission angle, colored by intensity, for each reaction |
-| `neutron_energy_angle_surface_<rxn>.png` | The same as a surface, with a linear vertical axis |
+| `neutron_energy_angle_surface_<rxn>.png` | The same as a surface, with a linear vertical axis, colored by height and lit from one side |
 | `neutron_energy.png`, `neutron_energy_log.png` | The neutron energy spectrum |
 
-Position plots mark the boundaries between regions with dashed lines.
+Position plots mark the boundaries between regions with dashed lines. `python -m
+beamtarget.view <case>/source.h5` opens the surface plots in windows, to turn them around.

@@ -106,6 +106,12 @@ SDEF_RADIUS_DECIMALS = 5
 SUMMARY_LINE_LENGTH = 100
 # Most energy cells in a surface plot (see plot_neutron_energy_surface)
 SURFACE_MAX_CELLS = 300
+# Heights at which a surface plot's color changes (see plot_neutron_energy_surface)
+SURFACE_COLOR_LEVELS = 128
+# Light for the shading of surface plots: azimuth and elevation [deg] in the plot box, and the
+# brightness of a surface facing away from it (see _surface_shade)
+SURFACE_LIGHT = (60.0, 45.0)
+SURFACE_AMBIENT = 0.55
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
 HDF5_FORMAT_VERSION = 10
@@ -646,6 +652,176 @@ def _plot_style(method):
             return method(*args, **kwargs)
 
     return wrapper
+
+
+def _clip_polygons(P, count, level, keep_above):
+    """Clip polygons P (n, m, 3), with count[i] vertices each, to z >= level (keep_above) or
+    z <= level (level: a number or one per polygon), by Sutherland-Hodgman on all at once.
+    Returns (polygons with up to m + 1 vertices, their vertex counts)."""
+    n, m, _ = P.shape
+    k = np.arange(m)[None, :]
+    valid_edge = k < count[:, None]
+    following = np.where(k + 1 < count[:, None], k + 1, 0)
+    S = P
+    E = np.take_along_axis(P, following[:, :, None].repeat(3, axis=2), axis=1)
+    lev = level[:, None] if np.ndim(level) else level
+    if keep_above:
+        s_in, e_in = S[:, :, 2] >= lev, E[:, :, 2] >= lev
+    else:
+        s_in, e_in = S[:, :, 2] <= lev, E[:, :, 2] <= lev
+    dz = E[:, :, 2] - S[:, :, 2]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        t = np.where(dz != 0, (lev - S[:, :, 2]) / dz, 0.0)
+    crossing = S + t[:, :, None] * (E - S)
+    # Each edge gives up to two vertices: where it crosses the level, then its end
+    out = np.stack([crossing, E], axis=2).reshape(n, 2 * m, 3)
+    use = np.stack([valid_edge & (s_in != e_in), valid_edge & e_in], axis=2).reshape(n, 2 * m)
+    order = np.argsort(~use, axis=1, kind="stable")
+    out = np.take_along_axis(out, order[:, :, None].repeat(3, axis=2), axis=1)
+    new_count = use.sum(axis=1)
+    width = max(int(new_count.max()) if n else 0, 1)
+    return out[:, :width], new_count
+
+
+def _height_bands(x, y, z, levels):
+    """Cut the surface through the grid points (x, y, z) (2-D arrays) into flat-shaded pieces
+    that each lie between two neighboring heights in levels, so that a piece's color can
+    depend on its height alone.
+
+    Each grid cell is split into two triangles; triangles with all three corners at zero are
+    left out (transparent). Returns (polygons (n, m, 3), padded with their last vertex, and
+    the band of each: levels[band] <= z <= levels[band + 1])."""
+    pts = np.stack([x, y, z], axis=-1)
+    a, b, c, d = pts[:-1, :-1], pts[1:, :-1], pts[1:, 1:], pts[:-1, 1:]
+    tri = np.concatenate(
+        [np.stack([a, b, c], 2).reshape(-1, 3, 3), np.stack([a, c, d], 2).reshape(-1, 3, 3)]
+    )
+    tri = tri[np.any(tri[:, :, 2] > 0, axis=1)]
+    num_bands = len(levels) - 1
+    low = np.searchsorted(levels, tri[:, :, 2].min(axis=1), side="right") - 1
+    high = np.searchsorted(levels, tri[:, :, 2].max(axis=1), side="left") - 1
+    low = np.clip(low, 0, num_bands - 1)
+    high = np.maximum(np.clip(high, 0, num_bands - 1), low)
+    reps = high - low + 1
+    which = np.repeat(np.arange(len(tri)), reps)
+    band = low[which] + np.arange(len(which)) - np.repeat(np.cumsum(reps) - reps, reps)
+    P, count = _clip_polygons(tri[which], np.full(len(which), 3), levels[band], True)
+    P, count = _clip_polygons(P, count, levels[band + 1], False)
+    keep = count >= 3
+    P, count, band = P[keep], count[keep], band[keep]
+    k = np.arange(P.shape[1])[None, :]
+    last = np.take_along_axis(P, (count - 1)[:, None, None].repeat(3, axis=2), axis=1)
+    return np.where((k < count[:, None])[:, :, None], P, last), band
+
+
+def surface_density(angle_grid, energy_grid, neutrons):
+    """Return (angles, energies, density) for a surface plot of a reaction's neutrons: the
+    angle and energy bin middles [deg, MeV] and the neutrons per unit energy and solid angle
+    [n/(MeV s sr)], over the energies the reaction gives.
+
+    neutrons is the reaction's (position, angle, energy) array [n/s] on the meshes
+    angle_grid [deg] and energy_grid [MeV]. At most SURFACE_MAX_CELLS energy cells are kept:
+    finer bins are averaged in groups (which keeps the heights the same on average), because
+    a surface of more cells renders slowly and its narrow features are lost in the drawing.
+    """
+    angle_grid, energy_grid = np.asarray(angle_grid), np.asarray(energy_grid)
+    by_angle = np.sum(neutrons, 0)  # (angle, energy) [n/s]
+    cosines = np.cos(np.radians(angle_grid))
+    solid_angles = 2 * np.pi * (cosines[:-1] - cosines[1:])
+    density = by_angle / solid_angles[:, None] / np.diff(energy_grid)[None, :]
+    filled = np.flatnonzero(np.sum(by_angle, 0))
+    lo, hi = (filled[0], filled[-1] + 1) if len(filled) else (0, by_angle.shape[1])
+    density = density[:, lo:hi]
+    energies = ((energy_grid[:-1] + energy_grid[1:]) / 2)[lo:hi]
+    group = int(np.ceil(density.shape[1] / SURFACE_MAX_CELLS))
+    if group > 1:
+        n = density.shape[1] // group * group
+        density = density[:, :n].reshape(len(density), -1, group).mean(axis=2)
+        energies = energies[:n].reshape(-1, group).mean(axis=1)
+    return (angle_grid[:-1] + angle_grid[1:]) / 2, energies, density
+
+
+def _surface_shade(angles, energies, density):
+    """Return the brightness (SURFACE_AMBIENT to 1) of the surface at each grid point, lit from
+    SURFACE_LIGHT (azimuth, elevation [deg]) like a hill shade: Lambert's cosine law on the
+    surface normal, worked out in the plot box (each axis scaled to its length on screen)."""
+    box_x, box_y, box_z = 4.0, 4.0, 3.0  # Matplotlib's 3-D box shape
+    x = (angles - angles[0]) / max(angles[-1] - angles[0], 1e-300) * box_x
+    y = (energies - energies[0]) / max(energies[-1] - energies[0], 1e-300) * box_y
+    z = density / max(np.max(density), 1e-300) * box_z
+    dz_dx = np.gradient(z, x, axis=0) if len(x) > 1 else np.zeros_like(z)
+    dz_dy = np.gradient(z, y, axis=1) if len(y) > 1 else np.zeros_like(z)
+    normal = np.stack([-dz_dx, -dz_dy, np.ones_like(z)], axis=-1)
+    normal /= np.linalg.norm(normal, axis=-1, keepdims=True)
+    azimuth, elevation = np.radians(SURFACE_LIGHT)
+    light = np.array(
+        [
+            np.cos(elevation) * np.cos(azimuth),
+            np.cos(elevation) * np.sin(azimuth),
+            np.sin(elevation),
+        ]
+    )
+    return SURFACE_AMBIENT + (1 - SURFACE_AMBIENT) * np.clip(normal @ light, 0, 1)
+
+
+def _bilinear(angles, energies, values, x, y):
+    """Interpolate values on the (angles, energies) grid (both evenly spaced) at points (x, y)."""
+
+    def position(grid, v):
+        if len(grid) < 2:
+            return np.zeros(len(v), dtype=int), np.zeros(len(v))
+        f = np.clip((v - grid[0]) / (grid[1] - grid[0]), 0, len(grid) - 1)
+        i = np.minimum(f.astype(int), len(grid) - 2)
+        return i, f - i
+
+    i, s = position(angles, x)
+    j, t = position(energies, y)
+    i1 = np.minimum(i + 1, len(angles) - 1)
+    j1 = np.minimum(j + 1, len(energies) - 1)
+    return ((1 - s) * (1 - t) * values[i, j] + s * (1 - t) * values[i1, j]
+            + (1 - s) * t * values[i, j1] + s * t * values[i1, j1])  # fmt: skip
+
+
+def draw_energy_surface(fig, angles, energies, density, title):
+    """Draw a reaction's neutrons per unit energy and solid angle (see surface_density) as a
+    surface on fig: its 3-D axes, which are returned.
+
+    The color follows the height alone: each facet is cut where it crosses one of
+    SURFACE_COLOR_LEVELS heights, and each piece colored by its height, so no flat-colored
+    facet spans a range of heights (which shows as stripes). For depth, each piece is
+    darkened by a hill shade (see _surface_shade) interpolated smoothly to the middle of the
+    piece, so the brightness has no jumps either. Facets with all corners at zero are left
+    out (transparent), so the grid shows beneath.
+    """
+    from matplotlib import colormaps
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    ax = fig.add_subplot(projection="3d")
+    angle, energy = np.meshgrid(angles, energies, indexing="ij")
+    top = max(np.max(density), 1e-300)
+    levels = np.linspace(0, top, SURFACE_COLOR_LEVELS + 1)
+    pieces, band = _height_bands(angle, energy, density, levels)
+    colors = colormaps["Spectral_r"]((band + 0.5) / SURFACE_COLOR_LEVELS)
+    middles = pieces.mean(axis=1)
+    shade = _bilinear(
+        angles, energies, _surface_shade(angles, energies, density), middles[:, 0], middles[:, 1]
+    )
+    colors[:, :3] *= shade[:, None]
+    ax.add_collection3d(
+        Poly3DCollection(
+            pieces, facecolors=colors, linewidths=0, edgecolors="none", antialiased=False
+        )
+    )
+    ax.set_xlim(0, 180)
+    ax.set_xticks(np.arange(0, 181, 30))
+    ax.set_xlabel("Emission angle [degrees]")
+    ax.set_ylim(energies[-1], energies[0])
+    ax.set_ylabel("Neutron energy [MeV]")
+    ax.set_zlim(0, top)
+    ax.set_zlabel(r"Neutrons [n/(MeV$\cdot$s$\cdot$sr)]", labelpad=12)
+    ax.view_init(elev=30, azim=-60)
+    ax.set_title(title)
+    return ax
 
 
 def _save_figure(fig, fname, close=True):
@@ -2864,47 +3040,20 @@ class BeamTarget:
     def plot_neutron_energy_surface(self, directory):
         """Plot neutron energy against emission angle for each reaction as a surface, with a
         linear vertical axis: the same neutrons per unit energy and solid angle as the maps of
-        plot_neutron_energy, over the energies the reaction gives.
-
-        A surface has at most SURFACE_MAX_CELLS energy cells; finer energy bins are averaged
-        in groups (which keeps the heights the same on average), because a surface of more
-        cells than that renders slowly and its narrow features are lost in the drawing anyway.
+        plot_neutron_energy (see surface_density and draw_energy_surface). python -m
+        beamtarget.view opens the same plot from source.h5 in a window, to turn it around.
         """
-        present = self.reactions_present()
-        for rxn in present:
-            by_angle = np.sum(self.neutrons[rxn], 0)  # (angle, energy) [n/s]
-            density = by_angle / self.solid_angles_out[:, None] / self.energy_bin_width
-            filled = np.flatnonzero(np.sum(by_angle, 0))
-            lo, hi = filled[0], filled[-1] + 1
-            density = density[:, lo:hi]
-            energies = self.neutron_energy_mids[rxn][lo:hi]
-            group = int(np.ceil(density.shape[1] / SURFACE_MAX_CELLS))
-            if group > 1:
-                n = density.shape[1] // group * group
-                density = density[:, :n].reshape(len(density), -1, group).mean(axis=2)
-                energies = energies[:n].reshape(-1, group).mean(axis=1)
-            angle, energy = np.meshgrid(self.angle_mids_out, energies, indexing="ij")
-
-            fig = _pyplot().figure(figsize=(9, 7))
-            ax = fig.add_subplot(projection="3d")
-            ax.plot_surface(
-                angle,
-                energy,
-                density,
-                cmap="Spectral_r",
-                rcount=density.shape[0],
-                ccount=density.shape[1],
-                linewidth=0,
-                antialiased=False,
+        for rxn in self.reactions_present():
+            angles, energies, density = surface_density(
+                self.angle_grid_out, self.neutron_energy_grid[rxn], self.neutrons[rxn]
             )
-            ax.set_xlim(0, 180)
-            ax.set_xticks(np.arange(0, 181, 30))
-            ax.set_xlabel("Emission angle [degrees]")
-            ax.set_ylim(energy[-1, -1], energy[0, 0])
-            ax.set_ylabel("Neutron energy [MeV]")
-            ax.set_zlabel(r"Neutrons [n/(MeV$\cdot$s$\cdot$sr)]", labelpad=12)
-            ax.set_zlim(0, None)
-            ax.view_init(elev=30, azim=-60)
             label = _plot_label(self.reactions[rxn].label)
-            ax.set_title(f"{label} neutron energy against emission angle ({self.name})")
+            fig = _pyplot().figure(figsize=(9, 7))
+            draw_energy_surface(
+                fig,
+                angles,
+                energies,
+                density,
+                f"{label} neutron energy against emission angle ({self.name})",
+            )
             _save_figure(fig, os.path.join(directory, f"neutron_energy_angle_surface_{rxn}.png"))
