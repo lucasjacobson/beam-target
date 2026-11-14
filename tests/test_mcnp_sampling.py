@@ -24,6 +24,7 @@ import pytest
 from conftest import MAX_Z, assert_counts_match, assert_mean_matches, make_source
 
 from beamtarget import Material
+from beamtarget.units import MEV
 
 ENDF_DIR = Path(__file__).parent / "data" / "endf" / "ENDF-B-VIII.1"
 
@@ -107,7 +108,7 @@ CASES = {
             divergence=[0.0],
             position_bins=[10],
             position_substeps=[10],
-            energy_bin_width=0.1,
+            energy_bin_width=0.1,  # MeV
             nuclear_data=["drosg", str(ENDF_DIR)],
         ),
         "+x", "entry_position", (0.0, 0.0, 0.0),
@@ -243,6 +244,7 @@ def test_energy_in_each_angle_bin(sampled):
     ends are read as intended)."""
     s = sampled["source"]
     grid, by_angle = s.neutrons_by_angle_and_energy()
+    grid = grid / MEV  # MCNP's energies are in MeV
     spectra = sum(by_angle[rxn] for rxn in s.reactions)  # (angle, energy)
     for j in range(s.num_angle_bins_out):
         in_bin = sampled["j"] == j
@@ -261,9 +263,10 @@ def test_energy_does_not_depend_on_position(sampled):
     s = sampled["source"]
     grid, by_angle = s.neutrons_by_angle_and_energy()
     spectrum = sum(np.sum(by_angle[rxn], 0) for rxn in s.reactions)
-    mids = (grid[:-1] + grid[1:]) / 2
+    mids = (grid[:-1] + grid[1:]) / 2 / MEV  # MCNP's energies are in MeV
+    width = s.energy_bin_width / MEV
     mean = np.sum(spectrum * mids) / spectrum.sum()
-    variance = np.sum(spectrum * (mids**2 + s.energy_bin_width**2 / 12)) / spectrum.sum()
+    variance = np.sum(spectrum * (mids**2 + width**2 / 12)) / spectrum.sum()
     variance -= mean**2
     for k in range(s.position_bins_total):
         energies = sampled["E"][sampled["i"] == k]

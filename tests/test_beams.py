@@ -9,6 +9,7 @@ from numpy.polynomial.legendre import legval
 
 from beamtarget import Material
 from beamtarget.nuclear import REACTIONS, beam_key, cm_to_lab, mean_atomic_mass
+from beamtarget.units import MEV
 
 LI7 = Material("7Li", "solid", atoms={"7Li": 1}, density=0.534)
 
@@ -40,7 +41,7 @@ def _sdef_energies(si):
 def _energy_range(s, rxn):
     """Lowest and highest neutron energy [MeV] of a reaction: the edges of the filled bins."""
     filled = np.flatnonzero(s.neutrons[rxn].sum(axis=(0, 1)))
-    grid = s.neutron_energy_grid[rxn]
+    grid = s.neutron_energy_grid[rxn] / MEV
     return grid[filled[0]], grid[filled[-1] + 1]
 
 
@@ -165,7 +166,7 @@ def test_inverse_reaction_uses_flipped_data():
     theta = np.linspace(0, np.pi, n + 1)
     mu = np.cos((theta[:-1] + theta[1:]) / 2)
     weight = legval(-mu, coeffs) * (np.cos(theta[:-1]) - np.cos(theta[1:]))
-    _, cos_lab = cm_to_lab(tD.beam_energy_mids[0] / 1000, mu, *REACTIONS["tD"].masses())
+    _, cos_lab = cm_to_lab(tD.beam_energy_mids[0] / MEV, mu, *REACTIONS["tD"].masses())
     angles = np.degrees(np.arccos(np.clip(cos_lab, -1, 1)))
     expected, _ = np.histogram(angles, tD.angle_grid_out, weights=weight)
     got = tD.neutrons["tD"].sum(axis=(0, 2))

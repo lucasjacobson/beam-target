@@ -36,7 +36,7 @@ PLACEMENTS = {
 
 
 def sample(directory, sources, n=NUM_SAMPLES):
-    """Return (positions, directions, energies [MeV]) of n source particles sampled by OpenMC
+    """Return (positions, directions, energies [eV]) of n source particles sampled by OpenMC
     from sources, in a void sphere with no materials."""
     directory.mkdir(parents=True, exist_ok=True)
     # OpenMC needs a cross-section library file even with no materials; it only opens the
@@ -71,7 +71,7 @@ def sample(directory, sources, n=NUM_SAMPLES):
             os.environ["OPENMC_CROSS_SECTIONS"] = old_library
     r = np.array([site.r for site in sites])
     u = np.array([site.u for site in sites])
-    E = np.array([site.E for site in sites]) / 1e6
+    E = np.array([site.E for site in sites])
     return r, u, E
 
 

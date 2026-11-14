@@ -14,6 +14,7 @@ from matplotlib import pyplot as plt
 
 from beamtarget import BeamTarget
 from beamtarget.source import Region, dt_gas
+from beamtarget.units import KEV, MEV, TORR, ZERO_CELSIUS
 
 plt.rcParams["font.family"] = "serif"
 plt.rcParams["mathtext.default"] = "regular"
@@ -23,14 +24,15 @@ def stopping_per_atom(stopping_power):
     """Return (E [keV], stopping [eV/(1e15 atoms/cm^2)]) for deuterons in tritium."""
     # A minimal pure-tritium case; only its stopping-power table is used
     region = Region(
-        dt_gas(1.0), 20.0, pressure=10.0, temperature=1.0, wall_radius=4.0, position_bins=1,
-        position_substeps=2,
+        dt_gas(1.0), 20.0, pressure=10 * TORR, temperature=1 + ZERO_CELSIUS, wall_radius=4.0,
+        position_bins=1, position_substeps=2,
     )  # fmt: skip
     source = BeamTarget(
-        "plot", [region], 280.0, 1.0, 0.2, 90.0, 90.0, 0.5, stopping_power=stopping_power
-    )
-    E, eps = source.stopping_per_region[0]
-    return E, eps * 1e18  # keV cm^2 -> eV/(1e15 atoms/cm^2)
+        "plot", [region], beam_energy_entry=280 * KEV, beam_current=1e-3, beam_radius_entry=0.2,
+        angle_bin_width=90.0, energy_bin_width=0.5 * MEV, stopping_power=stopping_power,
+    )  # fmt: skip
+    E, eps = source.stopping_per_region[0]  # [eV], [eV cm^2]
+    return E / KEV, eps * 1e15  # eV cm^2 -> eV/(1e15 atoms/cm^2)
 
 
 E_srim, S_srim = stopping_per_atom("srim")

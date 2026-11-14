@@ -10,11 +10,13 @@ from beamtarget.source import (
     get_molecule_density,
     read_srim_h5,
 )
+from beamtarget.units import KEV, TORR, ZERO_CELSIUS
 
 
 def _stopping(source, region=-1):
     """(E [keV], eps [keV cm^2 per atom]) of one region."""
-    return source.stopping_per_region[region]
+    E, eps = source.stopping_per_region[region]
+    return E / KEV, eps / KEV
 
 
 @pytest.mark.parametrize("T_frac, isotope", [(0.0, "D"), (1.0, "T")])
@@ -23,7 +25,7 @@ def test_pure_gas_stopping_is_srim(T_frac, isotope):
     E_srim, _, srim = read_srim_h5(data_path(SRIM_STOPPING_FILE))
     elec, nuc = srim["gas"][isotope]
     E, eps = _stopping(make_source(T_frac=T_frac))
-    np.testing.assert_array_equal(E, E_srim)
+    np.testing.assert_allclose(E, E_srim, rtol=1e-15)
     np.testing.assert_allclose(eps, elec + nuc, rtol=1e-14)
 
 
@@ -41,10 +43,11 @@ def test_same_pressure_same_energy_loss():
 
 def test_gas_densities():
     # 1 atm at 0 C: Loschmidt number, x 2 atoms per molecule for D2 or T2
-    assert get_molecule_density(760.0, 0.0) == pytest.approx(2.686780111e19, rel=1e-9)
-    assert get_atom_density(760.0, 0.0) == pytest.approx(2 * 2.686780111e19, rel=1e-9)
-    s = make_source(pressure=[5.0], temperature=[25.0])
-    assert s.atom_density_per_region[0] == pytest.approx(get_atom_density(5.0, 25.0), rel=1e-14)
+    assert get_molecule_density(101325.0, ZERO_CELSIUS) == pytest.approx(2.686780111e19, rel=1e-9)
+    assert get_atom_density(101325.0, ZERO_CELSIUS) == pytest.approx(2 * 2.686780111e19, rel=1e-9)
+    s = make_source(pressure=[5.0], temperature=[25.0])  # torr, degC
+    expected = get_atom_density(5 * TORR, 25 + ZERO_CELSIUS)
+    assert s.atom_density_per_region[0] == pytest.approx(expected, rel=1e-14)
 
 
 def test_icru49_close_to_srim():
@@ -61,7 +64,8 @@ def test_icru49_slows_beam_faster():
     """ICRU 49 stopping is higher, so the beam leaves the (thin) target with less energy."""
     srim, icru = make_source(stopping_power="srim"), make_source(stopping_power="icru49")
     assert icru.beam_energy_grid[-1] < srim.beam_energy_grid[-1]
-    assert 0.97 < (280 - srim.beam_energy_grid[-1]) / (280 - icru.beam_energy_grid[-1]) < 0.99
+    E_srim, E_icru = srim.beam_energy_grid[-1] / KEV, icru.beam_energy_grid[-1] / KEV
+    assert 0.97 < (280 - E_srim) / (280 - E_icru) < 0.99
 
 
 def test_invalid_stopping_power_rejected():

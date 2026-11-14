@@ -8,6 +8,7 @@ import pytest
 from conftest import make_source
 
 from beamtarget.source import Material, dt_gas, get_atom_density, parse_formula
+from beamtarget.units import KEV, MICROAMPERE, TORR, ZERO_CELSIUS
 
 TID = Material("TiD1.5", "solid", atoms={"Ti": 1.0, "D": 1.5}, density=3.9)
 TIT = Material("TiT1.5", "solid", atoms={"Ti": 1.0, "T": 1.5}, density=4.0)
@@ -142,7 +143,7 @@ def test_thick_solid_target():
     assert s.deposited_power == pytest.approx(s.beam_power_entry)
     assert s.reactions_present() == ["DD"]
     # Thick-target DD yield, about 1.7e6 n/s per uA at 280 keV
-    assert 1e6 < s.yields["DD"] / (s.beam_current * 1000) < 3e6
+    assert 1e6 < s.yields["DD"] / (s.beam_current / MICROAMPERE) < 3e6
 
 
 def test_titanium_tritide_gives_dt():
@@ -155,7 +156,7 @@ def test_solid_thickness_calculated():
     """For a solid target chamber, the length follows from the backstop energy."""
     thick = make_solid(length=[None], beam_energy_backstop=100.0)
     assert thick.calculated == "length"
-    assert thick.beam_energy_grid[-1] == pytest.approx(100.0, rel=1e-6)
+    assert thick.beam_energy_grid[-1] == pytest.approx(100 * KEV, rel=1e-6)
     assert 0.5e-4 < thick.length[0] < 2e-4
 
 
@@ -234,7 +235,7 @@ def test_material_required():
 
 # SMALL_CASE's D/T gas: 5 torr at 25 degC, as a mass density [g/cm3]
 DT_MEAN_MASS = (2.01410177812 + 3.0160492779) / 2  # u, per atom (SRIM's masses)
-DT_DENSITY = get_atom_density(5.0, 25.0) * DT_MEAN_MASS / 6.02214076e23
+DT_DENSITY = get_atom_density(5 * TORR, 25 + ZERO_CELSIUS) * DT_MEAN_MASS / 6.02214076e23
 
 
 def test_gas_by_density_matches_pressure():
@@ -257,7 +258,7 @@ def test_gas_density_calculated():
         pressure=[None],
         temperature=[None],
         density=[None],
-        beam_energy_backstop=forward.beam_energy_grid[-1],
+        beam_energy_backstop=forward.beam_energy_grid[-1] / KEV,
     )
     assert s.calculated == "density"
     assert s.density[0] == pytest.approx(DT_DENSITY, rel=1e-8)

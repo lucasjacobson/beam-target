@@ -9,6 +9,7 @@ import pytest
 from conftest import EXAMPLE_INPUT, channel_warnings
 
 from beamtarget import BeamTarget, InputError, load_input, main
+from beamtarget.units import KEV, MILLIAMPERE, MILLIRADIAN, TORR
 
 # Settings for a small, fast case; the tests below add cases and tables to these. [defaults]
 # comes last, so that text added to BASE goes into it.
@@ -134,7 +135,7 @@ def test_example_input():
     (chamber,) = dd["source"]["regions"]
     assert chamber.name == "chamber" and chamber.material.name == "D2"
     assert chamber.position_bins == 137 and chamber.position_substeps == 10
-    assert chamber.pressure == 38.0
+    assert chamber.pressure == pytest.approx(38 * TORR, rel=1e-15)
 
 
 @pytest.fixture(scope="module")
@@ -160,7 +161,7 @@ def test_example_cases_show_their_features(example_sources):
     assert s["TiD_thick"].materials[0].phase == "solid"
     assert s["TiD_thick"].beam_energy_grid[-1] == 0 and s["TiD_thick"].reactions_present() == ["DD"]
     assert s["TiD_find_thickness"].calculated == "length"
-    assert s["TiD_find_thickness"].beam_energy_grid[-1] == pytest.approx(100.0, rel=1e-6)
+    assert s["TiD_find_thickness"].beam_energy_grid[-1] == pytest.approx(100 * KEV, rel=1e-6)
     assert s["p_Li_thin"].reactions_present() == ["p7Li_n0", "p7Li_n1"]
     assert s["t_D2"].reactions_present() == ["tD"]
     assert s["p_Be_thick"].reactions_present() == ["p9Be_xn"]
@@ -169,9 +170,9 @@ def test_example_cases_show_their_features(example_sources):
     assert s["DT50_beam_stops"].beam_energy_grid[-1] == 0
     assert s["DT50_beam_stops"].backstop_power == 0
     assert s["DT50_find_length"].calculated == "length"
-    assert s["DT50_find_length"].beam_energy_grid[-1] == pytest.approx(30.0, rel=1e-6)
+    assert s["DT50_find_length"].beam_energy_grid[-1] == pytest.approx(30 * KEV, rel=1e-6)
     assert s["DT50_find_pressure"].calculated == "pressure"
-    assert s["DT50_find_pressure"].beam_energy_grid[-1] == pytest.approx(30.0, rel=1e-6)
+    assert s["DT50_find_pressure"].beam_energy_grid[-1] == pytest.approx(30 * KEV, rel=1e-6)
     assert s["DT50_find_current"].beam_current_calculated
     assert s["DT50_find_current"].yield_total == pytest.approx(1e13, rel=1e-9)
     assert s["DT50_upstream"].num_regions == 3
@@ -211,16 +212,17 @@ beam_energy_backstop = 200.0
     stage, gas = cases["named"]
     assert (stage.name, stage.pressure, stage.wall_radius, stage.divergence) == (
         "stage",
-        1e-3,
+        pytest.approx(1e-3 * TORR, rel=1e-15),
         0.5,
         0.0,
     )
-    assert gas.name == "gas" and gas.material.name == "DT50" and gas.divergence == 30.0
+    assert gas.name == "gas" and gas.material.name == "DT50"
+    assert gas.divergence == pytest.approx(30 * MILLIRADIAN, rel=1e-15)
     (inline,) = cases["inline"]
     assert inline.name == "" and inline.density == 1e-6 and inline.pressure is None
     (used,) = cases["use"]
     assert used.name == "gas" and used.material.name == "D2" and used.length is None
-    assert used.pressure == 5.0  # Everything else from the named region
+    assert used.pressure == pytest.approx(5 * TORR, rel=1e-15)  # The rest from the named region
     assert [r.name for r in cases["defaults"]] == ["gas"]
 
 
@@ -320,7 +322,7 @@ def test_current_or_yield(tmp_path):
         tmp_path, BASE + "\n[cases.by_current]\n\n[cases.by_yield]\nyield_total = 1e10\n"
     )
     cases = {name: c["source"] for name, c in load_input(path).items()}
-    assert cases["by_current"]["beam_current"] == 10.0
+    assert cases["by_current"]["beam_current"] == pytest.approx(10 * MILLIAMPERE, rel=1e-15)
     assert cases["by_current"]["yield_total"] is None
     assert cases["by_yield"]["beam_current"] is None  # The current from [defaults] is overridden
     assert cases["by_yield"]["yield_total"] == 1e10
@@ -511,10 +513,10 @@ def test_shine_systems_example(name, expected):
     cases = load_input(EXAMPLE_INPUT.with_name("shine_systems.toml"))
     assert list(cases) == ["Artemis", "Apollo"]
     s = cases[name]["source"]
-    assert (
-        s["beam_current"] == 45.0
-        and s["beam_energy_entry"] == 280.0
-        and s["beam_energy_backstop"] == 10.0
+    assert (s["beam_current"], s["beam_energy_entry"], s["beam_energy_backstop"]) == (
+        pytest.approx(45 * MILLIAMPERE, rel=1e-15),
+        280 * KEV,
+        10 * KEV,
     )
     for region in s["regions"]:
         region.position_substeps = 1  # A coarse mesh, for speed
@@ -531,7 +533,9 @@ def test_simple_example():
     s = cases["DT90"]["source"]
     (chamber,) = s["regions"]
     assert chamber.material.atom_fractions["T"] == pytest.approx(0.9)
-    assert chamber.pressure == 38.0 and s["beam_current"] == 50.0 and s["beam"] == "deuteron"
+    assert chamber.pressure == pytest.approx(38 * TORR, rel=1e-15)
+    assert s["beam_current"] == pytest.approx(50 * MILLIAMPERE, rel=1e-15)
+    assert s["beam"] == "deuteron"
     chamber.position_substeps = 1  # A coarse mesh, for speed
     source = BeamTarget(name="DT90", **s)
     assert source.calculated == "beam_energy_backstop"

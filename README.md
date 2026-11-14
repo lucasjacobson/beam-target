@@ -70,7 +70,9 @@ A script runs one thread per case unless told otherwise: `beamtarget.set_paralle
 each case use up to 8 threads for its evaluated continua (results are the same either way).
 
 `BeamTarget` can also be built directly from `Material` and `Region` objects; see its
-docstring.
+docstring. It takes and holds its values in eV (beam and neutron energies), A, Pa, K, rad, W,
+and cm (`beamtarget.units` has the factors), and reports its results in the units of its
+`units` argument.
 
 ## Input files
 

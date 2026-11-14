@@ -28,6 +28,7 @@ from .source import (
     Material,
     Region,
 )
+from .units import from_internal, to_internal
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,8 @@ REGION_SETTINGS = {
     # Steps the beam is followed in across each position bin (the internal mesh)
     "position_substeps": (int, POSITION_SUBSTEPS),
 }
+# The units of the region settings that the code holds in other units (see units.py)
+REGION_UNITS = {"pressure": "torr", "temperature": "degC", "divergence": "mrad"}
 
 # Material settings: name -> type. A solid needs atoms and density, a gas molecules (see
 # Material). A gas's state (pressure and temperature, or density) belongs to the region it
@@ -187,6 +190,10 @@ def _make_region(where, settings, materials, name="", substeps=POSITION_SUBSTEPS
     if values["material"] not in materials:
         raise InputError(f"{where}: no [materials.{values['material']}] table")
     values["material"] = materials[values["material"]]
+    # To the code's units (see units.py)
+    for key, unit in REGION_UNITS.items():
+        if values[key] is not None:
+            values[key] = to_internal(values[key], unit)
     return Region(**values, name=name)
 
 
@@ -369,14 +376,22 @@ def load_input(path):
             "source": {
                 "regions": regions,
                 "beam": s["beam"],
-                "beam_energy_entry": s["beam_energy_entry"],
-                "beam_current": rate["beam_current"],
+                "beam_energy_entry": to_internal(s["beam_energy_entry"], "keV"),
+                "beam_current": (
+                    None
+                    if rate["beam_current"] is None
+                    else to_internal(rate["beam_current"], "mA")
+                ),
                 "yield_total": rate["yield_total"],
                 "beam_radius_entry": s["beam_radius_entry"],
                 "angle_bin_width": s["angle_bin_width"],
-                "energy_bin_width": s["energy_bin_width"],
+                "energy_bin_width": to_internal(s["energy_bin_width"], "MeV"),
                 "stopping_power": s["stopping_power"],
-                "beam_energy_backstop": s["beam_energy_backstop"],
+                "beam_energy_backstop": (
+                    None
+                    if s["beam_energy_backstop"] is None
+                    else to_internal(s["beam_energy_backstop"], "keV")
+                ),
                 "nuclear_data": nuclear_data,
             },
             "beam_direction": s["beam_direction"],
@@ -410,10 +425,10 @@ def run_case(name, settings, output_dir="output", input_file=None, name_width=0,
     if s["beam_current"] is None:
         beam = f"yield {s['yield_total']:.4e} n/s"
     else:
-        beam = f"{s['beam_current']:g} mA"
+        beam = f"{from_internal(s['beam_current'], 'mA'):g} mA"
     logger.debug(
         f"{name}: starting: {BEAMS[beam_key(s['beam'])].description} beam, "
-        f"{s['beam_energy_entry']:g} keV, {beam}, "
+        f"{from_internal(s['beam_energy_entry'], 'keV'):g} keV, {beam}, "
         f"{len(s['regions'])} region(s), "
         f"last {s['regions'][-1].material.name}, stopping power {s['stopping_power']}"
     )
@@ -435,9 +450,10 @@ def run_case(name, settings, output_dir="output", input_file=None, name_width=0,
     }
     source.write_text_files(case_dir, {**run_info, **sdef_info})
     # Fixed widths, so the lines of a run line up
+    mean, unit = source.in_units(source.mean_neutron_energy(), "neutron_energy")
     logger.info(
         f"{name + ':':<{name_width + 1}} {source.yield_total:.3e} n/s, mean energy "
-        f"{source.mean_neutron_energy():5.2f} MeV, in {time.time() - t0:6.1f} s "
+        f"{mean:5.2f} {unit}, in {time.time() - t0:6.1f} s "
         f"-> {os.path.join(case_dir, '')}"  # Trailing separator: a directory
     )
     return source

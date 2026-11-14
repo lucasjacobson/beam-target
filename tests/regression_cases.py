@@ -20,6 +20,7 @@ import numpy as np
 
 from beamtarget import BeamTarget, Material, Region
 from beamtarget.source import dt_gas
+from beamtarget.units import KEV, MEV, MILLIAMPERE, MILLIRADIAN, TORR, ZERO_CELSIUS
 
 DATA = Path(__file__).resolve().parent / "data"
 LIBRARIES = DATA / "endf"
@@ -44,14 +45,15 @@ FENDL = "FENDL-3.2c"
 def stopping(material):
     """A solid thick enough to stop the beam: its length is solved for 10 keV at the
     backstop."""
-    return dict(regions=[Region(material, wall_radius=10.0, position_bins=10)], backstop=10.0)
+    return dict(regions=[Region(material, wall_radius=10.0, position_bins=10)], backstop=10 * KEV)
 
 
 def gas(material, length, pressure, wall_radius=10.0, divergence=0.0, position_bins=10):
-    """A room-temperature gas region the beam passes through."""
+    """A room-temperature gas region the beam passes through: pressure [torr], divergence
+    [mrad]."""
     region = Region(
-        material, length, pressure=pressure, temperature=25.0, wall_radius=wall_radius,
-        divergence=divergence, position_bins=position_bins,
+        material, length, pressure=pressure * TORR, temperature=25.0 + ZERO_CELSIUS,
+        wall_radius=wall_radius, divergence=divergence * MILLIRADIAN, position_bins=position_bins,
     )  # fmt: skip
     return dict(regions=[region], backstop=None)
 
@@ -63,7 +65,7 @@ CASES = {
     "d_DT50gas_0.3_drosg": (
         "deuteron", 0.3,
         gas(dt_gas(0.5), None, 38.0, wall_radius=1.0, divergence=30.0, position_bins=20)
-        | {"backstop": 10.0},  # Stops in the gas; the beam spreads and is scraped
+        | {"backstop": 10 * KEV},  # Stops in the gas; the beam spreads and is scraped
         ["drosg"], 0.01,
     ),
     "d_TiD_0.3_drosg": ("deuteron", 0.3, stopping(TID), ["drosg"], 0.01),
@@ -121,27 +123,27 @@ def run_case(name, directory):
     s = BeamTarget(
         name=name,
         regions=target["regions"],
-        beam_energy_entry=energy * 1000,
+        beam_energy_entry=energy * MEV,
         beam_energy_backstop=target["backstop"],
-        beam_current=1.0,
+        beam_current=1 * MILLIAMPERE,
         beam_radius_entry=0.1,
         angle_bin_width=10.0,
-        energy_bin_width=energy_bin_width,
+        energy_bin_width=energy_bin_width * MEV,
         beam=beam,
         nuclear_data=libraries,
     )
     results = {
         "length": np.array(s.length),
-        "beam_energy_end": np.array(s.beam_energy_grid[-1]),
+        "beam_energy_end": np.array(s.beam_energy_grid[-1] / KEV),
         "yield": np.array(s.yield_total / s.particle_rate),
     }
     for rxn in s.reactions_present():
         neutrons = s.neutrons[rxn] / s.particle_rate
         results |= {
             f"{rxn}/yield": np.array(neutrons.sum()),
-            f"{rxn}/mean_energy": np.array(s.mean_neutron_energy(rxn)),
+            f"{rxn}/mean_energy": np.array(s.mean_neutron_energy(rxn) / MEV),
             f"{rxn}/angle_energy": neutrons.sum(axis=0),
-            f"{rxn}/energy_grid": s.neutron_energy_grid[rxn],
+            f"{rxn}/energy_grid": s.neutron_energy_grid[rxn] / MEV,
             f"{rxn}/position": neutrons.sum(axis=(1, 2)),
         }
     return results

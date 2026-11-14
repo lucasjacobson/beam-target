@@ -8,6 +8,7 @@ import pytest
 
 from beamtarget import BeamTarget, Region
 from beamtarget.source import DEFAULT_DATA_DIR, dt_gas
+from beamtarget.units import to_internal
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 
@@ -75,13 +76,37 @@ def make_regions(settings):
     return [Region(**{key: value(key, r) for key in REGION_SETTINGS}) for r in range(n)]
 
 
+# The units the test settings are written in, which BeamTarget takes in its own (see units.py)
+TEST_UNITS = {
+    "beam_energy_entry": "keV",
+    "beam_energy_backstop": "keV",
+    "beam_current": "mA",
+    "energy_bin_width": "MeV",
+    "pressure": "torr",
+    "temperature": "degC",
+    "divergence": "mrad",
+}
+
+
+def in_code_units(settings):
+    """Return settings (scalars, or lists for regions; None stays None) with those of
+    TEST_UNITS converted from those units to the code's."""
+
+    def convert(v, unit):
+        if isinstance(v, (list, tuple)):
+            return [convert(x, unit) for x in v]
+        return None if v is None else to_internal(v, unit)
+
+    return {k: convert(v, TEST_UNITS[k]) if k in TEST_UNITS else v for k, v in settings.items()}
+
+
 def make_source(**overrides):
-    """Return a BeamTarget for SMALL_CASE with some settings overridden. Region settings are
-    lists, one entry per region. T_frac=x is short for material=dt_gas(x), a D/T gas with that
-    tritium fraction."""
+    """Return a BeamTarget for SMALL_CASE with some settings overridden, in the units of
+    TEST_UNITS (keV, mA, MeV, torr, degC, mrad). Region settings are lists, one entry per
+    region. T_frac=x is short for material=dt_gas(x), a D/T gas with that tritium fraction."""
     if "T_frac" in overrides:
         overrides["material"] = dt_gas(overrides.pop("T_frac"))
-    settings = {**SMALL_CASE, **overrides}
+    settings = in_code_units({**SMALL_CASE, **overrides})
     regions = make_regions(settings)
     rest = {k: v for k, v in settings.items() if k not in REGION_SETTINGS}
     return BeamTarget(regions=regions, **rest)

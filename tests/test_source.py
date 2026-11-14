@@ -6,7 +6,7 @@ import tomllib
 import h5py
 import numpy as np
 import pytest
-from conftest import SMALL_CASE, channel_warnings, make_source
+from conftest import SMALL_CASE, channel_warnings, in_code_units, make_source
 
 from beamtarget.nuclear import REACTIONS
 from beamtarget.source import (
@@ -16,9 +16,10 @@ from beamtarget.source import (
     _plot_label,
     _toml_wrapped,
 )
+from beamtarget.units import KEV, MEV
 
 # Highest beam energy for SMALL_CASE (D and T): where T(d,np)T opens [keV]
-MAX_ENERGY = REACTIONS["DT"].complete_up_to()[0] * 1000
+MAX_ENERGY = REACTIONS["DT"].complete_up_to()[0] * MEV / KEV
 
 # --- Physics checks ------------------------------------------------------------------------
 
@@ -71,7 +72,7 @@ def test_yield_scales_with_tritium_fraction():
 
 
 def test_beam_slows_down(mixed_source):
-    EB = mixed_source.beam_energy_grid
+    EB = mixed_source.beam_energy_grid / KEV
     assert EB[0] == 280.0
     assert np.all(np.diff(EB) < 0)
     assert 150 < EB[-1] < 250  # A thin target: the beam passes through
@@ -120,16 +121,17 @@ def test_calculate_pressure_or_length(calculated, stopping_power):
     """Giving the backstop energy of a forward run recovers that run's pressure or length,
     and the rest of the results with it."""
     forward = make_source(stopping_power=stopping_power)
-    E_end = forward.beam_energy_grid[-1]
+    E_end = forward.beam_energy_grid[-1] / KEV
     s = make_source(
         stopping_power=stopping_power, **{calculated: [None]}, beam_energy_backstop=E_end
     )
     assert s.calculated == calculated
-    assert getattr(s, calculated)[-1] == pytest.approx(SMALL_CASE[calculated][-1], rel=1e-9)
-    assert s.beam_energy_grid[-1] == pytest.approx(E_end, rel=1e-9)
+    expected = in_code_units(SMALL_CASE)[calculated][-1]
+    assert getattr(s, calculated)[-1] == pytest.approx(expected, rel=1e-9)
+    assert s.beam_energy_grid[-1] / KEV == pytest.approx(E_end, rel=1e-9)
     assert s.yield_total == pytest.approx(forward.yield_total, rel=1e-8)
     inputs = {name: (value, units) for name, value, units in s.get_inputs()}
-    assert inputs["beam_energy_backstop"] == (E_end, "keV, requested")
+    assert inputs["beam_energy_backstop"] == (pytest.approx(E_end, rel=1e-15), "keV, requested")
     assert inputs[calculated][1].endswith("calculated for region 1")
     assert "beam_energy_backstop" not in [name for name, _, _ in forward.get_inputs()]
     assert forward.calculated == "beam_energy_backstop"
@@ -149,8 +151,11 @@ def test_calculate_with_upstream_regions(calculated):
     )
     forward = make_source(**regions)
     values = {calculated: [regions[calculated][0], None]}
-    s = make_source(**{**regions, **values}, beam_energy_backstop=forward.beam_energy_grid[-1])
-    np.testing.assert_allclose(getattr(s, calculated), regions[calculated], rtol=1e-9)
+    s = make_source(
+        **{**regions, **values}, beam_energy_backstop=forward.beam_energy_grid[-1] / KEV
+    )
+    expected = in_code_units(regions)[calculated]
+    np.testing.assert_allclose(getattr(s, calculated), expected, rtol=1e-9)
 
 
 def test_target_chamber_needs_two_of_three():
@@ -232,7 +237,7 @@ def test_calculate_current_and_length(mixed_source):
         beam_current=None,
         yield_total=mixed_source.yield_total,
         length=[None],
-        beam_energy_backstop=mixed_source.beam_energy_grid[-1],
+        beam_energy_backstop=mixed_source.beam_energy_grid[-1] / KEV,
     )
     assert s.length[-1] == pytest.approx(50.0, rel=1e-9)
     assert s.beam_current == pytest.approx(mixed_source.beam_current, rel=1e-8)
@@ -276,7 +281,7 @@ def test_beam_power_without_scraping():
 def test_neutron_energies(mixed_source):
     """Neutron energies lie in the expected bands for a 280 keV beam."""
     for rxn, lo, hi in [("DD", 1.9, 3.3), ("DT", 12.9, 15.5)]:
-        grid = mixed_source.neutron_energy_grid[rxn]
+        grid = mixed_source.neutron_energy_grid[rxn] / MEV
         by_energy = mixed_source.neutrons[rxn].sum(axis=(0, 1))
         filled = np.flatnonzero(by_energy)
         assert lo < grid[filled[0]] and grid[filled[-1] + 1] < hi
@@ -306,7 +311,7 @@ def test_reference_results(T_frac, stopping_power):
     # A reaction with no target isotope is absent; its reference yield is 0
     assert source.yields.get("DD", 0.0) == pytest.approx(yield_DD, rel=1e-9)
     assert source.yields.get("DT", 0.0) == pytest.approx(yield_DT, rel=1e-9)
-    assert source.beam_energy_grid[-1] == pytest.approx(E_end, rel=1e-9)
+    assert source.beam_energy_grid[-1] / KEV == pytest.approx(E_end, rel=1e-9)
     assert source.neutron_scrape_fraction == pytest.approx(scrape, rel=1e-8)
 
 
@@ -468,7 +473,7 @@ def test_multiple_regions():
     )
     assert len(source.x_grid_out) == 12
     assert source.x_grid_out[-1] == pytest.approx(70.0)
-    assert source.beam_energy_grid[4] < 280.0  # Energy lost in the upstream region
+    assert source.beam_energy_grid[4] < 280 * KEV  # Energy lost in the upstream region
 
 
 # --- Outputs ---------------------------------------------------------------------------------
@@ -699,11 +704,11 @@ def test_text_files(mixed_source, tmp_path):
     np.testing.assert_allclose(axial[:, 4], s.scrape_mids_out, rtol=1e-6, atol=1e-12)
     assert np.all(np.diff(axial[:, 4]) >= 0) and 0 < axial[-1, 4] < 1  # Scraping grows
     check_sums(axial, 5, 6, 7)
-    assert axial[:, 8].sum() == pytest.approx(s.deposited_power, rel=1e-5)
-    assert axial[:, 9].sum() == pytest.approx(s.wall_power, rel=1e-5)
+    assert axial[:, 8].sum() == pytest.approx(s.deposited_power / 1e3, rel=1e-5)  # kW
+    assert axial[:, 9].sum() == pytest.approx(s.wall_power / 1e3, rel=1e-5)
 
     energy = np.loadtxt(tmp_path / "energy_spectrum.txt")
-    np.testing.assert_allclose(energy[:, 1] - energy[:, 0], s.energy_bin_width, rtol=1e-4)
+    np.testing.assert_allclose(energy[:, 1] - energy[:, 0], s.energy_bin_width / MEV, rtol=1e-4)
     np.testing.assert_allclose(energy[1:, 0], energy[:-1, 1], rtol=1e-6)  # Contiguous bins
     assert energy[0, 0] > 1.5 and energy[-1, 1] < 16  # From the DD peak to the DT peak
     assert energy[0, 2] > 0 and energy[-1, 3] > 0  # Starts and ends on actual neutrons
@@ -740,8 +745,9 @@ def test_text_files(mixed_source, tmp_path):
         + results["fraction_DT"] * results["mean_neutron_energy_DT"],
         rel=1e-6,
     )
-    assert results["beam_energy_backstop"] == pytest.approx(s.beam_energy_grid[-1], rel=1e-6)
-    assert results["beam_energy_region_end"] == pytest.approx([s.beam_energy_grid[-1]], rel=1e-6)
+    E_end = s.beam_energy_grid[-1] / KEV
+    assert results["beam_energy_backstop"] == pytest.approx(E_end, rel=1e-6)
+    assert results["beam_energy_region_end"] == pytest.approx([E_end], rel=1e-6)
     assert results["beam_power_entry"] == pytest.approx(280 * 10 / 1000)  # kV x mA -> kW
     parts = [results[f"beam_power_{p}"] for p in ("deposited", "wall", "backstop")]
     assert sum(parts) == pytest.approx(results["beam_power_entry"], rel=1e-6)
@@ -803,7 +809,7 @@ TWO_REGIONS = dict(
 def test_single_wall_scraping_formula(mixed_source):
     """With one wall radius, the scraped fraction is the flat-beam 1 - (wall / r)^2."""
     s = mixed_source
-    free = s.beam_radius_entry + np.append(0, np.cumsum(s.divergence_mids / 1000 * s.dx))
+    free = s.beam_radius_entry + np.append(0, np.cumsum(s.divergence_mids * s.dx))
     expected = np.clip(1 - (1.0 / free) ** 2, 0, None)
     np.testing.assert_allclose(s.scrape_grid, expected, rtol=1e-12, atol=1e-15)
     np.testing.assert_allclose(s.radius_grid, np.minimum(free, 1.0), rtol=1e-12)
@@ -836,9 +842,12 @@ def test_value_calculated_in_first_region(quantity):
     """The one missing value can be in any region, not only the last."""
     forward = make_source(**TWO_REGIONS)
     values = {quantity: [None, TWO_REGIONS[quantity][1]]}
-    s = make_source(**{**TWO_REGIONS, **values}, beam_energy_backstop=forward.beam_energy_grid[-1])
+    s = make_source(
+        **{**TWO_REGIONS, **values}, beam_energy_backstop=forward.beam_energy_grid[-1] / KEV
+    )
     assert (s.calculated, s.calculated_region) == (quantity, 0)
-    assert getattr(s, quantity)[0] == pytest.approx(TWO_REGIONS[quantity][0], rel=1e-8)
+    expected = in_code_units(TWO_REGIONS)[quantity][0]
+    assert getattr(s, quantity)[0] == pytest.approx(expected, rel=1e-8)
     inputs = {name: units for name, _, units in s.get_inputs()}
     assert inputs[quantity].endswith("calculated for region 1")
 

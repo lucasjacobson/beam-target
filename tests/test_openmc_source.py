@@ -98,10 +98,8 @@ def test_cells_match_the_output_mesh(h5_path, mixed_source):
             assert src.energy.interpolation == "histogram"
             total = sum(sp.sum() for sp in spectra.values())
             assert src.strength == pytest.approx(total, rel=1e-12)
-            edges = np.concatenate([s.neutron_energy_grid[r] * 1e6 for r in spectra])
-            expected = sum(
-                cdf(s.neutron_energy_grid[r] * 1e6, sp, edges) for r, sp in spectra.items()
-            )
+            edges = np.concatenate([s.neutron_energy_grid[r] for r in spectra])
+            expected = sum(cdf(s.neutron_energy_grid[r], sp, edges) for r, sp in spectra.items())
             got = cdf(src.energy.x, src.energy.p[:-1], edges)
             np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12 * total)
     assert next(sources, None) is None

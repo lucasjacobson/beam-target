@@ -19,6 +19,7 @@ from beamtarget.endf import (
     find_evaluation,
     separation_energy,
 )
+from beamtarget.units import KEV, MEV, MILLIAMPERE, MILLIRADIAN, TORR, ZERO_CELSIUS
 
 DATA = Path(__file__).parent / "data" / "endf"
 ENDFB = DATA / "ENDF-B-VIII.1"
@@ -43,11 +44,11 @@ def thick_be(beam, energy_MeV, nuclear_data, length=1.0, position_bins=60, **kw)
                 position_bins=position_bins,
             )
         ],  # fmt: skip
-        beam_energy_entry=energy_MeV * 1000,
-        beam_current=1.0,
+        beam_energy_entry=energy_MeV * MEV,
+        beam_current=1 * MILLIAMPERE,
         beam_radius_entry=0.1,
         angle_bin_width=10.0,
-        energy_bin_width=0.1,
+        energy_bin_width=0.1 * MEV,
         beam=beam,
         nuclear_data=None if nuclear_data is None else [str(d) for d in nuclear_data],
         **kw,
@@ -273,8 +274,8 @@ def test_evaluation_ending_below_the_beam_energy_is_skipped(energy, library, unp
     li7 = Material("7Li", "solid", atoms={"7Li": 1}, density=0.534)
     s = BeamTarget(
         name=f"h{energy}", regions=[Region(li7, length=1e-3, wall_radius=1.0, position_bins=2)],
-        beam_energy_entry=energy * 1000, beam_current=1e-3, beam_radius_entry=0.1,
-        angle_bin_width=10.0, energy_bin_width=0.1, beam="helion",
+        beam_energy_entry=energy * MEV, beam_current=1e-3 * MILLIAMPERE, beam_radius_entry=0.1,
+        angle_bin_width=10.0, energy_bin_width=0.1 * MEV, beam="helion",
         nuclear_data=["drosg", ENDFB, unpacked("TENDL-2025")],
     )  # fmt: skip
     assert s.reaction_data["h7Li_xn"].startswith(library)
@@ -301,11 +302,12 @@ def test_drosg_first_keeps_its_reactions():
     """DROSG first: a D/T gas uses DROSG even with an evaluated library after it, so the
     results do not change; a Be atom in the gas uses the library."""
     gas = Material("DT + Be", "gas", molecules={"D2": 0.5, "T2": 0.5})
-    regions = [Region(gas, length=50.0, pressure=5.0, temperature=25.0, wall_radius=1.0,
-                      position_bins=10, position_substeps=4, divergence=30.0)]  # fmt: skip
-    kw = dict(name="t", regions=regions, beam_energy_entry=280.0, beam_current=10.0,
-              beam_radius_entry=0.2, angle_bin_width=10.0,
-              energy_bin_width=0.01)  # fmt: skip
+    regions = [Region(gas, length=50.0, pressure=5 * TORR, temperature=25 + ZERO_CELSIUS,
+                      wall_radius=1.0, position_bins=10, position_substeps=4,
+                      divergence=30 * MILLIRADIAN)]  # fmt: skip
+    kw = dict(name="t", regions=regions, beam_energy_entry=280 * KEV,
+              beam_current=10 * MILLIAMPERE, beam_radius_entry=0.2, angle_bin_width=10.0,
+              energy_bin_width=0.01 * MEV)  # fmt: skip
     plain = BeamTarget(**kw)
     with_library = BeamTarget(**kw, nuclear_data=["drosg", str(ENDFB)])
     assert list(with_library.reactions) == ["DD", "DT"]
@@ -497,9 +499,9 @@ def test_lab_tables_bin_smoothly_at_any_angle_bin(angle_bin_width):
     ta = Material("Ta", "solid", atoms={"181Ta": 1}, density=16.654)
     s = BeamTarget(
         name="ta", regions=[Region(ta, wall_radius=10.0, position_bins=4, position_substeps=10)],
-        beam_energy_entry=30000.0, beam_current=1e-3, beam_energy_backstop=10.0,
+        beam_energy_entry=30 * MEV, beam_current=1e-3 * MILLIAMPERE, beam_energy_backstop=10 * KEV,
         beam_radius_entry=0.5, angle_bin_width=angle_bin_width,
-        energy_bin_width=0.5, beam="proton", nuclear_data=[str(FENDL_D)],
+        energy_bin_width=0.5 * MEV, beam="proton", nuclear_data=[str(FENDL_D)],
     )  # fmt: skip
     assert s.reactions["p181Ta_xn"].production.channels[0].law == 7
     per_sr = np.sum(s.neutrons["p181Ta_xn"], axis=(0, 2)) / s.solid_angles_out
@@ -521,8 +523,8 @@ def thin_li7(energy_MeV, nuclear_data):
     return BeamTarget(
         name=f"p{energy_MeV}",
         regions=[Region(li, length=2e-4, wall_radius=1.0, position_bins=1, position_substeps=4)],
-        beam_energy_entry=energy_MeV * 1000, beam_current=1e-3, beam_radius_entry=0.1,
-        angle_bin_width=10.0, energy_bin_width=0.05, beam="proton",
+        beam_energy_entry=energy_MeV * MEV, beam_current=1e-3 * MILLIAMPERE, beam_radius_entry=0.1,
+        angle_bin_width=10.0, energy_bin_width=0.05 * MEV, beam="proton",
         nuclear_data=[str(d) for d in nuclear_data],
     )  # fmt: skip
 
@@ -600,8 +602,8 @@ def uranium_source(beam, energy_MeV, atoms, nuclear_data, length=0.2):
         name=f"{beam}U",
         regions=[Region(material, length=length, wall_radius=10.0, position_bins=1,
                         position_substeps=100)],
-        beam_energy_entry=energy_MeV * 1000, beam_current=1.0, beam_radius_entry=0.1,
-        angle_bin_width=10.0, energy_bin_width=0.1, beam=beam,
+        beam_energy_entry=energy_MeV * MEV, beam_current=1 * MILLIAMPERE, beam_radius_entry=0.1,
+        angle_bin_width=10.0, energy_bin_width=0.1 * MEV, beam=beam,
         nuclear_data=[str(d) for d in nuclear_data],
     )  # fmt: skip
 
