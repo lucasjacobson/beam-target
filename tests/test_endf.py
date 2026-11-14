@@ -8,6 +8,7 @@ import h5py
 import numpy as np
 import pytest
 from conftest import channel_warnings
+from regression_cases import unpacked_library
 
 from beamtarget import BeamTarget, Material, Region, endf, load_input
 from beamtarget.endf import (
@@ -23,7 +24,6 @@ DATA = Path(__file__).parent / "data" / "endf"
 ENDFB = DATA / "ENDF-B-VIII.1"
 TENDL25 = DATA / "TENDL-2025"
 P_BE9 = ENDFB / "protons" / "p-004_Be_009.endf"
-A_BE9_TENDL = TENDL25 / "a" / "a-Be009.tendl"
 BE = Material("Be", "solid", atoms={"Be": 1}, density=1.848)
 
 # MCNP: neutrons created by charged-particle reactions per beam particle in thick Be
@@ -67,18 +67,38 @@ def test_reads_proton_evaluation():
     assert x.missing_fraction(18.0) == 0
 
 
-def test_reads_tendl_evaluation():
-    x = NeutronProduction(A_BE9_TENDL)
-    assert (x.beam, x.target, x.emax) == ("a", (4, 9), 200.0)
-    # Kalbach-Mann with the slope from the systematics: no slope in the file
+@pytest.fixture(scope="module")
+def unpacked(tmp_path_factory):
+    """The bundled libraries with their compressed (.xz) files unpacked: name -> directory."""
+    directory = tmp_path_factory.mktemp("libraries")
+    return lambda name: unpacked_library(name, directory)
+
+
+def test_kalbach_slope_from_systematics(unpacked):
+    """ENDF/B-VIII.1's p + 184W gives Kalbach-Mann distributions without the slope (taken from
+    the systematics) and with histogram outgoing energies."""
+    x = NeutronProduction(unpacked("ENDF-B-VIII.1") / "protons" / "p-074_W_184.endf")
+    assert (x.beam, x.target, x.emax) == ("p", (74, 184), 150.0)
     dist = x.channels[0].distributions[5]
-    assert dist.kind == "kalbach" and dist.params.shape[1] == 1
+    assert dist.kind == "kalbach" and dist.params.shape[1] == 1 and dist.lep == 1
 
 
-@pytest.mark.parametrize("path, energy", [(P_BE9, 18.0), (P_BE9, 70.0), (A_BE9_TENDL, 40.0)])
-def test_lab_spectrum_conserves_the_total(path, energy):
+def test_reads_tendl_evaluation(unpacked):
+    x = NeutronProduction(unpacked("TENDL-2025") / "h" / "h-Li007.tendl")
+    assert (x.beam, x.target, x.emax) == ("h", (3, 7), 200.0)
+    assert x.missing_fraction(30.0) == 0
+
+
+@pytest.mark.parametrize(
+    "path, energy",
+    [(P_BE9, 18.0), (P_BE9, 70.0), ("ENDF-B-VIII.1/protons/p-074_W_184.endf", 40.0)],
+)
+def test_lab_spectrum_conserves_the_total(path, energy, unpacked):
     """Binned into lab angles and energies, the spectrum adds up to the production cross
     section exactly, and forward neutrons are faster than backward ones."""
+    if isinstance(path, str):  # In a compressed library
+        library, rest = path.split("/", 1)
+        path = unpacked(library) / rest
     x = NeutronProduction(path)
     angles = np.arange(0, 181, 10.0)
     top = x.max_lab_energy(energy)
@@ -135,10 +155,10 @@ def test_two_body_channels_at_each_beam_energy():
     )
 
 
-def test_kalbach_slope_systematics():
+def test_kalbach_slope_systematics(unpacked):
     """The slope grows with the emitted energy; separation energies are sensible (a
     neutron is bound by roughly 6-8 MeV in 12C, the compound of alpha + 9Be)."""
-    x = NeutronProduction(A_BE9_TENDL)
+    x = NeutronProduction(unpacked("ENDF-B-VIII.1") / "protons" / "p-074_W_184.endf")
     a = x.kalbach_slope(40.0, np.array([1.0, 10.0, 30.0]))
     assert np.all(np.diff(a) > 0) and np.all(a > 0)
     assert 3 < separation_energy(6, 13, 6, 12, (0, 1)) < 10
@@ -160,9 +180,10 @@ def test_library_file_names(name, parsed):
     assert _parse_name(name) == parsed
 
 
-def test_find_evaluation():
+def test_find_evaluation(unpacked):
     assert Path(find_evaluation(ENDFB, "p", (4, 9))) == P_BE9
-    assert Path(find_evaluation(TENDL25, "a", (4, 9))) == A_BE9_TENDL
+    tendl = unpacked("TENDL-2025")
+    assert Path(find_evaluation(tendl, "h", (3, 7))) == tendl / "h" / "h-Li007.tendl"
     assert find_evaluation(ENDFB, "d", (4, 9)) is None
     assert find_evaluation(DATA / "missing", "p", (4, 9)) is None
 
@@ -245,16 +266,18 @@ def test_protons_on_thick_be_match_mcnp(energy):
     assert channel_warnings(s) == []
 
 
-@pytest.mark.parametrize("energy", [30, 70])
-def test_alphas_fall_through_to_tendl(energy):
-    """ENDF/B-VIII.1's alpha + 9Be ends at 15 MeV, so the next library is used. (MCNP 6.3
-    with TENDL-2021-based tables gave 3.1157e-3 and 1.4677e-2 neutrons per alpha at 30 and
-    70 MeV, which TENDL-2021 reproduced within 1.5%; TENDL-2025's evaluation gives 1.25 and
-    1.17 times as many. Its results are pinned in test_regression.py.)"""
-    s = thick_be("alpha", energy, ["drosg", ENDFB, TENDL25], length=0.25, position_bins=50)
-    assert s.beam_energy_grid[-1] == 0
-    assert s.reaction_data["a9Be_xn"].startswith("TENDL-2025")
-    assert channel_warnings(s) == []
+@pytest.mark.parametrize("energy, library", [(15, "ENDF/B-VIII.1"), (30, "TENDL-2025")])
+def test_evaluation_ending_below_the_beam_energy_is_skipped(energy, library, unpacked):
+    """ENDF/B-VIII.1's helion + 7Li ends at 20 MeV: above that the next library (TENDL-2025,
+    the only one with helions above 20 MeV) is used."""
+    li7 = Material("7Li", "solid", atoms={"7Li": 1}, density=0.534)
+    s = BeamTarget(
+        name=f"h{energy}", regions=[Region(li7, length=1e-3, wall_radius=1.0, position_bins=2)],
+        beam_energy_entry=energy * 1000, beam_current=1e-3, beam_radius_entry=0.1,
+        angle_bin_width=10.0, energy_bin_width=0.1, beam="helion",
+        nuclear_data=["drosg", ENDFB, unpacked("TENDL-2025")],
+    )  # fmt: skip
+    assert s.reaction_data["h7Li_xn"].startswith(library)
 
 
 def test_no_evaluation_reaching_the_beam_energy():

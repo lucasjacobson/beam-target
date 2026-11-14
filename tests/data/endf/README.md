@@ -9,9 +9,10 @@ temporary directory (see `tests/regression_cases.py`).
 | File | Library | Contents | Used to test |
 |---|---|---|---|
 | `ENDF-B-VIII.1/protons/p-004_Be_009.endf` | ENDF/B-VIII.1 (LANL, P. G. Young and E. D. Arthur, 1988) | p + Be-9 to 113 MeV | Kalbach-Mann continuum (LAW=1, linear outgoing energies) and two-body level channels (LAW=2); the proton thick-target benchmark; regression cases at 18 and 70 MeV |
-| `ENDF-B-VIII.1/protons/p-074_W_184.endf.xz` | ENDF/B-VIII.1 | p + W-184 | A heavy target from ENDF/B; regression case at 30 MeV |
+| `ENDF-B-VIII.1/protons/p-074_W_184.endf.xz` | ENDF/B-VIII.1 | p + W-184 to 150 MeV | Kalbach-Mann with the slope from the systematics (histogram outgoing energies); a heavy target from ENDF/B; regression case at 30 MeV |
 | `ENDF-B-VIII.1/alphas/a-004_Be_009.endf` | ENDF/B-VIII.1 (NNL, Holmes et al., 2018) | alpha + Be-9 to 15 MeV | Skipping an evaluation that ends below the beam energy; regression case at 10 MeV |
-| `TENDL-2025/a/a-Be009.tendl` | TENDL-2025 (TALYS) | alpha + Be-9 to 200 MeV | Kalbach-Mann with the slope from the systematics (histogram outgoing energies) |
+| `ENDF-B-VIII.1/helium3s/h-003_Li_007.endf` | ENDF/B-VIII.1 | helion + Li-7 to 20 MeV (one channel) | Skipping an evaluation that ends below the beam energy |
+| `TENDL-2025/h/h-Li007.tendl.xz` | TENDL-2025 (TALYS) | helion + Li-7 to 200 MeV | Reading TENDL files; the library used above 20 MeV (the only one with helions there) |
 | `FENDL-3.2c/proton/p_7328_73-Ta-181.endf.xz` | FENDL-3.2c | p + Ta-181 | Lab-frame tables (LAW=7); regression case at 30 MeV |
 | `FENDL-3.2c/proton/p_9237_92-U-238.endf.xz` | FENDL-3.2c | p + U-238, with fission (MT=18) | Lab-frame tables with fission neutrons; regression case at 30 MeV |
 | `FENDL-3.2c/proton/p_0625_6-C-12.endf.xz` | FENDL-3.2c | p + C-12 | Lab-frame tables with histogram spectra; regression case at 30 MeV |
