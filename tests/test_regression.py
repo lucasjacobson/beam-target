@@ -1,7 +1,7 @@
-"""Pinned results of thick-target sources from evaluated data (see regression_cases.py):
-p + 9Be (ENDF/B-VIII.1), p + 181Ta, p + 238U, and d + 7Li (FENDL-3.2c), and alpha + 9Be
-(TENDL-2025). A code change that moves any of them fails here; if it is meant to, write the
-references again with python tests/regression_cases.py."""
+"""Pinned results of neutron sources covering the beams, targets, libraries, and physics the
+code handles (see regression_cases.py for the cases). A code change that moves any of them
+fails here; if it is meant to, write the references again with
+python tests/regression_cases.py."""
 
 import numpy as np
 import pytest
