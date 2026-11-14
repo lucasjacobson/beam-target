@@ -17,8 +17,8 @@ def source_h5(tmp_path_factory):
 def test_read_surfaces(source_h5):
     surfaces = view.read_surfaces(source_h5)
     assert [s[0].split(" neutron")[0] for s in surfaces] == ["D(d,n)$^{3}$He", "T(d,n)$^{4}$He"]
-    title, angles, energies, density = view.read_surfaces(source_h5, ["DT"], (14.0, 15.0))[0]
-    assert title.endswith("(test)")
+    title, angles, energies, density, unit = view.read_surfaces(source_h5, ["DT"], (14.0, 15.0))[0]
+    assert title.endswith("(test)") and unit == "MeV"
     assert density.shape == (len(angles), len(energies))
     assert 14.0 <= energies.min() and energies.max() <= 15.0
 

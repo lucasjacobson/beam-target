@@ -30,18 +30,18 @@ atoms = { Ti = 1, D = 1.5 }
 [regions.gas]
 material = "DT50"
 length = 50.0
-pressure = 5.0
-temperature = 25.0
+pressure = "5 torr"
+temperature = "25 degC"
 wall_radius = 1.0
-divergence = 30.0
+divergence = "30 mrad"
 position_bins = 10
 position_substeps = 2
 
 [regions.stage]
 material = "DT50"
 length = 10.0
-pressure = 1e-3
-temperature = 25.0
+pressure = "1e-3 torr"
+temperature = "25 degC"
 wall_radius = 0.5
 position_bins = 1
 position_substeps = 4
@@ -49,9 +49,9 @@ position_substeps = 4
 [defaults]
 regions = ["gas"]
 angle_bin_width = 10.0
-energy_bin_width = 0.01
-beam_energy_entry = 280.0
-beam_current = 10.0
+energy_bin_width = "0.01 MeV"
+beam_energy_entry = "280 keV"
+beam_current = "10 mA"
 beam_radius_entry = 0.2
 """
 
@@ -203,7 +203,7 @@ regions = [{ material = "D2", length = 5, density = 1e-6, wall_radius = 2, posit
 
 [cases.use]
 regions = [{ use = "gas", material = "D2", length = false }]
-beam_energy_backstop = 200.0
+beam_energy_backstop = "200 keV"
 
 [cases.defaults]
 """,
@@ -236,8 +236,8 @@ beam_energy_backstop = 200.0
         ('regions = "gas"', "regions must be list"),
         ('regions = [{ use = "gas", color = "red" }]', r"unknown setting\(s\) color"),
         ('regions = [{ use = "gas", material = "nope" }]', r"no \[materials.nope\] table"),
-        ('regions = [{ use = "gas", length = "long" }]', "length must be float"),
-        ('regions = [{ use = "gas", density = false }]', "density must be float"),
+        ('regions = [{ use = "gas", length = "long" }]', "length = 'long': expected a number"),
+        ('regions = [{ use = "gas", density = false }]', "density must be a number and a unit"),
         ('regions = [{ material = "DT50", length = 1.0 }]', "missing wall_radius"),
     ],
     ids=[
@@ -332,7 +332,7 @@ def test_beam_setting(tmp_path):
     """beam picks the beam particle, a deuteron by default; a proton beam on lithium."""
     lithium = (
         '\n[materials.Li]\nphase = "solid"\ndensity = 0.534\natoms = { 7Li = 1 }\n'
-        '\n[cases.d]\n\n[cases.p]\nbeam = "proton"\nbeam_energy_entry = 2500.0\n'
+        '\n[cases.d]\n\n[cases.p]\nbeam = "proton"\nbeam_energy_entry = "2.5 MeV"\n'
         'regions = [{ material = "Li", length = 1e-3, wall_radius = 1.0, position_bins = 2, '
         "position_substeps = 2 }]\n"
     )
@@ -347,14 +347,28 @@ def test_beam_setting(tmp_path):
     "extra, message",
     [
         (
-            "[cases.a]\nbeam_current = 5.0\nyield_total = 1e10\n",
+            '[cases.a]\nbeam_current = "5 mA"\nyield_total = 1e10\n',
             "beam_current and yield_total are both set",
         ),
         ('[cases.a]\nyield_total = "many"\n', "yield_total must be float"),
-        ('[cases.a]\nbeam_energy_backstop = "low"\n', "beam_energy_backstop must be float"),
+        ('[cases.a]\nbeam_energy_backstop = "low"\n', "beam_energy_backstop = 'low': expected"),
         ("[cases.a]\nbeam_energy = 3\n", "unknown setting"),
-        ("[cases.a]\npressure = 5.0\n", r"unknown setting\(s\) pressure"),
-        ('[cases.a]\nbeam_energy_entry = "high"\n', "beam_energy_entry must be float"),
+        ('[cases.a]\npressure = "5 torr"\n', r"unknown setting\(s\) pressure"),
+        ('[cases.a]\nbeam_energy_entry = "high"\n', "beam_energy_entry = 'high': expected"),
+        (
+            "[cases.a]\nbeam_energy_entry = 280\n",
+            'beam_energy_entry needs a unit, such as "280 keV"',
+        ),
+        ('[cases.a]\nbeam_energy_entry = "280 kev"\n', r"unknown energy unit 'kev' \(use eV, keV"),
+        ('[cases.a]\nbeam_current = "10 keV"\n', "unknown current unit 'keV'"),
+        ("[cases.a]\nbeam_current = 10\n", "beam_current needs a unit"),
+        ("[cases.a]\nbeam_energy_backstop = 10\n", "beam_energy_backstop needs a unit"),
+        ("[cases.a]\nenergy_bin_width = 0.01\n", "energy_bin_width needs a unit"),
+        ('[cases.a]\nregions = [{ use = "gas", pressure = 5 }]\n', "pressure needs a unit"),
+        ('[cases.a]\nregions = [{ use = "gas", temperature = 25 }]\n', "temperature needs a unit"),
+        ('[cases.a]\nregions = [{ use = "gas", divergence = 30 }]\n', "divergence needs a unit"),
+        ('[cases.a]\nregions = [{ use = "gas", length = "5 furlongs" }]\n', "unknown length unit"),
+        ("[cases.a]\nbeam_radius_entry = [0.2]\n", "beam_radius_entry must be a number and a unit"),
         ('[cases.a]\nbeam_direction = "z"\n', "beam_direction must be one of"),
         ('[cases.a]\nstopping_power = "pstar"\n', "stopping_power must be one of"),
         ('[cases.a]\nbeam = "p"\n', 'beam must be one of "1H", "proton"'),
@@ -373,6 +387,17 @@ def test_beam_setting(tmp_path):
         "misspelt",
         "region setting in a case",
         "wrong type",
+        "plain beam energy",
+        "unit case",
+        "unit of another quantity",
+        "plain current",
+        "plain backstop energy",
+        "plain energy bin",
+        "plain pressure",
+        "plain temperature",
+        "plain divergence",
+        "unknown length unit",
+        "length type",
         "direction",
         "stopping power",
         "beam",
@@ -550,7 +575,7 @@ def test_backstop_position(tmp_path):
     calculated; entry_position set in a case replaces it from [defaults]."""
     text = BASE.replace("[defaults]\n", "[defaults]\nbackstop_position = [0.0, 0.0, 0.0]\n") + (
         '\n[cases.fixed]\n\n[cases.find_length]\nregions = [{ use = "gas", length = false }]\n'
-        "beam_energy_backstop = 200.0\n\n"
+        'beam_energy_backstop = "200 keV"\n\n'
         "[cases.by_entry]\nentry_position = [0, 0, 7]\n"
     )
     path = write_input(tmp_path, text)

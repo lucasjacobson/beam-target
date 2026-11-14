@@ -6,6 +6,9 @@
 # temperature), entry_position (instead of backstop_position), and atoms with density for a
 # solid material. See examples/generic.toml for those.
 #
+# Values with units are written with them, such as "280 keV"; the README lists the units
+# accepted. The results are in the units used here.
+#
 # Run with:  python -m beamtarget examples/simple.toml
 
 [materials.DT90]
@@ -15,10 +18,10 @@ molecules = { D2 = 0.1, T2 = 0.9 }  # mole fractions of the molecules
 [regions.chamber]
 material          = "DT90"
 length            = 137.0   # cm
-pressure          = 38.0    # torr
-temperature       = 1800.0  # degC
+pressure          = "38 torr"
+temperature       = "1800 degC"
 wall_radius       = 4.1783  # cm
-divergence        = 36.0    # mrad
+divergence        = "36 mrad"
 position_bins     = 137     # position bins
 # position_substeps = 10     # steps the beam is followed in across each bin (default 10)
 
@@ -27,11 +30,11 @@ position_bins     = 137     # position bins
 # "alpha" or "4He"
 beam                = "deuteron"
 regions             = ["chamber"]
-beam_energy_entry   = 280.0   # keV
-beam_current        = 50.0    # mA
+beam_energy_entry   = "280 keV"
+beam_current        = "50 mA"
 beam_radius_entry   = 0.2     # cm, beam radius at entry
 angle_bin_width     = 3.0     # deg, output
-energy_bin_width    = 0.01    # MeV, output
+energy_bin_width    = "0.01 MeV"  # output
 stopping_power      = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
 beam_direction      = "-z"    # beam direction in MCNP and OpenMC: -x, +x, -y, +y, -z, or +z
 backstop_position   = [0.0, 0.0, 0.0]  # cm, where the beam reaches the backstop

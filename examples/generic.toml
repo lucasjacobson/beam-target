@@ -15,6 +15,14 @@
 # Likewise give either the beam current or the total neutron yield (yield_total), and the
 # other is calculated.
 #
+# Values with units are written with them, such as "280 keV": energies in eV, keV, MeV, or
+# GeV; currents in A, mA, uA, or nA; pressures in Pa, kPa, torr, mtorr, mbar, bar, atm, or psi;
+# temperatures in K, degC (or C), or degF (or F); divergences in rad, mrad, urad, or deg. Lengths
+# (m, cm, mm, um, nm, in, ft) and densities (g/cm3, kg/m3, g/L) may also be plain numbers, in
+# cm and g/cm3. A case's results are in the units it uses (the first one, where it uses
+# several for one kind of value, such as lengths along the beam or radii); the MCNP SDEF is
+# always in cm and MeV.
+#
 # Settings in [defaults] apply to every case unless the case sets them itself. Here they hold
 # a deuteron beam into a 50/50 D/T gas target chamber, and each case changes only what it
 # demonstrates.
@@ -24,13 +32,13 @@
 # "alpha" or "4He"
 beam              = "deuteron"
 regions           = ["chamber"]
-beam_energy_entry = 280.0  # keV
-beam_current      = 50.0   # mA
+beam_energy_entry = "280 keV"
+beam_current      = "50 mA"
 beam_radius_entry = 0.2    # cm, beam radius where it enters the first region
 
 # Angle and energy mesh (the position mesh belongs to each region)
 angle_bin_width   = 3.0    # deg (180 gives an isotropic source)
-energy_bin_width  = 0.01   # MeV
+energy_bin_width  = "0.01 MeV"
 
 # MCNP SDEF card: where the source goes in the MCNP geometry. Place it by where the beam
 # reaches the backstop (backstop_position) or where it enters the first region
@@ -91,10 +99,10 @@ atoms   = { Be = 1.0 }
 [regions.chamber]
 material          = "DT50"
 length            = 137.0   # cm
-pressure          = 38.0    # torr
-temperature       = 1800.0  # degC
+pressure          = "38 torr"
+temperature       = "1800 degC"
 wall_radius       = 4.1783  # cm; the beam outside it is scraped off
-divergence        = 36.0    # mrad
+divergence        = "36 mrad"
 position_bins     = 137     # 1 cm each
 position_substeps = 10      # steps the beam is followed in across each bin (10 is the default)
 
@@ -102,16 +110,16 @@ position_substeps = 10      # steps the beam is followed in across each bin (10 
 [regions.stage1]
 material          = "DT50"
 length            = 50.0
-pressure          = 0.05
-temperature       = 25.0
+pressure          = "0.05 torr"
+temperature       = "25 degC"
 wall_radius       = 1.0
 position_bins     = 1
 
 [regions.stage2]
 material          = "DT50"
 length            = 50.0
-pressure          = 0.5
-temperature       = 25.0
+pressure          = "0.5 torr"
+temperature       = "25 degC"
 wall_radius       = 1.0
 position_bins     = 1
 
@@ -119,24 +127,24 @@ position_bins     = 1
 [regions.aperture]
 material          = "DT50"
 length            = 1.0
-pressure          = 38.0
-temperature       = 1800.0
+pressure          = "38 torr"
+temperature       = "1800 degC"
 wall_radius       = 2.0
-divergence        = 36.0
+divergence        = "36 mrad"
 position_bins     = 1
 
 # A titanium deuteride film 5 micrometers thick. Divergence means nothing over micrometers,
 # so it is left at its default of 0 (a constant beam radius).
 [regions.TiD_film]
 material          = "TiD1.5"
-length            = 5e-4  # cm
+length            = "5 um"  # with a unit: this case's lengths are reported in um
 wall_radius       = 4.1783
 position_bins     = 137
 
 # A lithium metal film 10 micrometers thick
 [regions.Li_film]
 material          = "Li"
-length            = 1e-3  # cm
+length            = "10 um"
 wall_radius       = 4.1783
 position_bins     = 100
 
@@ -167,13 +175,13 @@ regions = [{ use = "chamber", pressure = false, temperature = false, density = 1
 # The beam stops in about 2 micrometers of the film
 [cases.TiD_thick]
 regions      = ["TiD_film"]
-beam_current = 1.0  # mA
+beam_current = "1 mA"
 
 # The film thickness that leaves the beam with 100 keV
 [cases.TiD_find_thickness]
 regions              = [{ use = "TiD_film", length = false }]
-beam_energy_backstop = 100.0  # keV
-beam_current         = 1.0    # mA
+beam_energy_backstop = "100 keV"
+beam_current         = "1 mA"
 
 # --- Other beams -----------------------------------------------------------------------------
 
@@ -181,8 +189,8 @@ beam_current         = 1.0    # mA
 # (n0) and its first excited state (n1). Up to 3.70 MeV, where 7Li(p,n3He)4He opens.
 [cases.p_Li_thin]
 beam              = "proton"
-beam_energy_entry = 2500.0  # keV
-beam_current      = 1.0     # mA
+beam_energy_entry = "2.5 MeV"
+beam_current      = "1 mA"
 regions           = ["Li_film"]
 
 # Tritons into deuterium gas: D(t,n)4He, the DT reaction seen from the other side
@@ -196,9 +204,9 @@ regions = [{ use = "chamber", material = "D2" }]
 # so 20 steps per position bin keep the 9Be(p,n) lines from making stripes in the spectrum.
 [cases.p_Be_thick]
 beam              = "proton"
-beam_energy_entry = 18000.0  # keV
-beam_current      = 0.1      # mA
-energy_bin_width  = 0.1      # MeV
+beam_energy_entry = "18 MeV"
+beam_current      = "0.1 mA"
+energy_bin_width  = "0.1 MeV"
 nuclear_data      = ["drosg", "../tests/data/endf/ENDF-B-VIII.1"]
 regions           = [
     { material = "Be", length = 0.5, wall_radius = 4.1783, position_bins = 50, position_substeps = 20 },
@@ -212,20 +220,20 @@ stopping_power = "icru49"
 
 # A denser target: the beam stops about 117 cm in, so no beam power reaches the backstop
 [cases.DT50_beam_stops]
-regions = [{ use = "chamber", pressure = 50.0 }]
+regions = [{ use = "chamber", pressure = "50 torr" }]
 
 # --- Calculated settings ---------------------------------------------------------------------
 
 # Calculate the chamber length that leaves the beam with 30 keV at the backstop
 [cases.DT50_find_length]
 regions              = [{ use = "chamber", length = false }]
-beam_energy_backstop = 30.0  # keV
+beam_energy_backstop = "30 keV"
 
 # Calculate the pressure instead (no pressure, but a temperature), for the same backstop
 # energy
 [cases.DT50_find_pressure]
 regions              = [{ use = "chamber", pressure = false }]
-beam_energy_backstop = 30.0  # keV
+beam_energy_backstop = "30 keV"
 
 # Calculate the beam current that gives a total neutron yield of 1e13 n/s
 [cases.DT50_find_current]
@@ -252,5 +260,5 @@ regions = [
 # No divergence (a constant beam radius, so no scraping) and one output angle bin (an
 # isotropic source)
 [cases.DT50_isotropic]
-regions             = [{ use = "chamber", divergence = 0.0 }]
+regions             = [{ use = "chamber", divergence = "0 mrad" }]
 angle_bin_width     = 180.0  # deg

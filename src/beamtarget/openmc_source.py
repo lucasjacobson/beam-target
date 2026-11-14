@@ -16,6 +16,7 @@ import h5py
 import numpy as np
 
 from .source import SDEF_DIRECTIONS
+from .units import to_internal
 
 # Oldest source.h5 layout this module reads (it needs the placement attributes)
 MIN_FORMAT_VERSION = 6
@@ -73,6 +74,12 @@ def _check_format(path, hf):
             f"{path} has format_version {version}; get_openmc_sources needs "
             f"{MIN_FORMAT_VERSION} or later (rerun the case to write it again)"
         )
+
+
+def _read(hf, key):
+    """Return a dataset of a source.h5 in the units OpenMC uses (cm, eV), from the units it
+    was written in (its units attribute)."""
+    return to_internal(hf[key][()], str(hf[key].attrs["units"]))
 
 
 def _merged_spectrum(grids, spectra):
@@ -151,13 +158,13 @@ def get_openmc_sources(path, direction=None, entry_position=None, backstop_posit
 
     with h5py.File(path, "r") as hf:
         _check_format(path, hf)
-        x_grid = hf["x_grid"][()]  # cm, from the entry point along the beam
-        radius = hf["radius_mids"][()]  # cm
+        x_grid = _read(hf, "x_grid")  # cm, from the entry point along the beam
+        radius = _read(hf, "radius_mids")  # cm
         cosines = np.cos(np.radians(hf["angle_grid"][()]))  # Decreasing
         reactions = sorted(
             key.removeprefix("neutrons_") for key in hf if key.startswith("neutrons_")
         )
-        energy_grids = {rxn: hf[f"neutron_energy_grid_{rxn}"][()] for rxn in reactions}  # MeV
+        energy_grids = {rxn: _read(hf, f"neutron_energy_grid_{rxn}") for rxn in reactions}  # eV
         neutrons = {rxn: hf[f"neutrons_{rxn}"][()] for rxn in reactions}  # n/s
         case_direction = str(hf.attrs["direction"])
         case_entry = np.array(hf.attrs["entry_position"], dtype=float)
@@ -203,11 +210,7 @@ def get_openmc_sources(path, direction=None, entry_position=None, backstop_posit
             )
             # Histogram: one probability per bin, plus a final 0 that is not used (the XML
             # holds energies and probabilities as one list of equal halves)
-            energy = openmc.stats.Tabular(
-                edges * 1e6,
-                np.append(p, 0.0),
-                interpolation="histogram",  # MeV -> eV
-            )
+            energy = openmc.stats.Tabular(edges, np.append(p, 0.0), interpolation="histogram")
             sources.append(
                 openmc.IndependentSource(
                     space=space,

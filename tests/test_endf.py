@@ -343,11 +343,11 @@ atoms = { Be = 1 }
 
 [cases.p18]
 beam = "proton"
-beam_energy_entry = 18000.0
-beam_current = 1.0
+beam_energy_entry = "18 MeV"
+beam_current = "1 mA"
 beam_radius_entry = 0.1
 angle_bin_width = 10.0
-energy_bin_width = 0.1
+energy_bin_width = "0.1 MeV"
 nuclear_data = ["drosg", "LIBRARY"]
 regions = [{ material = "Be", length = 0.5, wall_radius = 10.0, position_bins = 10, position_substeps = 10 }]
 """

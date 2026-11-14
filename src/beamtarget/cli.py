@@ -28,18 +28,39 @@ from .source import (
     Material,
     Region,
 )
-from .units import from_internal, to_internal
+from .units import DEFAULT_UNITS, example, from_internal, parse, to_internal, units_of
 
 logger = logging.getLogger(__name__)
+
+
+class Measure:
+    """The type of a setting with a unit: a string such as "280 keV" (any unit of quantity in
+    units.UNITS), or, if plain is a unit, also a plain number in that unit. The first unit a
+    case uses for each kind of result (output, a quantity of units.DEFAULT_UNITS) is the unit
+    its results are reported in."""
+
+    def __init__(self, quantity, output, plain=None):
+        self.quantity, self.output, self.plain = quantity, output, plain
+
+
+BEAM_ENERGY = Measure("energy", "beam_energy")
+NEUTRON_ENERGY = Measure("energy", "neutron_energy")
+CURRENT = Measure("current", "current")
+PRESSURE = Measure("pressure", "pressure")
+TEMPERATURE = Measure("temperature", "temperature")
+DIVERGENCE = Measure("divergence", "divergence")
+LENGTH = Measure("length", "length", plain="cm")
+RADIUS = Measure("length", "radius", plain="cm")
+DENSITY = Measure("density", "density", plain="g/cm3")
 
 # Case settings: name -> required type. Every case needs all of them, either directly or
 # from [defaults].
 CASE_SETTINGS = {
     "regions": list,  # The regions the beam passes through, in order (see REGION_SETTINGS)
-    "beam_energy_entry": float,  # Beam energy where it enters the first region [keV]
-    "beam_radius_entry": float,  # Beam radius where it enters the first region [cm]
+    "beam_energy_entry": BEAM_ENERGY,  # Beam energy where it enters the first region
+    "beam_radius_entry": RADIUS,  # Beam radius where it enters the first region
     "angle_bin_width": float,  # Width of the emission-angle bins [deg] (output mesh)
-    "energy_bin_width": float,  # Width of the neutron energy bins [MeV] (output mesh)
+    "energy_bin_width": NEUTRON_ENERGY,  # Width of the neutron energy bins (output mesh)
 }
 
 # Settings that were renamed: old name -> what to do. An error, not a warning: the old
@@ -58,7 +79,7 @@ RENAMED_SETTINGS = {
 # Beam settings: every case needs exactly one of these (directly or from [defaults]), and
 # the other is calculated
 BEAM_SETTINGS = {
-    "beam_current": float,  # Beam current [mA]
+    "beam_current": CURRENT,  # Beam current
     "yield_total": float,  # Total neutron yield [n/s]
 }
 
@@ -67,7 +88,8 @@ OPTIONAL_CASE_SETTINGS = {
     # Beam particle, see nuclear.BEAM_NAMES: "proton" or "1H", "deuteron" or "2H", "triton" or
     # "3H", "helion" or "3He", "alpha" or "4He"
     "beam": "deuteron",
-    # Beam energy at the backstop [keV]; give it to calculate the one region value left out
+    # Beam energy at the backstop (BEAM_ENERGY); give it to calculate the one region value
+    # left out
     "beam_energy_backstop": None,
     "beam_direction": "-z",  # Beam direction in MCNP and OpenMC, see SDEF_DIRECTIONS
     "stopping_power": "srim",  # Stopping-power set, see STOPPING_POWERS
@@ -97,18 +119,16 @@ PLACEMENT_SETTINGS = {
 # calculated.
 REGION_SETTINGS = {
     "material": (str, None),  # Name of the [materials.<name>] table filling the region
-    "wall_radius": (float, None),  # Radius of the wall around the region [cm]
+    "wall_radius": (RADIUS, None),  # Radius of the wall around the region
     "position_bins": (int, None),  # Position bins (output mesh)
-    "length": (float, ""),  # Length along the beam [cm]
-    "pressure": (float, ""),  # Gas pressure [torr], with temperature
-    "temperature": (float, ""),  # Gas temperature [degC], with pressure
-    "density": (float, ""),  # Gas density [g/cm3], instead of pressure and temperature
-    "divergence": (float, 0.0),  # Beam divergence [mrad]
+    "length": (LENGTH, ""),  # Length along the beam
+    "pressure": (PRESSURE, ""),  # Gas pressure, with temperature
+    "temperature": (TEMPERATURE, ""),  # Gas temperature, with pressure
+    "density": (DENSITY, ""),  # Gas density, instead of pressure and temperature
+    "divergence": (DIVERGENCE, 0.0),  # Beam divergence (growth in radius per unit length)
     # Steps the beam is followed in across each position bin (the internal mesh)
     "position_substeps": (int, POSITION_SUBSTEPS),
 }
-# The units of the region settings that the code holds in other units (see units.py)
-REGION_UNITS = {"pressure": "torr", "temperature": "degC", "divergence": "mrad"}
 
 # Material settings: name -> type. A solid needs atoms and density, a gas molecules (see
 # Material). A gas's state (pressure and temperature, or density) belongs to the region it
@@ -117,7 +137,7 @@ MATERIAL_SETTINGS = {
     "phase": str,  # "gas" or "solid"
     "atoms": dict,  # Solid: {atom: amount}, atom ratios
     "molecules": dict,  # Gas: {formula: amount}, mole fractions of its molecules
-    "density": float,  # Mass density of a solid [g/cm3]
+    "density": DENSITY,  # Mass density of a solid
 }
 
 CASE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -128,7 +148,11 @@ class InputError(ValueError):
 
 
 def _check_type(where, key, value, expected):
-    """Raise InputError unless value has the expected type (int is accepted for float)."""
+    """Raise InputError unless value has the expected type (int is accepted for float; see
+    _read_measure for a Measure)."""
+    if isinstance(expected, Measure):
+        _read_measure(where, key, value, expected)
+        return
     if isinstance(value, bool):
         ok = expected is bool
     elif expected is float:
@@ -139,6 +163,33 @@ def _check_type(where, key, value, expected):
         raise InputError(f"{where}: {key} must be {expected.__name__}, got {value!r}")
 
 
+def _read_measure(where, key, value, measure, units=None):
+    """Return a setting with a unit (see Measure) in the code's units. If units (a dict) is
+    given, the unit is recorded there as units[measure.output] unless one is there already
+    (the first unit a case uses is that of its results)."""
+    accepted = ", ".join(units_of(measure.quantity))
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if measure.plain is None:
+            raise InputError(
+                f'{where}: {key} needs a unit, such as "{example(measure.quantity)}" '
+                f"(units: {accepted})"
+            )
+        return to_internal(float(value), measure.plain)
+    if not isinstance(value, str):
+        plain = f" or a number in {measure.plain}" if measure.plain else ""
+        raise InputError(
+            f'{where}: {key} must be a number and a unit, such as "{example(measure.quantity)}"'
+            f" (units: {accepted}){plain}, got {value!r}"
+        )
+    try:
+        internal, unit = parse(value, measure.quantity)
+    except ValueError as e:
+        raise InputError(f"{where}: {key} = {value!r}: {e}") from None
+    if units is not None:
+        units.setdefault(measure.output, unit)
+    return internal
+
+
 def _check_keys(where, table, allowed, what="setting"):
     for key in sorted(set(table) & set(RENAMED_SETTINGS)):
         raise InputError(f"{where}: {key}: {RENAMED_SETTINGS[key]}")
@@ -147,8 +198,9 @@ def _check_keys(where, table, allowed, what="setting"):
         raise InputError(f"{where}: unknown {what}(s) {', '.join(unknown)}")
 
 
-def _read_material(where, name, table):
-    """Validate a [materials.<name>] table and return its Material."""
+def _read_material(where, name, table, units=None):
+    """Validate a [materials.<name>] table and return its Material; the unit of its density,
+    if given with one, goes in units (see _read_measure)."""
     _check_keys(where, table, MATERIAL_SETTINGS)
     if "phase" not in table:
         raise InputError(f"{where}: missing phase")
@@ -166,15 +218,20 @@ def _read_material(where, name, table):
             table["phase"],
             atoms=table.get("atoms"),
             molecules=table.get("molecules"),
-            density=table.get("density"),
+            density=(
+                _read_measure(where, "density", table["density"], DENSITY, units)
+                if "density" in table
+                else None
+            ),
         )
     except ValueError as e:
         raise InputError(f"{where}: {str(e).split(': ', 1)[-1]}") from None
 
 
-def _make_region(where, settings, materials, name="", substeps=POSITION_SUBSTEPS):
-    """Validate region settings (a dict) and return the Region; substeps is its
-    position_substeps unless it sets its own."""
+def _make_region(where, settings, materials, name="", substeps=POSITION_SUBSTEPS, units=None):
+    """Validate region settings (a dict) and return the Region, in the code's units;
+    substeps is its position_substeps unless it sets its own. The units the settings are
+    given in go in units (see _read_measure)."""
     _check_keys(where, settings, REGION_SETTINGS)
     values = {}
     for key, (expected, default) in REGION_SETTINGS.items():
@@ -185,22 +242,22 @@ def _make_region(where, settings, materials, name="", substeps=POSITION_SUBSTEPS
                 raise InputError(f"{where}: missing {key}")
             values[key] = None if default == "" else default
             continue
-        _check_type(where, key, settings[key], expected)
-        values[key] = settings[key]
+        if isinstance(expected, Measure):
+            values[key] = _read_measure(where, key, settings[key], expected, units)
+        else:
+            _check_type(where, key, settings[key], expected)
+            values[key] = settings[key]
     if values["material"] not in materials:
         raise InputError(f"{where}: no [materials.{values['material']}] table")
     values["material"] = materials[values["material"]]
-    # To the code's units (see units.py)
-    for key, unit in REGION_UNITS.items():
-        if values[key] is not None:
-            values[key] = to_internal(values[key], unit)
     return Region(**values, name=name)
 
 
-def _read_regions(where, items, named, materials, substeps=POSITION_SUBSTEPS):
+def _read_regions(where, items, named, materials, substeps=POSITION_SUBSTEPS, units=None):
     """Return the Regions of a case's regions list: names of [regions.<name>] tables, or inline
     tables (optionally starting from one with use = "<name>"). substeps is the case's
-    position_substeps, for the regions that do not set their own."""
+    position_substeps, for the regions that do not set their own; units collects the units
+    of their settings (see _read_measure)."""
     if not items:
         raise InputError(f"{where}: regions must list at least one region")
     regions = []
@@ -209,7 +266,9 @@ def _read_regions(where, items, named, materials, substeps=POSITION_SUBSTEPS):
         if isinstance(item, str):
             if item not in named:
                 raise InputError(f"{here}: no [regions.{item}] table")
-            regions.append(_make_region(f"{here} ({item})", named[item], materials, item, substeps))
+            regions.append(
+                _make_region(f"{here} ({item})", named[item], materials, item, substeps, units)
+            )
         elif isinstance(item, dict):
             settings = dict(item)
             base, name = {}, ""
@@ -223,7 +282,7 @@ def _read_regions(where, items, named, materials, substeps=POSITION_SUBSTEPS):
             # false leaves out a setting of the named region (to calculate it, for example)
             merged = {**base, **settings}
             merged = {k: v for k, v in merged.items() if not (v is False and k in base)}
-            regions.append(_make_region(here, merged, materials, name, substeps))
+            regions.append(_make_region(here, merged, materials, name, substeps, units))
         else:
             raise InputError(
                 f"{here}: each region is the name of a [regions.<name>] table or an inline "
@@ -266,7 +325,9 @@ def load_input(path):
     regions the beam passes through, in order, in its regions setting: names of
     [regions.<name>] tables, or inline tables (which may start from a named one with
     use = "<name>"). See CASE_SETTINGS, BEAM_SETTINGS, and OPTIONAL_CASE_SETTINGS for the case
-    settings and their units, and examples/generic.toml for an example.
+    settings, and examples/generic.toml for an example. Settings with units (see Measure) are
+    strings such as "280 keV"; the results of each case are in the units it uses (see
+    Measure).
 
     Leave exactly one value to be calculated: beam_energy_backstop, or one region's length,
     pressure (keeping its temperature) or density, with beam_energy_backstop given. Each case
@@ -274,7 +335,8 @@ def load_input(path):
     the case sets itself is used.
 
     Each returned settings dict has "source", the keyword arguments for BeamTarget
-    (without name), "beam_direction", the beam direction in MCNP and OpenMC, and
+    (without name; values in the code's units, and the units of the results in units),
+    "beam_direction", the beam direction in MCNP and OpenMC, and
     "entry_position" and "backstop_position" (one of them None, or both for the default
     placement).
     """
@@ -294,10 +356,13 @@ def load_input(path):
     defaults = data.get("defaults", {})
     _check_keys(f"{path} [defaults]", defaults, allowed)
 
-    materials = {
-        name: _read_material(f"{path} [materials.{name}]", name, table)
-        for name, table in data.get("materials", {}).items()
-    }
+    material_units = {}  # The density unit of each material, if given with one
+    materials = {}
+    for name, table in data.get("materials", {}).items():
+        material_units[name] = {}
+        materials[name] = _read_material(
+            f"{path} [materials.{name}]", name, table, material_units[name]
+        )
     named_regions = data.get("regions", {})
     for name, table in named_regions.items():  # Check each once, even if no case uses it
         _make_region(f"{path} [regions.{name}]", table, materials, name)
@@ -323,9 +388,13 @@ def load_input(path):
         for key, expected in CASE_SETTINGS.items():
             _check_type(where, key, s[key], expected)
         _check_type(where, "position_substeps", s["position_substeps"], int)
-        regions = _read_regions(
-            where, s["regions"], named_regions, materials, s["position_substeps"]
-        )
+        # The units of the results: the first the case uses for each kind of value
+        units = {}
+        measured = {
+            key: _read_measure(where, key, s[key], measure, units)
+            for key, measure in CASE_SETTINGS.items()
+            if isinstance(measure, Measure)
+        }
 
         given = [key for key in BEAM_SETTINGS if key in s]
         if len(given) > 1:  # The case's own setting overrides the other from [defaults]
@@ -336,14 +405,27 @@ def load_input(path):
             raise InputError(
                 f"{where}: give one of beam_current and yield_total (the other is calculated)"
             )
-        _check_type(where, given[0], s[given[0]], float)
-        rate = {key: s[key] if key in given else None for key in BEAM_SETTINGS}
+        rate = {key: None for key in BEAM_SETTINGS}
+        if given[0] == "beam_current":
+            rate["beam_current"] = _read_measure(where, "beam_current", s[given[0]], CURRENT, units)
+        else:
+            _check_type(where, "yield_total", s["yield_total"], float)
+            rate["yield_total"] = float(s["yield_total"])
 
         if s["beam"] not in BEAM_NAMES:
             names = ", ".join(f'"{n}"' for n in BEAM_NAMES)
             raise InputError(f"{where}: beam must be one of {names}, got {s['beam']!r}")
+        backstop = None
         if s["beam_energy_backstop"] is not None:
-            _check_type(where, "beam_energy_backstop", s["beam_energy_backstop"], float)
+            backstop = _read_measure(
+                where, "beam_energy_backstop", s["beam_energy_backstop"], BEAM_ENERGY, units
+            )
+        regions = _read_regions(
+            where, s["regions"], named_regions, materials, s["position_substeps"], units
+        )
+        for region in regions:  # A density unit from the materials, if the regions give none
+            for quantity, unit in material_units[region.material.name].items():
+                units.setdefault(quantity, unit)
         if s["beam_direction"] not in SDEF_DIRECTIONS:
             raise InputError(
                 f"{where}: beam_direction must be one of {', '.join(SDEF_DIRECTIONS)}, "
@@ -376,23 +458,16 @@ def load_input(path):
             "source": {
                 "regions": regions,
                 "beam": s["beam"],
-                "beam_energy_entry": to_internal(s["beam_energy_entry"], "keV"),
-                "beam_current": (
-                    None
-                    if rate["beam_current"] is None
-                    else to_internal(rate["beam_current"], "mA")
-                ),
+                "beam_energy_entry": measured["beam_energy_entry"],
+                "beam_current": rate["beam_current"],
                 "yield_total": rate["yield_total"],
-                "beam_radius_entry": s["beam_radius_entry"],
+                "beam_radius_entry": measured["beam_radius_entry"],
                 "angle_bin_width": s["angle_bin_width"],
-                "energy_bin_width": to_internal(s["energy_bin_width"], "MeV"),
+                "energy_bin_width": measured["energy_bin_width"],
                 "stopping_power": s["stopping_power"],
-                "beam_energy_backstop": (
-                    None
-                    if s["beam_energy_backstop"] is None
-                    else to_internal(s["beam_energy_backstop"], "keV")
-                ),
+                "beam_energy_backstop": backstop,
                 "nuclear_data": nuclear_data,
+                "units": units,
             },
             "beam_direction": s["beam_direction"],
             **positions,
@@ -425,10 +500,12 @@ def run_case(name, settings, output_dir="output", input_file=None, name_width=0,
     if s["beam_current"] is None:
         beam = f"yield {s['yield_total']:.4e} n/s"
     else:
-        beam = f"{from_internal(s['beam_current'], 'mA'):g} mA"
+        unit = s["units"].get("current", DEFAULT_UNITS["current"])
+        beam = f"{from_internal(s['beam_current'], unit):g} {unit}"
+    unit = s["units"].get("beam_energy", DEFAULT_UNITS["beam_energy"])
     logger.debug(
         f"{name}: starting: {BEAMS[beam_key(s['beam'])].description} beam, "
-        f"{from_internal(s['beam_energy_entry'], 'keV'):g} keV, {beam}, "
+        f"{from_internal(s['beam_energy_entry'], unit):g} {unit}, {beam}, "
         f"{len(s['regions'])} region(s), "
         f"last {s['regions'][-1].material.name}, stopping power {s['stopping_power']}"
     )

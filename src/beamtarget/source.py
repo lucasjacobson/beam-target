@@ -69,7 +69,17 @@ from .nuclear import (
     two_body_energy_range,
 )
 from .parallel import in_parallel
-from .units import DEFAULT_UNITS, KEV, KILOWATT, MEV, MILLIAMPERE, UNITS, from_internal
+from .units import (
+    DEFAULT_UNITS,
+    KEV,
+    KILOWATT,
+    MEV,
+    MILLIAMPERE,
+    from_internal,
+    quantity_of,
+    to_internal,
+    unit_name,
+)
 
 PACKAGE_NAME = "beam-target"
 logger = logging.getLogger(__name__)
@@ -124,7 +134,7 @@ SURFACE_LIGHT = (60.0, 45.0)
 SURFACE_AMBIENT = 0.55
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
-HDF5_FORMAT_VERSION = 10
+HDF5_FORMAT_VERSION = 11
 # Internal position steps per output position bin, unless a region gives its own
 POSITION_SUBSTEPS = 10
 # Position-mesh check (see check_position_mesh): warn if two-body lines move more than
@@ -580,6 +590,11 @@ def get_code_version():
     return get_package_version()
 
 
+def _unit_label(unit):
+    """A unit's name for plot labels: um as a micro sign."""
+    return r"$\mu$m" if unit == "um" else unit
+
+
 def _toml_value(value):
     """Format a string, number, or sequence of numbers as a TOML value. Floats are written to 7
     significant figures and always read back as floats."""
@@ -917,9 +932,11 @@ class BeamTarget:
             (default) uses the configuration's [defaults] nuclear_data, or ["drosg"].
         units: The units of the results (summary, files, and plots), as {quantity: unit} for
             any of the quantities of units.DEFAULT_UNITS (beam_energy, neutron_energy,
-            current, power, pressure, temperature, divergence, length) and units of
+            current, power, pressure, temperature, divergence, length (along the beam), radius,
+            density) and units of
             units.UNITS; the others are DEFAULT_UNITS. The inputs are always in the code's
-            units (eV, A, Pa, K, rad, cm).
+            units (eV, A, Pa, K, rad, cm, g/cm3). The MCNP SDEF is in MCNP's units (cm, MeV)
+            whatever these are.
     """
 
     def __init__(
@@ -944,11 +961,19 @@ class BeamTarget:
         # Input parameters
         self.name = str(name)
         self.units = dict(DEFAULT_UNITS)
+        self.units_given = set()  # The quantities whose units were chosen
         for quantity, unit in (units or {}).items():
-            kind = "energy" if quantity in ("beam_energy", "neutron_energy") else quantity
-            if quantity not in DEFAULT_UNITS or UNITS.get(unit, ("",))[0] != kind:
+            kind = {"beam_energy": "energy", "neutron_energy": "energy", "radius": "length"}.get(
+                quantity, quantity
+            )
+            try:
+                ok = quantity in DEFAULT_UNITS and quantity_of(unit) == kind
+            except KeyError:
+                ok = False
+            if not ok:
                 raise ValueError(f"{self.name}: unknown units {quantity} = {unit!r}")
-            self.units[quantity] = unit
+            self.units[quantity] = unit_name(unit)
+            self.units_given.add(quantity)
         self.beam_energy_entry = float(beam_energy_entry)
         self.beam_current = None if beam_current is None else float(beam_current)
         self.requested_yield_total = None if yield_total is None else float(yield_total)
@@ -2243,7 +2268,8 @@ class BeamTarget:
         unused = "; nan where unused" if not np.all(self.by_pressure) else ""
         density = []
         if np.any(~self.solid & ~self.by_pressure):
-            density = [("density", self.density, "g/cm3" + calculated["density"] + unused)]
+            values, unit = self.in_units(self.density, "density")
+            density = [("density", values, unit + calculated["density"] + unused)]
         material_names = [m.name for m in self.materials]
         requested_yield = []
         if self.requested_yield_total is not None:
@@ -2258,6 +2284,7 @@ class BeamTarget:
         temperature, T_unit = self.in_units(self.temperature, "temperature")
         divergence, div_unit = self.in_units(self.divergence, "divergence")
         width, width_unit = self.in_units(self.energy_bin_width, "neutron_energy")
+        length, L_unit = self.in_units(self.length, "length")
         return (
             [
                 ("beam", BEAMS[self.beam].description, "beam particle"),
@@ -2277,12 +2304,12 @@ class BeamTarget:
             ]
             + density
             + [
-                ("length", self.length, "cm" + calculated["length"]),
+                ("length", length, L_unit + calculated["length"]),
             ]
             + requested
             + [
-                ("beam_radius_entry", self.beam_radius_entry, "cm"),
-                ("wall_radius", self.wall_radius, "cm"),
+                ("beam_radius_entry", *self.in_units(self.beam_radius_entry, "radius")),
+                ("wall_radius", *self.in_units(self.wall_radius, "radius")),
                 ("divergence", divergence, div_unit),
                 ("position_bins", self.position_bins, ""),
                 ("position_substeps", self.position_substeps, "per position bin"),
@@ -2310,17 +2337,18 @@ class BeamTarget:
         E_grid, E_unit = self.in_units(self.beam_energy_grid_out, "beam_energy")
         current_grid, I_unit = self.in_units(self.current_grid_out, "current")
         current_mids, _ = self.in_units(self.current_mids_out, "current")
+        x_grid, L_unit = self.in_units(self.x_grid_out, "length")
         datasets = [
-            ("x_grid", self.x_grid_out, "cm", "position mesh along the beam (bin boundaries)"),
+            ("x_grid", x_grid, L_unit, "position mesh along the beam (bin boundaries)"),
             ("beam_energy_grid", E_grid, E_unit, "beam energy at each position grid point"),
-            ("radius_grid", self.radius_grid_out, "cm",
+            ("radius_grid", *self.in_units(self.radius_grid_out, "radius"),
              "beam edge radius at each position grid point, capped at the wall radius"),
             ("scrape_grid", self.scrape_grid_out, "fraction",
              "fraction of the beam scraped off at each position grid point"),
             ("current_grid", current_grid, I_unit, "beam current at each position grid point"),
             ("beam_energy_mids", (E_grid[:-1] + E_grid[1:]) / 2, E_unit,
              "beam energy at the center of each position bin"),
-            ("radius_mids", self.radius_mids_out, "cm",
+            ("radius_mids", *self.in_units(self.radius_mids_out, "radius"),
              "beam edge radius over each position bin (root mean square), as in the SDEF"),
             ("scrape_mids", self.scrape_mids_out, "fraction",
              "fraction of the beam scraped off, averaged over each position bin"),
@@ -2363,8 +2391,9 @@ class BeamTarget:
                 g = materials.create_group(material.name)
                 g.attrs["phase"] = material.phase
                 if material.density is not None:
-                    g.attrs["density"] = material.density
-                    g.attrs["density_units"] = "g/cm3"
+                    density, unit = self.in_units(material.density, "density")
+                    g.attrs["density"] = density
+                    g.attrs["density_units"] = unit
                 g.attrs["composition_kind"] = material.kind
                 g.attrs["composition_formulas"] = list(material.composition)
                 g.attrs["composition_amounts"] = list(material.composition.values())
@@ -2721,7 +2750,11 @@ class BeamTarget:
             ("atom_density", self.atom_density_per_region, "atoms/cm3, in each region"),
             ("beam_energy_region_end", E_ends, f"{E_unit}, at the end of each region"),
             ("beam_energy_backstop", E_ends[-1], E_unit),
-            ("beam_radius_backstop", self.radius_grid[-1], "cm, beam edge; capped at the wall"),
+            (
+                "beam_radius_backstop",
+                self.in_units(self.radius_grid[-1], "radius")[0],
+                f"{self.units['radius']}, beam edge; capped at the wall",
+            ),
             ("beam_current_backstop", current, f"{I_unit}, after scraping and nuclear losses"),
             ("beam_power_entry", power["entry"], W_unit),
             (
@@ -2799,8 +2832,9 @@ class BeamTarget:
             s += f"\n[materials.{_toml_key(material.name)}]\n"
             s += f"{'phase':<{key_width}} = {_toml_value(material.phase)}\n"
             if material.density is not None:
-                text = f"{'density':<{key_width}} = {_toml_value(material.density)}"
-                s += f"{text:<{comment_column}} # g/cm3\n"
+                density, unit = self.in_units(material.density, "density")
+                text = f"{'density':<{key_width}} = {_toml_value(density)}"
+                s += f"{text:<{comment_column}} # {unit}\n"
             composition = ", ".join(
                 f"{_toml_key(k)} = {_toml_value(v)}" for k, v in material.composition.items()
             )
@@ -2839,6 +2873,7 @@ class BeamTarget:
                 np.savetxt(w, np.column_stack(data), fmt="%13.6e", header=header, comments="#")
 
         rxns = list(self.reactions)
+        x_grid, L_unit = self.in_units(self.x_grid_out, "length")
         E_grid, E_unit = self.in_units(self.beam_energy_grid_out, "beam_energy")
         deposited, W_unit = self.in_units(self.deposited_power_mids_out, "power")
         wall, _ = self.in_units(self.wall_power_mids_out, "power")
@@ -2848,10 +2883,11 @@ class BeamTarget:
             "axial_profile.txt",
             "Neutron source along the beam, integrated over emission angle and neutron energy",
             [
-                "start of position bin [cm]",
-                "end of position bin [cm]",
+                f"start of position bin [{L_unit}]",
+                f"end of position bin [{L_unit}]",
                 f"beam energy at the bin center [{E_unit}]",
-                "beam edge radius over the bin [cm] (root mean square; capped at the wall)",
+                f"beam edge radius over the bin [{self.units['radius']}] (root mean square; "
+                "capped at the wall)",
                 "fraction of the beam scraped off, averaged over the bin",
                 *columns,
                 "total neutrons [n/s]",
@@ -2859,10 +2895,10 @@ class BeamTarget:
                 f"beam power carried onto the wall by scraping over the bin [{W_unit}]",
             ],
             [
-                self.x_grid_out[:-1],
-                self.x_grid_out[1:],
+                x_grid[:-1],
+                x_grid[1:],
                 (E_grid[:-1] + E_grid[1:]) / 2,
-                self.radius_mids_out,
+                self.in_units(self.radius_mids_out, "radius")[0],
                 self.scrape_mids_out,
                 *(axial[rxn] for rxn in rxns),
                 sum(axial.values()),
@@ -2929,9 +2965,13 @@ class BeamTarget:
         self.plot_neutron_energy_surface(directory)
 
     def _position_units(self):
-        """Return (scale, unit) for position plots: micrometers if the whole source is shorter
-        than 1 mm (such as a solid target), centimeters otherwise. Positions in cm are
-        multiplied by scale; quantities per cm are divided by it."""
+        """Return (scale, unit) for position plots: the length unit of the results if one was
+        chosen (see units), else micrometers if the whole source is shorter than 1 mm (such as
+        a solid target) and centimeters otherwise. Positions in cm are multiplied by scale;
+        quantities per cm are divided by it."""
+        if "length" in self.units_given:
+            unit = self.units["length"]
+            return 1 / to_internal(1.0, unit), _unit_label(unit)
         if self.x_grid_out[-1] < 0.1:
             return 1e4, r"$\mu$m"
         return 1.0, "cm"
@@ -2967,13 +3007,15 @@ class BeamTarget:
         ax_energy.set_ylabel(f"Beam energy [{E_unit}]")
         ax_energy.set_ylim(bottom=0)
 
-        ax_radius.plot(x, self.radius_grid_out, label="Beam edge")
+        radius, L_unit = self.in_units(self.radius_grid_out, "radius")
+        wall_radius = self.in_units(self.wall_radius, "radius")[0]
+        ax_radius.plot(x, radius, label="Beam edge")
         region_edges = np.append(0, np.cumsum(self.length)) * scale
         ax_radius.stairs(
-            self.wall_radius, region_edges, baseline=None, color="k", linewidth=1.5, label="Wall"
+            wall_radius, region_edges, baseline=None, color="k", linewidth=1.5, label="Wall"
         )
-        ax_radius.set_ylabel("Radius [cm]")
-        ax_radius.set_ylim(0, 1.1 * np.max(self.wall_radius))
+        ax_radius.set_ylabel(f"Radius [{_unit_label(L_unit)}]")
+        ax_radius.set_ylim(0, 1.1 * np.max(wall_radius))
         ax_radius.legend(loc="lower right")
 
         current_grid, I_unit = self.in_units(self.current_grid_out, "current")

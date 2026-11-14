@@ -11,9 +11,13 @@ default; set it with `-o`):
 | `axial_profile.txt`, `energy_spectrum.txt`, `angular_distribution.txt` | The source integrated down to one variable | `numpy.loadtxt` |
 | `plots/*.png` | Plots of the beam and the source | an image viewer |
 
-All the text files are ASCII with Unix (LF) line endings. Beam energies are in keV, and
-neutron energies in MeV; positions are in cm, measured along the beam from where it enters the
-first region; emission angles are in degrees from the beam direction (0° is forward). The
+All the text files are ASCII with Unix (LF) line endings. Values are in the units the case
+uses in its input file (see the README; for example, a case that gives `energy_bin_width =
+"10 keV"` has its neutron energies in keV), and otherwise in keV (beam energies), MeV (neutron
+energies), mA, torr, degC, mrad, cm, and g/cm3; beam powers are in kW. Each file names its
+units. Positions are measured along the beam from where it enters the first region; emission
+angles are in degrees from the beam direction (0° is forward). The SDEF card is in MCNP's units
+(cm and MeV) whatever the case uses. The
 calculation itself follows the beam in `position_substeps` steps (default 10) across each
 position bin; every file holds the output mesh, set by `position_bins` (per region),
 `angle_bin_width`, and `energy_bin_width`.
@@ -35,24 +39,25 @@ The complete result, from which the other files can all be remade. Its file attr
 | `direction`, `entry_position`, `backstop_position` | Where the source was placed for the case: the beam direction, and the points where the beam enters and reaches the backstop [cm] |
 | `warnings` | Open neutron channels that were not modeled, and regions whose position mesh is too coarse (empty if none) |
 
-Every dataset has a `units` attribute, and those at the top level a `description` too. Arrays
+Every dataset has a `units` attribute (the case's units, as in the text files), and those at
+the top level a `description` too. Arrays
 named `*_grid` hold values at mesh boundaries (one more entry than there are bins); `*_mids`
 hold one value per bin.
 
 | Dataset | Contents |
 |---|---|
-| `x_grid` | Position mesh along the beam [cm] |
+| `x_grid` | Position mesh along the beam |
 | `beam_energy_grid`, `radius_grid`, `scrape_grid`, `current_grid` | Beam energy, edge radius, fraction scraped off, and current at each position grid point |
 | `beam_energy_mids`, `radius_mids`, `scrape_mids`, `current_mids` | The same per position bin, as used in the SDEF card and `axial_profile.txt` |
 | `angle_grid` | Emission-angle mesh [deg] |
-| `neutron_energy_grid_<rxn>` | Neutron energy mesh of each reaction [MeV] |
+| `neutron_energy_grid_<rxn>` | Neutron energy mesh of each reaction |
 | `neutrons_<rxn>` | Neutrons emitted [n/s] in each (position, angle, energy) bin, shape `(len(x_grid) - 1, len(angle_grid) - 1, len(neutron_energy_grid_<rxn>) - 1)`; attributes `dimensions` (the axes), `reaction` (such as `D(d,n)3He`), and `data` (the nuclear data used) |
 
 | Group | Contents |
 |---|---|
 | `inputs` | Every input, one dataset each; values per region are arrays in beam order. A value the calculation solved for (a length, pressure, or density, or the current) says so in its `units` |
 | `results` | The key results, the same as `[results]` in `summary.toml` |
-| `materials/<name>` | Each material used, as attributes: `phase`, `density` (solids), its composition (`composition_kind`, which is `"atoms"` or `"molecules"`, `composition_formulas`, and `composition_amounts`), and its atom and isotope fractions |
+| `materials/<name>` | Each material used, as attributes: `phase`, `density` (solids, in `density_units`), its composition (`composition_kind`, which is `"atoms"` or `"molecules"`, `composition_formulas`, and `composition_amounts`), and its atom and isotope fractions |
 
 For example, the neutrons per emission angle, summed over position and energy:
 
