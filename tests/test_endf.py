@@ -21,16 +21,14 @@ from beamtarget.endf import (
 
 DATA = Path(__file__).parent / "data" / "endf"
 ENDFB = DATA / "ENDF-B-VIII.1"
-TENDL21 = DATA / "TENDL-2021"
+TENDL25 = DATA / "TENDL-2025"
 P_BE9 = ENDFB / "protons" / "p-004_Be_009.endf"
-A_BE9_TENDL = TENDL21 / "a-Be009.tendl"
+A_BE9_TENDL = TENDL25 / "a" / "a-Be009.tendl"
 BE = Material("Be", "solid", atoms={"Be": 1}, density=1.848)
 
 # MCNP: neutrons created by charged-particle reactions per beam particle in thick Be
-# (MCNP 6.2 with ENDF/B-VII.0 protons, the same LANL evaluation as ENDF/B-VIII.1; MCNP 6.3
-# with TENDL-2021 alphas)
+# (MCNP 6.2 with ENDF/B-VII.0 protons, the same LANL evaluation as ENDF/B-VIII.1)
 MCNP_PROTONS = {10: 3.3893e-03, 18: 1.2004e-02, 30: 2.9426e-02}
-MCNP_ALPHAS = {30: 3.1157e-03, 70: 1.4677e-02}
 
 
 def thick_be(beam, energy_MeV, nuclear_data, length=1.0, position_bins=60, **kw):
@@ -164,7 +162,7 @@ def test_library_file_names(name, parsed):
 
 def test_find_evaluation():
     assert Path(find_evaluation(ENDFB, "p", (4, 9))) == P_BE9
-    assert Path(find_evaluation(TENDL21, "a", (4, 9))) == A_BE9_TENDL
+    assert Path(find_evaluation(TENDL25, "a", (4, 9))) == A_BE9_TENDL
     assert find_evaluation(ENDFB, "d", (4, 9)) is None
     assert find_evaluation(DATA / "missing", "p", (4, 9)) is None
 
@@ -247,13 +245,15 @@ def test_protons_on_thick_be_match_mcnp(energy):
     assert channel_warnings(s) == []
 
 
-@pytest.mark.parametrize("energy", list(MCNP_ALPHAS))
-def test_alphas_fall_through_to_tendl_and_match_mcnp(energy):
-    """ENDF/B-VIII.1's alpha + 9Be ends at 15 MeV, so the next library is used."""
-    s = thick_be("alpha", energy, ["drosg", ENDFB, TENDL21], length=0.25, position_bins=50)
+@pytest.mark.parametrize("energy", [30, 70])
+def test_alphas_fall_through_to_tendl(energy):
+    """ENDF/B-VIII.1's alpha + 9Be ends at 15 MeV, so the next library is used. (MCNP 6.3
+    with TENDL-2021-based tables gave 3.1157e-3 and 1.4677e-2 neutrons per alpha at 30 and
+    70 MeV, which TENDL-2021 reproduced within 1.5%; TENDL-2025's evaluation gives 1.25 and
+    1.17 times as many. Its results are pinned in test_regression.py.)"""
+    s = thick_be("alpha", energy, ["drosg", ENDFB, TENDL25], length=0.25, position_bins=50)
     assert s.beam_energy_grid[-1] == 0
-    assert s.reaction_data["a9Be_xn"].startswith("TENDL-2021")
-    assert s.yield_total / s.particle_rate == pytest.approx(MCNP_ALPHAS[energy], rel=0.02)
+    assert s.reaction_data["a9Be_xn"].startswith("TENDL-2025")
     assert channel_warnings(s) == []
 
 
@@ -380,8 +380,8 @@ def test_named_libraries(tmp_path, monkeypatch):
     write_config(
         data,
         monkeypatch,
-        f'[libraries]\nendfb81 = "{relative}"\ntendl21 = "{TENDL21.as_posix()}"\n\n'
-        '[defaults]\nnuclear_data = ["drosg", "endfb81", "tendl21"]\n',
+        f'[libraries]\nendfb81 = "{relative}"\ntendl25 = "{TENDL25.as_posix()}"\n\n'
+        '[defaults]\nnuclear_data = ["drosg", "endfb81", "tendl25"]\n',
     )
     path = tmp_path / "input.toml"
     path.write_text(INPUT.replace('"LIBRARY"', '"endfb81"'))
@@ -397,7 +397,7 @@ def test_named_libraries(tmp_path, monkeypatch):
     # No nuclear_data in the case: the configuration's default list
     path.write_text(INPUT.replace('nuclear_data = ["drosg", "LIBRARY"]\n', ""))
     s = BeamTarget(name="p18", **load_input(path)["p18"]["source"])
-    assert s.nuclear_data_given == ["drosg", "endfb81", "tendl21"]
+    assert s.nuclear_data_given == ["drosg", "endfb81", "tendl25"]
     assert "p9Be_xn" in s.reactions_present()
 
 
@@ -429,7 +429,7 @@ FENDL_D = Path(os.environ.get("BEAM_TARGET_FENDL_DIR", r"C:\Users\LJ0489\Softwar
 
 
 @pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
-@pytest.mark.parametrize("path, energy", [(P_BE9, 18.0), (A_BE9_TENDL, 14.0)])
+@pytest.mark.parametrize("path, energy", [(P_BE9, 18.0)])  # Smooth there in the data
 def test_slow_lab_neutrons_bin_smoothly_in_angle(path, energy):
     """Neutrons that are slow in the lab come from CM energies near the CM's own speed,
     where the lab angle changes quickly with the CM energy. Pieces half an energy bin wide
