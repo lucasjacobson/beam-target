@@ -69,6 +69,8 @@ M_NEUTRON = nuclear_mass(0, 1)  # MeV
 CONTINUUM_ANGLE_SHIFT = 0.2
 # Samples per tabulated interval for placing the narrow pieces (see _energy_points)
 STEP_SAMPLES = 256
+# Most pieces any one tabulated interval is cut into (a safeguard on the count from step)
+MAX_PIECES_PER_INTERVAL = 4096
 
 # Kalbach systematics (ENDF-102 section 6.2.3.2): the factor M of the incident particle.
 # Kalbach gives 1 for p and d and 0 for alpha, and never specified t or 3He; they are taken
@@ -228,12 +230,13 @@ def _energy_points(energies, f0, lep, max_step, step=None):
     fractions = {}
     if step is not None:
         samples = np.linspace(0.0, 1.0, STEP_SAMPLES + 1)
+        middles = (samples[:-1] + samples[1:]) / 2
         for i in np.flatnonzero(keep):
-            x = e[i] + samples * widths[i]
-            density = 1.0 / np.minimum(step(x), max_step)
-            count = np.concatenate(([0.0], np.cumsum(0.5 * (density[1:] + density[:-1]))))
-            count *= widths[i] / STEP_SAMPLES
-            n = int(np.ceil(count[-1]))
+            # The widths at the middles of the samples: step can fall to (nearly) zero at an
+            # end, such as at zero CM energy, where the count it implies is still finite
+            density = 1.0 / np.minimum(step(e[i] + middles * widths[i]), max_step)
+            count = np.concatenate(([0.0], np.cumsum(density))) * widths[i] / STEP_SAMPLES
+            n = min(int(np.ceil(count[-1])), MAX_PIECES_PER_INTERVAL)
             if n > n_sub[i]:
                 n_sub[i] = n
                 fractions[i] = np.interp(np.linspace(0, count[-1], n + 1), count, samples)
