@@ -33,8 +33,9 @@ Python 3.11 or later. From a clone of this repository:
 
     pip install -e .
 
-This installs the package, its dependencies (numpy, h5py, and matplotlib), and the
-`beam-target` command. The nuclear data it needs are included, except evaluated
+This installs the package, its dependencies (numpy, h5py, matplotlib, and numba), and the
+`beam-target` command. The first case that uses evaluated data compiles a few routines with
+numba, which takes a few seconds once; the compiled code is cached for later runs. The nuclear data it needs are included, except evaluated
 libraries, which are optional (see [Nuclear data](#nuclear-data)). Writing OpenMC sources
 also needs the `openmc` Python package (0.16 or later). For development,
 `pip install -e ".[dev]"` adds pytest and ruff.
@@ -45,8 +46,9 @@ also needs the `openmc` Python package (0.16 or later). For development,
 
 runs the case in `examples/simple.toml` and writes its results to `output/DT90/`. The same
 works as `python -m beamtarget`. Options: `-c NAME` runs one case, `-o DIR` sets the
-output directory, `-j N` sets the number of cases run in parallel, `--list` lists the cases,
-and `-v` shows more detail.
+output directory, `-j N` sets the number of CPU cores to use (default: all; cases run in
+parallel and share them, and a long case takes over the cores of those that finish), `--list`
+lists the cases, and `-v` shows more detail.
 
     python -m beamtarget.view output/DT90/source.h5
 
@@ -62,6 +64,9 @@ for name, settings in load_input("examples/simple.toml").items():
     source = run_case(name, settings, output_dir="output")
     print(name, source.yield_total, "n/s")
 ```
+
+A script runs one thread per case unless told otherwise: `beamtarget.set_parallel(8)` lets
+each case use up to 8 threads for its evaluated continua (results are the same either way).
 
 `BeamTarget` can also be built directly from `Material` and `Region` objects; see its
 docstring.

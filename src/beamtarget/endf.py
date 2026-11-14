@@ -37,6 +37,7 @@ import functools
 import os
 import re
 
+import numba
 import numpy as np
 
 from .nuclear import BEAMS, atom_name, bin_two_body, cm_to_lab, nuclear_mass
@@ -296,14 +297,61 @@ def _cm_energy_step(beta, angle_bin, energy_bin):
     return step
 
 
-def _cm_to_lab(eps, mu, sin, beta, gamma):
-    """Return (lab kinetic energy [MeV], lab angle [rad]) of neutrons of CM kinetic energy eps
-    [MeV] emitted at CM cosine mu (sine sin), for a CM moving at beta (Lorentz factor gamma)
-    along the beam."""
-    p = np.sqrt(eps * (eps + 2 * M_NEUTRON))
-    total = eps + M_NEUTRON
-    E_lab = gamma * (total + beta * p * mu) - M_NEUTRON
-    return E_lab, np.arctan2(p * sin, gamma * (p * mu + beta * total))
+@numba.njit(cache=True, nogil=True)
+def _bin_cm_pieces(
+    out, Eb, lo, hi, prob, interval, energies, f0, lep, mu_mid, sin_mid, beta, gamma,
+    E_c, two_a, floor, half_bin, max_pieces, angle_edges, angle_step, e0, inv_width,
+):  # fmt: skip
+    """Add the pieces of a CM continuum (centers Eb, bounds lo and hi [MeV], probability prob
+    in each CM angle cell, already times the weight) into out (lab angle, lab energy), as
+    _bin_continuum describes: each (piece, cell) is split into as many equal sub-pieces as
+    the lab angle of its neutrons needs (see _cm_energy_step; two_a, floor, and half_bin are
+    its 2 a, floor, and half an energy bin), each with its share of the piece (by the
+    density at its middle: linear in the tabulated interval for lep 2). angle_edges [rad]
+    are the lab angle bin edges; angle_step [rad] their width if even (else 0).
+
+    Compiled, and without the GIL, so that several beam energies can run at once in threads.
+    """
+    n_angles, n_energies = out.shape
+    for i in range(len(Eb)):
+        eps = Eb[i]
+        a, b = lo[i], hi[i]
+        width = b - a
+        p = np.sqrt(eps * (eps + 2 * M_NEUTRON))
+        total = eps + M_NEUTRON
+        if lep == 2:
+            m = interval[i]
+            slope = (f0[m + 1] - f0[m]) / (energies[m + 1] - energies[m])
+            middle = f0[m] + slope * (0.5 * (a + b) - energies[m])
+        for c in range(mu_mid.shape[0]):
+            weight = prob[i, c]
+            if weight == 0.0:
+                continue
+            mu, sin = mu_mid[c], sin_mid[c]
+            E_lab = gamma * (total + beta * p * mu) - M_NEUTRON
+            n = 1
+            if E_c > 0:
+                step = max(two_a * max(E_lab, half_bin) * np.sqrt(max(eps, 0.0) / E_c), floor)
+                n = min(max(int(np.ceil(width / step)), 1), max_pieces)
+            for k in range(n):
+                if n == 1:
+                    e_k, E_k, share = eps, E_lab, 1.0
+                else:
+                    e_k = a + width * (k + 0.5) / n
+                    p_k = np.sqrt(e_k * (e_k + 2 * M_NEUTRON))
+                    E_k = gamma * (e_k + M_NEUTRON + beta * p_k * mu) - M_NEUTRON
+                    share = 1.0 / n
+                    if lep == 2 and middle > 0:
+                        share = (f0[m] + slope * (e_k - energies[m])) / middle / n
+                p_k = np.sqrt(e_k * (e_k + 2 * M_NEUTRON))
+                angle = np.arctan2(p_k * sin, gamma * (p_k * mu + beta * (e_k + M_NEUTRON)))
+                if angle_step > 0:
+                    j = min(int(angle / angle_step), n_angles - 1)
+                else:
+                    j = min(max(np.searchsorted(angle_edges, angle, "right") - 1, 0), n_angles - 1)
+                kk = int(np.floor((E_k - e0) * inv_width))
+                kk = min(max(kk, 0), n_energies - 1)
+                out[j, kk] += weight * share
 
 
 class _Continuum:
@@ -796,20 +844,6 @@ class NeutronProduction:
         flat = np.bincount((j * shape[1] + k).ravel(), prob.ravel(), minlength=shape[0] * shape[1])
         return flat.reshape(shape)
 
-    @staticmethod
-    def _bin_angles(E_lab, angle, prob, grid):
-        """Add pieces (lab energy [MeV], lab angle [rad] from 0 to pi, weight [b]) into the lab
-        bins, as _bin does from cosines."""
-        angle_edges, energy_edges, width, shape = grid
-        steps = np.diff(angle_edges)
-        if not np.allclose(steps, steps[0], rtol=1e-12, atol=0):  # Uneven bins
-            return NeutronProduction._bin(E_lab, np.cos(angle), prob, grid)
-        j = np.minimum((angle * (180 / np.pi / steps[0])).astype(np.int64), shape[0] - 1)
-        k = np.floor((E_lab - energy_edges[0]) * (1 / width)).astype(np.int64)
-        k = np.minimum(np.maximum(k, 0), shape[1] - 1)
-        flat = np.bincount((j * shape[1] + k).ravel(), prob.ravel(), minlength=shape[0] * shape[1])
-        return flat.reshape(shape)
-
     def _bin_continuum(
         self, dist, scale, w, E, frame, beta, gamma, mu_edges, mu_mid, max_step, grid
     ):
@@ -837,37 +871,20 @@ class NeutronProduction:
             return self._bin(E_lab, cos_lab, prob, grid)
 
         sin_mid = np.sqrt(np.clip(1 - mu_mid**2, 0, None))
-        E_lab, angle = _cm_to_lab(Eb[:, None], mu_mid[None, :], sin_mid[None, :], beta, gamma)
-        angle_edges, energy_edges, width, _ = grid
-        step = _cm_energy_step(beta, np.radians(np.min(np.diff(angle_edges))), width)
-        # Sub-pieces each (piece, cell) needs: as many as the step its own lab energy asks for
-        count = np.ceil((hi - lo)[:, None] / step(Eb[:, None], E_lab)).astype(int)
-        count = np.clip(count, 1, MAX_PIECES_PER_INTERVAL)
-        finer = count > 1
-        if not np.any(finer):
-            return self._bin_angles(E_lab, angle, prob, grid)
-        out = self._bin_angles(E_lab, angle, np.where(finer, 0.0, prob), grid)
-
-        # Equal sub-pieces of each such (piece, cell), each with its share of the piece: by
-        # the outgoing-energy density at its middle (exact for histogram and linear densities)
-        piece, cell = np.nonzero(finer)
-        n = count[piece, cell]
-        pair = np.repeat(np.arange(len(piece)), n)
-        k = np.arange(len(pair)) - np.repeat(np.cumsum(n) - n, n)
-        piece_k, cell_k, n_k = piece[pair], cell[pair], n[pair]
-        a, b = lo[piece_k], hi[piece_k]
-        center = a + (b - a) * (k + 0.5) / n_k
-        if dist.lep == 1:
-            share = 1.0 / n_k
-        else:  # Linear in each tabulated interval
-            i = index[piece_k]
-            slope = (f0[i + 1] - f0[i]) / (energies[i + 1] - energies[i])
-            density = f0[i] + slope * (center - energies[i])
-            middle = f0[i] + slope * ((a + b) / 2 - energies[i])
-            share = np.where(middle > 0, density / np.where(middle > 0, middle, 1) / n_k, 1 / n_k)
-        E_fine, angle_fine = _cm_to_lab(center, mu_mid[cell_k], sin_mid[cell_k], beta, gamma)
-        prob_fine = prob[piece_k, cell_k] * share
-        return out + self._bin_angles(E_fine, angle_fine, prob_fine, grid)
+        angle_edges, energy_edges, width, shape = grid
+        steps = np.diff(angle_edges)
+        even = np.allclose(steps, steps[0], rtol=1e-12, atol=0)
+        E_c = 0.5 * M_NEUTRON * beta**2  # Kinetic energy of a neutron moving with the CM
+        a = CONTINUUM_ANGLE_SHIFT * np.radians(np.min(steps))
+        out = np.zeros(shape)
+        _bin_cm_pieces(
+            out, Eb, lo, hi, np.ascontiguousarray(prob), index.astype(np.int64),
+            np.asarray(energies, dtype=float), np.asarray(f0, dtype=float), int(dist.lep),
+            mu_mid, sin_mid, float(beta), float(gamma), E_c, 2 * a, (a / 2) ** 2 * E_c,
+            width / 2, MAX_PIECES_PER_INTERVAL, np.radians(angle_edges),
+            float(np.radians(steps[0])) if even else 0.0, float(energy_edges[0]), 1.0 / width,
+        )  # fmt: skip
+        return out
 
     def _bin_lab_table(self, dist, scale, w, max_step, grid):
         """Bin a LAW=7 distribution (weight w [b]) into the lab bins. Between tabulated

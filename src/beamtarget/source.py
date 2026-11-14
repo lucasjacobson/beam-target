@@ -837,6 +837,43 @@ def _save_figure(fig, fname, close=True):
         _pyplot().close(fig)
 
 
+# Threads for the work within a case, and an optional semaphore shared between processes that
+# limits how many such tasks run at once across them (see set_parallel)
+_PARALLEL = {"threads": 1, "tokens": None}
+
+
+def set_parallel(threads=1, tokens=None):
+    """Use up to threads threads (in this process) for the work within each case that can be
+    shared out: the spectra of evaluated continua at their beam energies, each computed in
+    compiled code that runs in parallel. tokens, if given, is a semaphore shared between
+    processes (multiprocessing.Semaphore) with one token per core: each task holds one while
+    it runs, so that processes running several cases at once share the cores between them,
+    and a case still running when others finish takes over their cores. Results do not
+    depend on these settings."""
+    _PARALLEL["threads"] = max(1, int(threads))
+    _PARALLEL["tokens"] = tokens
+
+
+def _in_parallel(function, items):
+    """Return function(item) for each of items, in order, using the threads and the tokens
+    set with set_parallel."""
+    tokens = _PARALLEL["tokens"]
+
+    def task(item):
+        if tokens is None:
+            return function(item)
+        with tokens:
+            return function(item)
+
+    threads = min(_PARALLEL["threads"], len(items))
+    if threads <= 1:
+        return [task(item) for item in items]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(threads) as executor:
+        return list(executor.map(task, items))
+
+
 class BeamTarget:
     """Neutron source term for a light-ion beam in gas or solid target regions.
 
@@ -2074,12 +2111,14 @@ class BeamTarget:
                 t = (energies[k] - E[idx]) / (energies[k] - energies[k + 1])
             k1 = np.minimum(k + 1, len(energies) - 1)
             totals = np.zeros(len(energies))
-            for j in np.unique(np.concatenate((k, k1))):
-                weight = np.where(k == j, 1 - t, 0.0) + np.where((k1 == j) & (k1 != k), t, 0.0)
-                use = weight > 0
-                if not np.any(use):
-                    continue
-                spectrum, totals[j] = production.lab_spectrum(
+            needed = [
+                j
+                for j in np.unique(np.concatenate((k, k1)))
+                if np.any((k == j) & (t < 1)) or np.any((k1 == j) & (k1 != k) & (t > 0))
+            ]
+
+            def spectrum_at(j, group=group):
+                return production.lab_spectrum(
                     energies[j],
                     self.angle_grid_out,
                     grid,
@@ -2087,6 +2126,11 @@ class BeamTarget:
                     two_body=False,
                     laws=group,
                 )
+
+            # In order, so the sums do not depend on how the work is shared out
+            for j, (spectrum, totals[j]) in zip(needed, _in_parallel(spectrum_at, needed)):
+                weight = np.where(k == j, 1 - t, 0.0) + np.where((k1 == j) & (k1 != k), t, 0.0)
+                use = weight > 0
                 by_row = np.bincount(
                     rows[use], coef[use] * weight[use], minlength=self.position_bins_total
                 )

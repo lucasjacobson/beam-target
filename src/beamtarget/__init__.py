@@ -24,6 +24,7 @@ from .source import (
     get_code_version,
     get_package_version,
     parse_formula,
+    set_parallel,
 )
 
 __version__ = get_package_version()
@@ -43,5 +44,6 @@ __all__ = [
     "main",
     "parse_formula",
     "run_case",
+    "set_parallel",
     "setup_logging",
 ]

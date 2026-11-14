@@ -26,6 +26,7 @@ from .source import (
     BeamTarget,
     Material,
     Region,
+    set_parallel,
 )
 
 logger = logging.getLogger(__name__)
@@ -441,6 +442,20 @@ def run_case(name, settings, output_dir="output", input_file=None, name_width=0)
     return source
 
 
+def _start_worker(verbose, cores, tokens):
+    """Set up a worker process: logging, and up to cores threads within each case, sharing
+    the cores with the other workers through tokens (see source.set_parallel)."""
+    setup_logging(verbose)
+    set_parallel(cores, tokens)
+
+
+def _expected_cost(settings):
+    """Rough relative cost of a case, to start the slowest first: the beam energy (evaluated
+    continua, the slow part, cost more at higher energies; the built-in reactions are
+    cheap and run at keV energies)."""
+    return settings["source"]["beam_energy_entry"]
+
+
 def _run_case_in_worker(args):
     """Run a case in a worker process. Returns nothing, so the large source object is not
     copied back to the parent process."""
@@ -453,9 +468,7 @@ def main(argv=None):
         prog="beam-target",
         description="Calculate neutron source terms for the cases in a TOML input file. "
         "Each case is written to <output-dir>/<case>/: source.h5, source.sdef, plots/, "
-        "summary.toml, axial_profile.txt, energy_spectrum.txt and angular_distribution.txt. "
-        "Memory use is roughly 2.5 GB per case at 1370 position "
-        "bins and a 0.01 degree angle step, and scales with both.",
+        "summary.toml, axial_profile.txt, energy_spectrum.txt and angular_distribution.txt.",
     )
     parser.add_argument("input", help="TOML input file (see examples/generic.toml)")
     parser.add_argument(
@@ -474,7 +487,9 @@ def main(argv=None):
         "--jobs",
         type=int,
         default=mp.cpu_count(),
-        help="number of cases to run in parallel (default: number of CPUs)",
+        help="number of CPU cores to use (default: all of them). Cases run in parallel, up "
+        "to this many at once, and share the cores: each uses several for its evaluated "
+        "continua, and a case still running when others finish takes over their cores",
     )
     parser.add_argument(
         "-v",
@@ -500,21 +515,29 @@ def main(argv=None):
 
     setup_logging(args.verbose)
     t0 = time.time()
-    jobs = min(args.jobs, len(cases))
+    cores = max(1, args.jobs)
+    processes = min(cores, len(cases))
     logger.info(
-        f"Running {len(cases)} case(s) from {args.input} with {jobs} process(es); "
-        f"results in {os.path.join(args.output_dir, '')}"  # Trailing separator: a directory
+        f"Running {len(cases)} case(s) from {args.input} on {cores} core(s), "
+        f"{processes} at a time; results in {os.path.join(args.output_dir, '')}"
     )
     width = max(len(name) for name in cases)
-    if jobs > 1:
-        work = [(name, s, args.output_dir, args.input, width) for name, s in cases.items()]
-        # Each worker sets up logging; close() and join() let workers exit normally (the
-        # context manager alone would terminate them, which can lose their last output)
-        with mp.Pool(jobs, initializer=setup_logging, initargs=(args.verbose,)) as pool:
-            pool.map(_run_case_in_worker, work)
+    # The likely slowest first, so that none starts last and holds up the end
+    order = sorted(cases, key=lambda name: -_expected_cost(cases[name]))
+    if processes > 1:
+        work = [(name, cases[name], args.output_dir, args.input, width) for name in order]
+        # One token per core, shared by the workers (see source.set_parallel). Each worker
+        # sets up logging; close() and join() let workers exit normally (the context manager
+        # alone would terminate them, which can lose their last output)
+        tokens = mp.Semaphore(cores)
+        with mp.Pool(
+            processes, initializer=_start_worker, initargs=(args.verbose, cores, tokens)
+        ) as pool:
+            pool.map(_run_case_in_worker, work, chunksize=1)
             pool.close()
             pool.join()
     else:
-        for name, s in cases.items():
-            run_case(name, s, args.output_dir, args.input, width)
+        set_parallel(cores)
+        for name in order:
+            run_case(name, cases[name], args.output_dir, args.input, width)
     logger.info(f"Done: {len(cases)} case(s) in {time.time() - t0:.1f} s")
