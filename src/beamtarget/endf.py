@@ -296,15 +296,14 @@ def _cm_energy_step(beta, angle_bin, energy_bin):
     return step
 
 
-def _cm_to_lab(eps, mu, beta, gamma):
-    """Return (lab kinetic energy [MeV], lab cosine) of neutrons of CM kinetic energy eps [MeV]
-    emitted at CM cosine mu, for a CM moving at beta (Lorentz factor gamma) along the beam."""
+def _cm_to_lab(eps, mu, sin, beta, gamma):
+    """Return (lab kinetic energy [MeV], lab angle [rad]) of neutrons of CM kinetic energy eps
+    [MeV] emitted at CM cosine mu (sine sin), for a CM moving at beta (Lorentz factor gamma)
+    along the beam."""
     p = np.sqrt(eps * (eps + 2 * M_NEUTRON))
     total = eps + M_NEUTRON
-    p_par = gamma * (p * mu + beta * total)
-    p_perp = p * np.sqrt(np.clip(1 - mu**2, 0, None))
     E_lab = gamma * (total + beta * p * mu) - M_NEUTRON
-    return E_lab, p_par / np.sqrt(p_par**2 + p_perp**2)
+    return E_lab, np.arctan2(p * sin, gamma * (p * mu + beta * total))
 
 
 class _Continuum:
@@ -797,6 +796,20 @@ class NeutronProduction:
         flat = np.bincount((j * shape[1] + k).ravel(), prob.ravel(), minlength=shape[0] * shape[1])
         return flat.reshape(shape)
 
+    @staticmethod
+    def _bin_angles(E_lab, angle, prob, grid):
+        """Add pieces (lab energy [MeV], lab angle [rad] from 0 to pi, weight [b]) into the lab
+        bins, as _bin does from cosines."""
+        angle_edges, energy_edges, width, shape = grid
+        steps = np.diff(angle_edges)
+        if not np.allclose(steps, steps[0], rtol=1e-12, atol=0):  # Uneven bins
+            return NeutronProduction._bin(E_lab, np.cos(angle), prob, grid)
+        j = np.minimum((angle * (180 / np.pi / steps[0])).astype(np.int64), shape[0] - 1)
+        k = np.floor((E_lab - energy_edges[0]) * (1 / width)).astype(np.int64)
+        k = np.minimum(np.maximum(k, 0), shape[1] - 1)
+        flat = np.bincount((j * shape[1] + k).ravel(), prob.ravel(), minlength=shape[0] * shape[1])
+        return flat.reshape(shape)
+
     def _bin_continuum(
         self, dist, scale, w, E, frame, beta, gamma, mu_edges, mu_mid, max_step, grid
     ):
@@ -823,7 +836,8 @@ class NeutronProduction:
             cos_lab = np.repeat(mu_mid[None, :], len(Eb), axis=0)
             return self._bin(E_lab, cos_lab, prob, grid)
 
-        E_lab, cos_lab = _cm_to_lab(Eb[:, None], mu_mid[None, :], beta, gamma)
+        sin_mid = np.sqrt(np.clip(1 - mu_mid**2, 0, None))
+        E_lab, angle = _cm_to_lab(Eb[:, None], mu_mid[None, :], sin_mid[None, :], beta, gamma)
         angle_edges, energy_edges, width, _ = grid
         step = _cm_energy_step(beta, np.radians(np.min(np.diff(angle_edges))), width)
         # Sub-pieces each (piece, cell) needs: as many as the step its own lab energy asks for
@@ -831,8 +845,8 @@ class NeutronProduction:
         count = np.clip(count, 1, MAX_PIECES_PER_INTERVAL)
         finer = count > 1
         if not np.any(finer):
-            return self._bin(E_lab, cos_lab, prob, grid)
-        out = self._bin(E_lab, cos_lab, np.where(finer, 0.0, prob), grid)
+            return self._bin_angles(E_lab, angle, prob, grid)
+        out = self._bin_angles(E_lab, angle, np.where(finer, 0.0, prob), grid)
 
         # Equal sub-pieces of each such (piece, cell), each with its share of the piece: by
         # the outgoing-energy density at its middle (exact for histogram and linear densities)
@@ -851,9 +865,9 @@ class NeutronProduction:
             density = f0[i] + slope * (center - energies[i])
             middle = f0[i] + slope * ((a + b) / 2 - energies[i])
             share = np.where(middle > 0, density / np.where(middle > 0, middle, 1) / n_k, 1 / n_k)
-        E_fine, cos_fine = _cm_to_lab(center, mu_mid[cell_k], beta, gamma)
+        E_fine, angle_fine = _cm_to_lab(center, mu_mid[cell_k], sin_mid[cell_k], beta, gamma)
         prob_fine = prob[piece_k, cell_k] * share
-        return out + self._bin(E_fine, cos_fine, prob_fine, grid)
+        return out + self._bin_angles(E_fine, angle_fine, prob_fine, grid)
 
     def _bin_lab_table(self, dist, scale, w, max_step, grid):
         """Bin a LAW=7 distribution (weight w [b]) into the lab bins. Between tabulated
