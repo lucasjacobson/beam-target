@@ -429,6 +429,43 @@ FENDL_D = Path(os.environ.get("BEAM_TARGET_FENDL_DIR", r"C:\Users\LJ0489\Softwar
 
 
 @pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
+@pytest.mark.parametrize("path, energy", [(P_BE9, 18.0), (A_BE9_TENDL, 14.0)])
+def test_slow_lab_neutrons_bin_smoothly_in_angle(path, energy):
+    """Neutrons that are slow in the lab come from CM energies near the CM's own speed,
+    where the lab angle changes quickly with the CM energy. Pieces half an energy bin wide
+    put them in separate angle bins (neighbors differing by tens of percent); the narrower
+    pieces there keep the angular distribution smooth."""
+    x = NeutronProduction(path)
+    angles = np.arange(0, 180.5, 1.0)
+    edges = np.arange(0, np.ceil(x.max_lab_energy(energy) / 0.1) * 0.1 + 0.05, 0.1)
+    spectrum, _ = x.lab_spectrum(energy, angles, edges, num_cm_angles=1440, two_body=False)
+    solid = 2 * np.pi * (np.cos(np.radians(angles[:-1])) - np.cos(np.radians(angles[1:])))
+    mids = (edges[:-1] + edges[1:]) / 2
+    for lo, hi in [(0, 0.5), (0.5, 1)]:
+        a = spectrum[:, (mids > lo) & (mids < hi)].sum(axis=1) / solid
+        ratio = a[1:-1] / ((a[:-2] + a[2:]) / 2)
+        # Away from the edges of the angles these energies can reach
+        inside = np.min([a[:-2], a[1:-1], a[2:]], axis=0) > 0.1 * a.max()
+        assert np.all(np.abs(ratio[inside] - 1) < 0.05), (lo, hi, ratio[inside].min())
+
+
+def test_energy_pieces_follow_the_requested_widths():
+    """Pieces are equal and at most max_step wide without a width function, and as narrow as
+    it asks where it asks for less; the probabilities are exact either way."""
+    energies = np.array([0.0, 0.3, 1.0, 4.0])
+    f0 = np.array([1.0, 2.0, 0.5, 0.0])
+    plain, p_plain, _ = endf._energy_points(energies, f0, 2, 0.05)
+    assert p_plain.sum() == pytest.approx(1.0, rel=1e-12)
+    assert np.max(np.diff(plain)) <= 0.05 + 1e-12
+    step = lambda e: np.where((e > 0.5) & (e < 0.7), 0.001, 1.0)  # noqa: E731
+    fine, p_fine, _ = endf._energy_points(energies, f0, 2, 0.05, step)
+    assert p_fine.sum() == pytest.approx(1.0, rel=1e-12)
+    inside = (fine > 0.51) & (fine < 0.69)
+    assert np.max(np.diff(fine[inside])) < 0.0011
+    # The mean energy is about the same (each piece is placed at its middle)
+    assert np.sum(fine * p_fine) == pytest.approx(np.sum(plain * p_plain), rel=1e-3)
+
+
 @pytest.mark.parametrize("angle_bin_width", [2.0, 3.0, 5.0])
 def test_lab_tables_bin_smoothly_at_any_angle_bin(angle_bin_width):
     """FENDL-3.2c's p + 181Ta is given as lab-frame tables every 10 degrees. Cells that ignored

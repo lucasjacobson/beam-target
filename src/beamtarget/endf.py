@@ -64,6 +64,11 @@ NUM_SPLIT = 3  # The first NUM_SPLIT of FILE_SUFFIXES are compared by completene
 VARIANT_TIE = 0.01
 
 M_NEUTRON = nuclear_mass(0, 1)  # MeV
+# CM outgoing-energy pieces of a continuum are narrow enough that their neutrons' lab angle
+# changes by at most this many angle bins across a piece (see _cm_energy_step)
+CONTINUUM_ANGLE_SHIFT = 0.2
+# Samples per tabulated interval for placing the narrow pieces (see _energy_points)
+STEP_SAMPLES = 256
 
 # Kalbach systematics (ENDF-102 section 6.2.3.2): the factor M of the incident particle.
 # Kalbach gives 1 for p and d and 0 for alpha, and never specified t or 3He; they are taken
@@ -202,32 +207,80 @@ def separation_energy(Z_c, A_c, Z_x, A_x, particle):
     )
 
 
-def _energy_points(energies, f0, lep, max_step):
+def _energy_points(energies, f0, lep, max_step, step=None):
     """Split an outgoing-energy distribution (energies [MeV], density f0 [1/MeV], histogram
     for lep 1 or linear for lep 2) into pieces at most max_step [MeV] wide. Return (energy
     of each piece [MeV], its probability, index of the tabulated point below), normalized
-    to a total of 1."""
+    to a total of 1.
+
+    step, if given, is a function of the outgoing energy (array) giving the largest piece
+    width wanted there [MeV], where it is narrower than max_step. Each tabulated interval is
+    then cut into pieces of equal "count" N, where dN/dE = 1 / step(E), so pieces are
+    narrow only where step asks for it. Without step (or where step is at least max_step),
+    each interval is cut into equal pieces at most max_step wide.
+    """
     e, f = energies, f0
     widths = np.diff(e)
     probs = f[:-1] * widths if lep == 1 else 0.5 * (f[:-1] + f[1:]) * widths
     keep = probs > 0
     n_sub = np.maximum(1, np.ceil(widths / max_step).astype(int))
+    # Piece edges as fractions of each interval: equal pieces, unless step asks for more
+    fractions = {}
+    if step is not None:
+        samples = np.linspace(0.0, 1.0, STEP_SAMPLES + 1)
+        for i in np.flatnonzero(keep):
+            x = e[i] + samples * widths[i]
+            density = 1.0 / np.minimum(step(x), max_step)
+            count = np.concatenate(([0.0], np.cumsum(0.5 * (density[1:] + density[:-1]))))
+            count *= widths[i] / STEP_SAMPLES
+            n = int(np.ceil(count[-1]))
+            if n > n_sub[i]:
+                n_sub[i] = n
+                fractions[i] = np.interp(np.linspace(0, count[-1], n + 1), count, samples)
     n_sub[~keep] = 0
     index = np.repeat(np.arange(len(widths)), n_sub)
     k = np.arange(len(index)) - np.repeat(np.cumsum(n_sub) - n_sub, n_sub)
-    frac = (k + 0.5) / n_sub[index]
+    lo = k / n_sub[index]
+    hi = (k + 1) / n_sub[index]
+    for i, edges in fractions.items():  # Unequal pieces
+        sel = index == i
+        lo[sel], hi[sel] = edges[:-1], edges[1:]
+    frac = (lo + hi) / 2
     E = e[index] + frac * widths[index]
     if lep == 1:
-        p = probs[index] / n_sub[index]
+        p = probs[index] * (hi - lo)
     else:
         dens = f[index] + frac * (f[index + 1] - f[index])
-        p = dens * widths[index] / n_sub[index]
-        sums = np.bincount(index, p, minlength=len(widths))
-        p = p * np.where(
-            sums[index] > 0, probs[index] / np.where(sums[index] > 0, sums[index], 1), 0
-        )
+        p = dens * widths[index] * (hi - lo)
     total = probs.sum()
     return E, (p / total if total > 0 else p), index
+
+
+def _cm_energy_step(beta, angle_bin, energy_bin):
+    """Return a function giving the widest CM outgoing-energy piece [MeV] that keeps the lab
+    angle of its neutrons within CONTINUUM_ANGLE_SHIFT angle bins, at CM energies eps [MeV].
+
+    With the CM moving at speed V (kinetic energy E_c = m_n V^2 / 2 for a neutron) and a
+    neutron leaving it at speed u (energy eps) at CM angle theta, the lab angle phi has
+    tan phi = u sin theta / (V + u cos theta), and d phi / d eps = sqrt(E_c / eps) sin theta /
+    (2 E_lab), with E_lab the neutron's lab energy. It is largest for slow lab neutrons, so the
+    piece width is 2 a angle_bin E_lab sqrt(eps / E_c), with E_lab the lowest the piece can give,
+    (sqrt(eps) - sqrt(E_c))^2, but at least half an energy bin (the angles of the slowest
+    neutrons, all in the lowest bin, need not be finer), and a = CONTINUUM_ANGLE_SHIFT.
+    Nonrelativistic: the CM moves slowly, so this is only used to choose the piece widths.
+    """
+    E_c = 0.5 * M_NEUTRON * beta**2
+    a = CONTINUUM_ANGLE_SHIFT * angle_bin
+    floor = (a / 2) ** 2 * E_c  # Where the formula gives zero: the CM energy is 0
+
+    def step(eps):
+        eps = np.maximum(eps, 0.0)
+        if E_c <= 0:
+            return np.full(np.shape(eps), np.inf)
+        E_lab = np.maximum((np.sqrt(eps) - np.sqrt(E_c)) ** 2, energy_bin / 2)
+        return np.maximum(2 * a * E_lab * np.sqrt(eps / E_c), floor)
+
+    return step
 
 
 class _Continuum:
@@ -703,7 +756,11 @@ class NeutronProduction:
         """Add pieces (lab energy [MeV], lab cosine, weight [b]) into the lab bins."""
         angle_edges, energy_edges, width, shape = grid
         angle = np.degrees(np.arccos(np.clip(cos_lab, -1, 1)))
-        j = np.clip(np.searchsorted(angle_edges, angle, side="right") - 1, 0, shape[0] - 1)
+        steps = np.diff(angle_edges)
+        if np.allclose(steps, steps[0], rtol=1e-12, atol=0):  # Even bins: no search needed
+            j = np.clip((angle / steps[0]).astype(int), 0, shape[0] - 1)
+        else:
+            j = np.clip(np.searchsorted(angle_edges, angle, side="right") - 1, 0, shape[0] - 1)
         k = np.clip(np.floor((E_lab - energy_edges[0]) / width).astype(int), 0, shape[1] - 1)
         flat = np.bincount((j * shape[1] + k).ravel(), prob.ravel(), minlength=shape[0] * shape[1])
         return flat.reshape(shape)
@@ -711,8 +768,21 @@ class NeutronProduction:
     def _bin_continuum(
         self, dist, scale, w, E, frame, beta, gamma, mu_edges, mu_mid, max_step, grid
     ):
-        """Bin a LAW=1 distribution (weight w [b]) into the lab bins."""
-        Eb, p, index = _energy_points(dist.energies * scale, dist.f0 / scale, dist.lep, max_step)
+        """Bin a LAW=1 distribution (weight w [b]) into the lab bins.
+
+        Each outgoing-energy piece is placed at its middle energy. In the center-of-mass (CM)
+        frame that is too coarse where the neutrons are slow in the lab: there the lab angle
+        changes quickly with the CM energy, so pieces max_step wide land in separate angle
+        bins (jagged angular distributions at low lab energies). The pieces are made narrower
+        there, as needed (see _cm_energy_step).
+        """
+        step = None
+        if frame != "lab":
+            angle_edges, energy_edges, width, _ = grid
+            step = _cm_energy_step(beta, np.radians(np.min(np.diff(angle_edges))), width)
+        Eb, p, index = _energy_points(
+            dist.energies * scale, dist.f0 / scale, dist.lep, max_step, step
+        )
         if len(Eb) == 0:
             return 0.0
         cells = self._angular_cells(dist, index, Eb, E, mu_edges)  # (pieces, cells)
@@ -798,10 +868,12 @@ class NeutronProduction:
         a = dist.params[index, 1] if dist.params.shape[1] >= 2 else self.kalbach_slope(E, Eb)
         a = np.maximum(a, 1e-8)[:, None]
         r = r[:, None]
-        hi, lo = mu_edges[None, :-1], mu_edges[None, 1:]
-        return (np.sinh(a * hi) - np.sinh(a * lo) + r * (np.cosh(a * hi) - np.cosh(a * lo))) / (
-            2 * np.sinh(a)
-        )
+        # The integral of f up to each edge, from one exponential per edge (cells share edges):
+        # (sinh(a mu) + r cosh(a mu)) / (2 sinh a), with sinh and cosh from exp(+-a mu)
+        up = np.exp(a * mu_edges[None, :])
+        down = 1.0 / up
+        F = ((1 + r) * up - (1 - r) * down) / (4 * np.sinh(a))
+        return F[:, :-1] - F[:, 1:]
 
     def max_lab_energy(self, E):
         """Highest lab neutron energy [MeV] at beam energy E [MeV]."""
