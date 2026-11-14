@@ -69,9 +69,14 @@ from .nuclear import (
 PACKAGE_NAME = "beam-target"
 logger = logging.getLogger(__name__)
 
-# Beam-energy step [relative, and at least the absolute value in MeV] of the grid on which
-# the spectra of evaluated (ENDF) reactions are calculated and then interpolated
-ENDF_ENERGY_STEP = (0.02, 0.005)
+# Beam-energy step [relative, and at least the absolute value in MeV] of the grids on which
+# the spectra of evaluated (ENDF) reactions are calculated and then interpolated: continua
+# (LAW=1), and lab-frame tables (LAW=7), whose sharper features need a finer grid. Checked
+# against steps half as large: within 2.2% in any energy bin for continua (ENDF/B p + Be, W
+# and alpha + Be), and 9% for tables at 2% (FENDL Ta, U, C, d + Li, d + Be; bins holding
+# under 0.4% of the neutrons), which is why tables use 1%.
+ENDF_ENERGY_STEP = (0.04, 0.01)
+ENDF_TABLE_ENERGY_STEP = (0.01, 0.0025)
 # Angle cells over which evaluated continuum distributions are integrated before conversion to
 # the lab: this many per output angle bin, and at least ENDF_MIN_ANGLE_CELLS (two-body lines
 # are binned exactly, see nuclear.bin_two_body)
@@ -2011,8 +2016,10 @@ class BeamTarget:
         and angle at one beam energy, so interpolating between beam energies would leave a
         band for each beam energy calculated. The other channels, whose spectra change
         smoothly with the beam energy, are calculated (see lab_spectrum) at beam energies from
-        the highest to the lowest in the target, ENDF_ENERGY_STEP apart, and interpolated
-        linearly to the beam energy in each internal bin. The neutron energy mesh runs from 0
+        the highest to the lowest in the target and interpolated linearly to the beam energy
+        in each internal bin: continua ENDF_ENERGY_STEP apart, and lab-frame tables (LAW=7),
+        whose spectra have sharper features that move with the beam energy,
+        ENDF_TABLE_ENERGY_STEP apart. The neutron energy mesh runs from 0
         to the highest lab energy, in steps of energy_bin_width.
 
         Returns {"energy_grid": the energy mesh [MeV], "per_particle": neutrons per beam
@@ -2030,40 +2037,45 @@ class BeamTarget:
             per_particle = np.zeros((self.position_bins_total, self.num_angle_bins_out, 1))
             return {"energy_grid": grid, "per_particle": per_particle, "sigma_mids": sigma_mids}
 
-        # Beam energies to calculate at, from the top down
-        rel, step_min = ENDF_ENERGY_STEP
-        top, bottom = E[active].max(), E[active].min()
-        energies = [top]
-        while energies[-1] > bottom:
-            energies.append(max(bottom, energies[-1] - max(rel * energies[-1], step_min)))
-        energies = np.array(energies)
-
-        num = max(1, int(np.ceil(production.max_lab_energy(top) / width)))
+        num = max(1, int(np.ceil(production.max_lab_energy(E[active].max()) / width)))
         grid = np.arange(num + 1) * width
         per_particle = np.zeros((self.position_bins_total, self.num_angle_bins_out, num))
-
-        # Interpolation: each active bin between energies[k] (above) and energies[k + 1]
         idx = np.flatnonzero(active)
-        k = np.clip(
-            np.searchsorted(-energies, -E[idx], side="right") - 1, 0, max(len(energies) - 2, 0)
-        )
-        if len(energies) == 1:
-            t = np.zeros(len(idx))
-            k = np.zeros(len(idx), dtype=int)
-        else:
-            t = (energies[k] - E[idx]) / (energies[k] - energies[k + 1])
         # Angle cells over which each distribution is integrated: several per output angle bin
         num_cm_angles = max(
             ENDF_MIN_ANGLE_CELLS, ENDF_ANGLE_CELLS_PER_BIN * self.num_angle_bins_out
         )
         coef = density[idx] * 1e-24 * self.dx[idx] * self.beam_fraction_mids[idx]
         rows = self._output_position_index()[idx]
-        totals = np.zeros(len(energies))
-        if any(c.law != 2 for c in production.channels):  # Smooth channels: interpolated
-            for j in np.unique(np.concatenate((k, k + 1 if len(energies) > 1 else k))):
-                weight = np.where(k == j, 1 - t, 0.0) + np.where(
-                    (k + 1 == j) & (len(energies) > 1), t, 0.0
+
+        # Smooth channels, interpolated between beam energies: continua (LAW=1) and lab-frame
+        # tables (LAW=7), each on its own grid of beam energies (see ENDF_ENERGY_STEP)
+        laws = {c.law for c in production.channels if c.law != 2}
+        groups = [
+            ({law for law in laws if law != 7}, ENDF_ENERGY_STEP),
+            ({7} & laws, ENDF_TABLE_ENERGY_STEP),
+        ]
+        for group, (rel, step_min) in groups:
+            if not group:
+                continue
+            # Beam energies to calculate at, from the top down
+            top, bottom = E[active].max(), E[active].min()
+            energies = [top]
+            while energies[-1] > bottom:
+                energies.append(max(bottom, energies[-1] - max(rel * energies[-1], step_min)))
+            energies = np.array(energies)
+            # Interpolation: each active bin between energies[k] (above) and energies[k + 1]
+            if len(energies) == 1:
+                k, t = np.zeros(len(idx), dtype=int), np.zeros(len(idx))
+            else:
+                k = np.clip(
+                    np.searchsorted(-energies, -E[idx], side="right") - 1, 0, len(energies) - 2
                 )
+                t = (energies[k] - E[idx]) / (energies[k] - energies[k + 1])
+            k1 = np.minimum(k + 1, len(energies) - 1)
+            totals = np.zeros(len(energies))
+            for j in np.unique(np.concatenate((k, k1))):
+                weight = np.where(k == j, 1 - t, 0.0) + np.where((k1 == j) & (k1 != k), t, 0.0)
                 use = weight > 0
                 if not np.any(use):
                     continue
@@ -2073,13 +2085,14 @@ class BeamTarget:
                     grid,
                     num_cm_angles=num_cm_angles,
                     two_body=False,
+                    laws=group,
                 )
                 by_row = np.bincount(
                     rows[use], coef[use] * weight[use], minlength=self.position_bins_total
                 )
                 touched = np.flatnonzero(by_row)
                 per_particle[touched] += by_row[touched, None, None] * spectrum[None]
-        sigma_mids[idx] = (1 - t) * totals[k] + t * totals[np.minimum(k + 1, len(energies) - 1)]
+            sigma_mids[idx] += (1 - t) * totals[k] + t * totals[k1]
         if production.has_two_body:  # Discrete levels: at each bin's own beam energy
             two_body, sigma_two_body = production.two_body_spectrum(
                 E[idx],

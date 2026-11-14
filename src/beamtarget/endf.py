@@ -209,7 +209,7 @@ def separation_energy(Z_c, A_c, Z_x, A_x, particle):
     )
 
 
-def _energy_points(energies, f0, lep, max_step, step=None):
+def _energy_points(energies, f0, lep, max_step, step=None, bounds=False):
     """Split an outgoing-energy distribution (energies [MeV], density f0 [1/MeV], histogram
     for lep 1 or linear for lep 2) into pieces at most max_step [MeV] wide. Return (energy
     of each piece [MeV], its probability, index of the tabulated point below), normalized
@@ -220,6 +220,8 @@ def _energy_points(energies, f0, lep, max_step, step=None):
     then cut into pieces of equal "count" N, where dN/dE = 1 / step(E), so pieces are
     narrow only where step asks for it. Without step (or where step is at least max_step),
     each interval is cut into equal pieces at most max_step wide.
+
+    With bounds, also return the lowest and highest energy of each piece [MeV].
     """
     e, f = energies, f0
     widths = np.diff(e)
@@ -256,7 +258,10 @@ def _energy_points(energies, f0, lep, max_step, step=None):
         dens = f[index] + frac * (f[index + 1] - f[index])
         p = dens * widths[index] * (hi - lo)
     total = probs.sum()
-    return E, (p / total if total > 0 else p), index
+    p = p / total if total > 0 else p
+    if bounds:
+        return E, p, index, e[index] + lo * widths[index], e[index] + hi * widths[index]
+    return E, p, index
 
 
 def _cm_energy_step(beta, angle_bin, energy_bin):
@@ -267,23 +272,39 @@ def _cm_energy_step(beta, angle_bin, energy_bin):
     neutron leaving it at speed u (energy eps) at CM angle theta, the lab angle phi has
     tan phi = u sin theta / (V + u cos theta), and d phi / d eps = sqrt(E_c / eps) sin theta /
     (2 E_lab), with E_lab the neutron's lab energy. It is largest for slow lab neutrons, so the
-    piece width is 2 a angle_bin E_lab sqrt(eps / E_c), with E_lab the lowest the piece can give,
-    (sqrt(eps) - sqrt(E_c))^2, but at least half an energy bin (the angles of the slowest
-    neutrons, all in the lowest bin, need not be finer), and a = CONTINUUM_ANGLE_SHIFT.
+    piece width is 2 a angle_bin E_lab sqrt(eps / E_c), with E_lab the neutrons' lab energy (or
+    the lowest the piece can give, (sqrt(eps) - sqrt(E_c))^2), but at least half an energy bin
+    (the angles of the slowest neutrons, all in the lowest bin, need not be finer), and a =
+    CONTINUUM_ANGLE_SHIFT.
     Nonrelativistic: the CM moves slowly, so this is only used to choose the piece widths.
     """
     E_c = 0.5 * M_NEUTRON * beta**2
     a = CONTINUUM_ANGLE_SHIFT * angle_bin
     floor = (a / 2) ** 2 * E_c  # Where the formula gives zero: the CM energy is 0
 
-    def step(eps):
+    def step(eps, E_lab=None):
+        """eps: CM energies; E_lab: the lab energies of the neutrons in question (default:
+        the lowest a piece at eps can give)."""
         eps = np.maximum(eps, 0.0)
         if E_c <= 0:
-            return np.full(np.shape(eps), np.inf)
-        E_lab = np.maximum((np.sqrt(eps) - np.sqrt(E_c)) ** 2, energy_bin / 2)
+            return np.full(np.broadcast_shapes(np.shape(eps), np.shape(E_lab)), np.inf)
+        if E_lab is None:
+            E_lab = (np.sqrt(eps) - np.sqrt(E_c)) ** 2
+        E_lab = np.maximum(E_lab, energy_bin / 2)
         return np.maximum(2 * a * E_lab * np.sqrt(eps / E_c), floor)
 
     return step
+
+
+def _cm_to_lab(eps, mu, beta, gamma):
+    """Return (lab kinetic energy [MeV], lab cosine) of neutrons of CM kinetic energy eps [MeV]
+    emitted at CM cosine mu, for a CM moving at beta (Lorentz factor gamma) along the beam."""
+    p = np.sqrt(eps * (eps + 2 * M_NEUTRON))
+    total = eps + M_NEUTRON
+    p_par = gamma * (p * mu + beta * total)
+    p_perp = p * np.sqrt(np.clip(1 - mu**2, 0, None))
+    E_lab = gamma * (total + beta * p * mu) - M_NEUTRON
+    return E_lab, p_par / np.sqrt(p_par**2 + p_perp**2)
 
 
 class _Continuum:
@@ -628,7 +649,14 @@ class NeutronProduction:
         return any(c.law == 2 for c in self.channels)
 
     def lab_spectrum(
-        self, E, angle_edges, energy_edges, num_cm_angles=720, max_step=None, two_body=True
+        self,
+        E,
+        angle_edges,
+        energy_edges,
+        num_cm_angles=720,
+        max_step=None,
+        two_body=True,
+        laws=None,
     ):
         """Return the neutron production cross section [b] in each (lab angle, lab energy)
         bin at beam energy E [MeV], and the total [b].
@@ -643,6 +671,7 @@ class NeutronProduction:
                 are split (default: half an output energy bin).
             two_body: Include the two-body (LAW=2) channels; leave them out to calculate
                 them separately with two_body_spectrum.
+            laws: Only the other channels with these LAW numbers (default: all of them).
 
         Each piece of each distribution (outgoing energy, angle cell) is converted to the
         lab (boosted from the center of mass of beam + target with relativistic kinematics,
@@ -665,8 +694,8 @@ class NeutronProduction:
 
         total = 0.0
         for channel in self.channels:
-            if channel.law == 2:
-                continue  # Below, with two_body_spectrum
+            if channel.law == 2 or (laws is not None and channel.law not in laws):
+                continue  # Two-body channels: below, with two_body_spectrum
             sigma = channel.production(E)
             if sigma <= 0:
                 continue
@@ -773,19 +802,18 @@ class NeutronProduction:
     ):
         """Bin a LAW=1 distribution (weight w [b]) into the lab bins.
 
-        Each outgoing-energy piece is placed at its middle energy. In the center-of-mass (CM)
-        frame that is too coarse where the neutrons are slow in the lab: there the lab angle
-        changes quickly with the CM energy, so pieces max_step wide land in separate angle
-        bins (jagged angular distributions at low lab energies). The pieces are made narrower
-        there, as needed (see _cm_energy_step).
+        Each outgoing-energy piece (at most max_step wide) is placed at its middle energy. In
+        the center-of-mass (CM) frame that is too coarse where the neutrons are slow in the
+        lab: there the lab angle changes quickly with the CM energy, so pieces max_step wide
+        land in separate angle bins (jagged angular distributions at low lab energies). So
+        each (piece, CM angle cell) whose lab angle would change too much across the piece
+        (see _cm_energy_step, with that cell's lab energy) is split instead into narrower
+        pieces within it, binned for those cells only, each with its share of the piece (by
+        the outgoing-energy density) and the piece's angular probability. The other cells,
+        most of them, are binned from the piece as it is.
         """
-        step = None
-        if frame != "lab":
-            angle_edges, energy_edges, width, _ = grid
-            step = _cm_energy_step(beta, np.radians(np.min(np.diff(angle_edges))), width)
-        Eb, p, index = _energy_points(
-            dist.energies * scale, dist.f0 / scale, dist.lep, max_step, step
-        )
+        energies, f0 = dist.energies * scale, dist.f0 / scale
+        Eb, p, index, lo, hi = _energy_points(energies, f0, dist.lep, max_step, bounds=True)
         if len(Eb) == 0:
             return 0.0
         cells = self._angular_cells(dist, index, Eb, E, mu_edges)  # (pieces, cells)
@@ -793,14 +821,39 @@ class NeutronProduction:
         if frame == "lab":
             E_lab = np.repeat(Eb[:, None], len(mu_mid), axis=1)
             cos_lab = np.repeat(mu_mid[None, :], len(Eb), axis=0)
-        else:
-            pb = np.sqrt(Eb * (Eb + 2 * M_NEUTRON))[:, None]
-            Etot = (Eb + M_NEUTRON)[:, None]
-            p_par = gamma * (pb * mu_mid[None, :] + beta * Etot)
-            p_perp = pb * np.sqrt(np.clip(1 - mu_mid**2, 0, None))[None, :]
-            E_lab = gamma * (Etot + beta * pb * mu_mid[None, :]) - M_NEUTRON
-            cos_lab = p_par / np.sqrt(p_par**2 + p_perp**2)
-        return self._bin(E_lab, cos_lab, prob, grid)
+            return self._bin(E_lab, cos_lab, prob, grid)
+
+        E_lab, cos_lab = _cm_to_lab(Eb[:, None], mu_mid[None, :], beta, gamma)
+        angle_edges, energy_edges, width, _ = grid
+        step = _cm_energy_step(beta, np.radians(np.min(np.diff(angle_edges))), width)
+        # Sub-pieces each (piece, cell) needs: as many as the step its own lab energy asks for
+        count = np.ceil((hi - lo)[:, None] / step(Eb[:, None], E_lab)).astype(int)
+        count = np.clip(count, 1, MAX_PIECES_PER_INTERVAL)
+        finer = count > 1
+        if not np.any(finer):
+            return self._bin(E_lab, cos_lab, prob, grid)
+        out = self._bin(E_lab, cos_lab, np.where(finer, 0.0, prob), grid)
+
+        # Equal sub-pieces of each such (piece, cell), each with its share of the piece: by
+        # the outgoing-energy density at its middle (exact for histogram and linear densities)
+        piece, cell = np.nonzero(finer)
+        n = count[piece, cell]
+        pair = np.repeat(np.arange(len(piece)), n)
+        k = np.arange(len(pair)) - np.repeat(np.cumsum(n) - n, n)
+        piece_k, cell_k, n_k = piece[pair], cell[pair], n[pair]
+        a, b = lo[piece_k], hi[piece_k]
+        center = a + (b - a) * (k + 0.5) / n_k
+        if dist.lep == 1:
+            share = 1.0 / n_k
+        else:  # Linear in each tabulated interval
+            i = index[piece_k]
+            slope = (f0[i + 1] - f0[i]) / (energies[i + 1] - energies[i])
+            density = f0[i] + slope * (center - energies[i])
+            middle = f0[i] + slope * ((a + b) / 2 - energies[i])
+            share = np.where(middle > 0, density / np.where(middle > 0, middle, 1) / n_k, 1 / n_k)
+        E_fine, cos_fine = _cm_to_lab(center, mu_mid[cell_k], beta, gamma)
+        prob_fine = prob[piece_k, cell_k] * share
+        return out + self._bin(E_fine, cos_fine, prob_fine, grid)
 
     def _bin_lab_table(self, dist, scale, w, max_step, grid):
         """Bin a LAW=7 distribution (weight w [b]) into the lab bins. Between tabulated
