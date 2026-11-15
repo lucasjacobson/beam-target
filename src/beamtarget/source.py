@@ -373,7 +373,7 @@ class Region:
         density: For a gas given by density instead [g/cm^3]. A gas with neither pressure,
             temperature nor density has its density calculated.
         wall_radius: Radius of the wall around the region [cm]; the part of the beam outside
-            it is scraped off.
+            it is scraped off. None (default): no wall, so the beam is not scraped here.
         divergence: Beam divergence in the region (growth in radius per unit length) [rad].
         position_bins: Number of position bins of the output mesh.
         position_substeps: Number of steps the beam is followed in across each output
@@ -389,7 +389,7 @@ class Region:
         pressure=None,
         temperature=None,
         density=None,
-        wall_radius,
+        wall_radius=None,
         divergence=0.0,
         position_bins,
         position_substeps=None,
@@ -1214,9 +1214,10 @@ class BeamTarget:
         temperatures = self.temperature[~np.isnan(self.temperature)]
         require(np.all(temperatures > 0), "temperatures must be above 0 K")
         require(self.beam_radius_entry > 0, "beam_radius_entry must be positive")
-        require(np.all(self.wall_radius > 0), "every region needs a positive wall_radius")
+        walls = self.wall_radius[~np.isnan(self.wall_radius)]
+        require(np.all(walls > 0), "wall radii must be positive")
         require(
-            self.wall_radius[0] >= self.beam_radius_entry,
+            np.isnan(self.wall_radius[0]) or self.wall_radius[0] >= self.beam_radius_entry,
             "the first region's wall_radius must not be smaller than beam_radius_entry (the beam "
             "radius at entry)",
         )
@@ -1775,8 +1776,10 @@ class BeamTarget:
 
         # Wall radius at each grid point: that of the bin ending there, so that the beam
         # scraped off by a narrower wall is scraped (and its power deposited) inside the
-        # region with that wall, starting one bin in
-        wall_mids = np.repeat(self.wall_radius, self.position_bins_internal)
+        # region with that wall, starting one bin in. A region without a wall (NaN) has an
+        # infinite one: nothing is scraped there.
+        walls = np.where(np.isnan(self.wall_radius), np.inf, self.wall_radius)
+        wall_mids = np.repeat(walls, self.position_bins_internal)
         self.wall_grid = np.append(wall_mids[0], wall_mids)
         kept = np.minimum.accumulate(np.minimum(1.0, self.wall_grid / free_radius))
         self.scrape_grid = 1 - kept**2
@@ -2448,7 +2451,12 @@ class BeamTarget:
             + requested
             + [
                 ("beam_radius_entry", *self.in_units(self.beam_radius_entry, "radius")),
-                ("wall_radius", *self.in_units(self.wall_radius, "radius")),
+                (
+                    "wall_radius",
+                    self.in_units(self.wall_radius, "radius")[0],
+                    self.units["radius"]
+                    + ("; nan: no wall" if np.any(np.isnan(self.wall_radius)) else ""),
+                ),
                 ("divergence", divergence, div_unit),
                 ("position_bins", self.position_bins, ""),
                 ("position_substeps", self.position_substeps, "per position bin"),
@@ -3154,7 +3162,8 @@ class BeamTarget:
             wall_radius, region_edges, baseline=None, color="k", linewidth=1.5, label="Wall"
         )
         ax_radius.set_ylabel(f"Radius [{_unit_label(L_unit)}]")
-        ax_radius.set_ylim(0, 1.1 * np.max(wall_radius))
+        top = np.nanmax(np.append(wall_radius, radius))  # (NaN: no wall, so none drawn)
+        ax_radius.set_ylim(0, 1.1 * top)
         ax_radius.legend(loc="lower right")
 
         current_grid, I_unit = self.in_units(self.current_grid_out, "current")

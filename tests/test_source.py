@@ -869,3 +869,20 @@ def test_only_one_value_calculated():
 )
 def test_plot_labels_superscript_mass_numbers(label, expected):
     assert _plot_label(label) == expected
+
+
+def test_no_wall_no_scraping():
+    """A region without a wall_radius has no wall: however much the beam spreads, nothing is
+    scraped, and the summary says which regions have none."""
+    s = make_source(wall_radius=None, divergence=[300.0])
+    assert np.all(s.scrape_grid == 0) and s.wall_power == 0
+    assert s.radius_grid[-1] == pytest.approx(0.2 + 0.3 * 50.0)  # Free growth
+    inputs = {name: (value, units) for name, value, units in s.get_inputs()}
+    assert np.isnan(inputs["wall_radius"][0][0]) and inputs["wall_radius"][1] == "cm; nan: no wall"
+
+
+def test_wall_only_where_given():
+    """A wall in one region only scrapes there."""
+    s = make_source(**{**TWO_REGIONS, "wall_radius": [None, 1.0]})
+    first = s.position_bins_internal[0]
+    assert np.all(s.scrape_grid[: first + 1] == 0) and s.scrape_grid[-1] > 0

@@ -119,7 +119,7 @@ PLACEMENT_SETTINGS = {
 # calculated.
 REGION_SETTINGS = {
     "material": (str, None),  # Name of the [materials.<name>] table filling the region
-    "wall_radius": (RADIUS, None),  # Radius of the wall around the region
+    "wall_radius": (RADIUS, ""),  # Radius of the wall around the region (none: no wall)
     "position_bins": (int, None),  # Position bins (output mesh)
     "length": (LENGTH, ""),  # Length along the beam
     "pressure": (PRESSURE, ""),  # Gas pressure, with temperature

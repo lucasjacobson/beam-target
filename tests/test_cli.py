@@ -238,7 +238,7 @@ beam_energy_backstop = "200 keV"
         ('regions = [{ use = "gas", material = "nope" }]', r"no \[materials.nope\] table"),
         ('regions = [{ use = "gas", length = "long" }]', "length = 'long': expected a number"),
         ('regions = [{ use = "gas", density = false }]', "density must be a number and a unit"),
-        ('regions = [{ material = "DT50", length = 1.0 }]', "missing wall_radius"),
+        ('regions = [{ material = "DT50", length = 1.0 }]', "missing position_bins"),
     ],
     ids=[
         "unknown name",
@@ -260,7 +260,7 @@ def test_invalid_regions_rejected(tmp_path, case, message):
 
 def test_named_region_checked_even_if_unused(tmp_path):
     text = BASE + '\n[regions.bad]\nmaterial = "DT50"\n\n[cases.a]\n'
-    with pytest.raises(InputError, match=r"\[regions.bad\]: missing wall_radius"):
+    with pytest.raises(InputError, match=r"\[regions.bad\]: missing position_bins"):
         load_input(write_input(tmp_path, text))
 
 
@@ -519,7 +519,7 @@ def test_main_verbose_messages(tmp_path, caplog):
 
 @pytest.mark.parametrize(
     "args, message",
-    [(["-c", "nope"], "no case(s) named nope"), (["--list"], "missing wall_radius")],
+    [(["-c", "nope"], "no case(s) named nope"), (["--list"], "missing position_bins")],
     ids=["unknown case", "bad input file"],
 )
 def test_main_errors(tmp_path, capsys, args, message):
@@ -633,3 +633,10 @@ def test_sdef_positions(mixed_source, direction, backstop, entry):
     assert list(b2) == pytest.approx(backstop)
     with pytest.raises(ValueError, match="not both"):
         mixed_source.sdef_positions(direction, entry_position=entry, backstop_position=backstop)
+
+
+def test_region_without_wall(tmp_path):
+    """wall_radius may be left out (or left out of a named region with false): no wall."""
+    text = BASE + '\n[cases.a]\nregions = [{ use = "gas", wall_radius = false }]\n'
+    (region,) = load_input(write_input(tmp_path, text))["a"]["source"]["regions"]
+    assert region.wall_radius is None
