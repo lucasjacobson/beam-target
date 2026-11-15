@@ -870,3 +870,22 @@ def test_sum_on_common_grid():
     )
     np.testing.assert_allclose(grid, [0.2, 0.3, 0.4, 0.5, 0.6])
     np.testing.assert_allclose(total, [[1.0, 12.0, 20.0, 30.0]])
+
+
+def test_edge_slivers():
+    """Only cells at the edge of the nonzero region, and much fainter than a neighbor, are
+    left blank in the maps."""
+    from beamtarget.source import _edge_slivers
+
+    density = np.array(
+        [
+            [0.0, 0.0, 0.0, 0.0],
+            [0.001, 1.0, 1.0, 0.5],  # 0.001: a sliver at the edge; 0.5: at the edge, not faint
+            [1.0, 1.0, 0.002, 1.0],  # 0.002: faint but inside (no empty neighbor)
+            [1.0, 1.0, 1.0, 1.0],
+        ]
+    )
+    expected = np.zeros_like(density, dtype=bool)
+    expected[1, 0] = True
+    np.testing.assert_array_equal(_edge_slivers(density, 0.01), expected)
+    assert not np.any(_edge_slivers(density, 0.0))

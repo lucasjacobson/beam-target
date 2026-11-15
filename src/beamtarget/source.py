@@ -762,6 +762,23 @@ def surface_density(angle_grid, energy_grid, neutrons):
 # so that they stay visible
 TOTAL_STYLE = {"color": "0.75", "linewidth": 3, "zorder": 1.5}
 
+# Energy-angle maps: a cell at the edge of where neutrons are made (next to an empty cell)
+# that holds less than this fraction of its brightest neighbor is left blank, as the edge
+# of a sharp band only clips it (see _edge_slivers). 0 shows every cell.
+MAP_EDGE_FRACTION = 0.0
+
+
+def _edge_slivers(density, fraction=None):
+    """Return a mask of the cells of density (a 2-D array) at the edge of its nonzero region,
+    next to an empty cell (or the array's edge) in either direction, that hold less than
+    fraction (default MAP_EDGE_FRACTION) of the largest of their four neighbors: cells the
+    edge of a sharp band only clips, which show as speckles on a log color scale."""
+    fraction = MAP_EDGE_FRACTION if fraction is None else fraction
+    padded = np.pad(density, 1)
+    neighbors = np.stack([padded[:-2, 1:-1], padded[2:, 1:-1], padded[1:-1, :-2], padded[1:-1, 2:]])
+    at_edge = np.any(neighbors <= 0, axis=0)
+    return (density > 0) & at_edge & (density < fraction * np.max(neighbors, axis=0))
+
 
 def _save_figure(fig, fname, close=True, dpi=None):
     """Lay out fig, save it to fname (at dpi dots per inch, if given) and (unless close is
@@ -3084,7 +3101,8 @@ class BeamTarget:
 
         The maps show neutrons per unit energy and solid angle, so each column is the
         spectrum at that angle, on a log color scale covering four decades below the peak;
-        empty cells are left blank.
+        empty cells are left blank, and so (if MAP_EDGE_FRACTION is above 0) are the cells at
+        the edge of a sharp band that it only clips (see _edge_slivers).
 
         The spectra, integrated over angle (neutron_energy) and in the first angle bin, at 0
         degrees (neutron_energy_0deg, per unit solid angle), are drawn on linear and log
@@ -3099,11 +3117,13 @@ class BeamTarget:
             density = by_angle / self.solid_angles_out[:, None] / width
             filled = np.flatnonzero(np.sum(by_angle, 0))
             lo, hi = filled[0], filled[-1] + 1
+            shown = density[:, lo:hi]
+            blank = (shown <= 0) | _edge_slivers(shown)  # Empty cells and edge slivers
             fig, ax = _pyplot().subplots(figsize=(8, 6))
             mesh = ax.pcolormesh(
                 self.angle_grid_out,
                 self.in_units(grid[lo : hi + 1], "neutron_energy")[0],
-                np.ma.masked_less_equal(density[:, lo:hi].T, 0),
+                np.ma.masked_where(blank, shown).T,
                 cmap="Spectral_r",
                 norm=LogNorm(vmin=np.max(density) * 1e-4, vmax=np.max(density)),
             )
