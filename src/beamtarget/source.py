@@ -934,6 +934,11 @@ def draw_energy_surface(fig, angles, energies, density, title, energy_unit="MeV"
     return ax
 
 
+# The line of a total over reactions in the plots: wide and gray, drawn under the reactions
+# so that they stay visible
+TOTAL_STYLE = {"color": "0.75", "linewidth": 3, "zorder": 1.5}
+
+
 def _save_figure(fig, fname, close=True, dpi=None):
     """Lay out fig, save it to fname (at dpi dots per inch, if given) and (unless close is
     False) close it."""
@@ -3195,12 +3200,11 @@ class BeamTarget:
             )
             for rxn in self.reactions_present()
         ]
-        if len(lines) > 1:
-            lines.append(("Total", sum(values for _, values in lines)))
-
         fig, ax = _pyplot().subplots(figsize=(8, 6))
+        if len(lines) > 1:
+            ax.stairs(sum(values for _, values in lines), x, label="Total", **TOTAL_STYLE)
         for label, per_cm in lines:
-            ax.stairs(per_cm, x, label=label)
+            ax.stairs(per_cm, x, label=label, zorder=2)
         self._set_position_axis(ax)
         ax.set_ylabel(rf"Neutrons per unit length [n/({unit}$\cdot$s)]")
         ax.set_title(f"Neutron source along the beam ({self.name})")
@@ -3226,12 +3230,12 @@ class BeamTarget:
             )
             for rxn in self.reactions_present()
         ]
-        if len(lines) > 1:
-            lines.append(("Total", sum(values for _, values in lines)))
-
         fig, ax = _pyplot().subplots(figsize=(8, 6))
+        if len(lines) > 1:
+            total = sum(values for _, values in lines)
+            ax.stairs(total, self.angle_grid_out, label="Total", **TOTAL_STYLE)
         for label, per_sr in lines:
-            ax.stairs(per_sr, self.angle_grid_out, label=label)
+            ax.stairs(per_sr, self.angle_grid_out, label=label, zorder=2)
         ax.set_xlim(0, 180)
         ax.set_xticks(np.arange(0, 181, 30))
         ax.set_xlabel("Emission angle from the beam direction [degrees]")
@@ -3243,17 +3247,16 @@ class BeamTarget:
 
     @_plot_style
     def plot_neutron_energy(self, directory):
-        """Plot neutron energy against emission angle for each reaction, and the spectrum.
+        """Plot neutron energy against emission angle for each reaction, and the spectra.
 
         The maps show neutrons per unit energy and solid angle, so each column is the
         spectrum at that angle, on a log color scale covering four decades below the peak;
         empty cells are left blank.
 
-        The spectrum is integrated over angle and drawn on linear and log scales (the log
-        one covers five decades below the peak). Each reaction is shown separately and drops
-        to zero at the ends of its energy range; if the ranges of some overlap (such as the
-        two 7Li(p,n) lines), their total is shown too. The axes follow the neutron energies,
-        so the plots suit any beam energy.
+        The spectra, integrated over angle (neutron_energy) and in the first angle bin, at 0
+        degrees (neutron_energy_0deg, per unit solid angle), are drawn on linear and log
+        scales (see _plot_spectra). The axes follow the neutron energies, so the plots suit
+        any beam energy.
         """
         from matplotlib.colors import LogNorm
 
@@ -3284,33 +3287,58 @@ class BeamTarget:
 
         energy_grid, on_common_grid = self.neutrons_by_angle_and_energy()
         energy_grid = self.in_units(energy_grid, "neutron_energy")[0]
-        peak = 0.0
-        fig, ax = _pyplot().subplots(figsize=(8, 6))
-        spectra = {rxn: np.sum(on_common_grid[rxn], 0) / width for rxn in present}
-        lines = [(_plot_label(self.reactions[rxn].label), spectra[rxn], {}) for rxn in present]
-        overlap = np.sum([spectrum > 0 for spectrum in spectra.values()], 0)
-        if np.any(overlap > 1):
-            # Wide and gray, underneath the reactions, so that they stay visible
-            style = {"color": "0.75", "linewidth": 3}
-            lines.insert(0, ("Total", sum(spectra.values()), style))
-        for label, spectrum, style in lines:
-            # Draw each line over its own energy range, dropping to zero at both ends
-            filled = np.flatnonzero(spectrum)
-            lo, hi = filled[0], filled[-1] + 1
-            ax.stairs(spectrum[lo:hi], energy_grid[lo : hi + 1], baseline=0, label=label, **style)
-            peak = max(peak, np.max(spectrum))
-        ax.set_xlim(0, energy_grid[-1] + 0.05 * (energy_grid[-1] - energy_grid[0]))
-        ax.set_ylim(0, 1.05 * peak)
-        ax.set_xlabel(f"Neutron energy [{unit}]")
-        ax.set_ylabel(rf"Neutrons per unit energy [n/({unit}$\cdot$s)]")
-        ax.set_title(f"Neutron energy spectrum ({self.name})")
-        ax.grid()
-        ax.legend()
-        _save_figure(fig, os.path.join(directory, "neutron_energy.png"), close=False)
+        self._plot_spectra(
+            energy_grid,
+            {rxn: np.sum(on_common_grid[rxn], 0) / width for rxn in present},
+            rf"Neutrons per unit energy [n/({unit}$\cdot$s)]",
+            f"Angle-integrated neutron energy spectrum ({self.name})",
+            os.path.join(directory, "neutron_energy"),
+        )
+        first = self.angle_grid_out[1]
+        self._plot_spectra(
+            energy_grid,
+            {rxn: on_common_grid[rxn][0] / self.solid_angles_out[0] / width for rxn in present},
+            rf"Neutrons per unit energy and solid angle [n/({unit}$\cdot$s$\cdot$sr)]",
+            f"Neutron energy spectrum at 0° (0–{first:g}° bin) ({self.name})",
+            os.path.join(directory, "neutron_energy_0deg"),
+        )
 
-        ax.set_yscale("log")
-        ax.set_ylim(peak * 10**-5.25, peak * 10**0.25)
-        _save_figure(fig, os.path.join(directory, "neutron_energy_log.png"))
+    def _plot_spectra(self, energy_grid, spectra, ylabel, title, stem):
+        """Plot spectra ({rxn: values on energy_grid}) to stem + ".png" (linear scale) and
+        stem + "_log.png" (log, five decades below the peak). Each reaction is drawn over its
+        own energy range, dropping to zero at both ends; if the ranges of some overlap (such
+        as the two 7Li(p,n) lines), their total is drawn too (TOTAL_STYLE). Reactions with no
+        neutrons here are left out."""
+        unit = self.units["neutron_energy"]
+        spectra = {rxn: values for rxn, values in spectra.items() if np.any(values > 0)}
+        lines = [
+            (_plot_label(self.reactions[rxn].label), values, {"zorder": 2})
+            for rxn, values in spectra.items()
+        ]
+        overlap = np.sum([values > 0 for values in spectra.values()], 0)
+        if np.any(overlap > 1):
+            lines.insert(0, ("Total", sum(spectra.values()), TOTAL_STYLE))
+        fig, ax = _pyplot().subplots(figsize=(8, 6))
+        peak = 0.0
+        for label, values, style in lines:
+            filled = np.flatnonzero(values)
+            lo, hi = filled[0], filled[-1] + 1
+            ax.stairs(values[lo:hi], energy_grid[lo : hi + 1], baseline=0, label=label, **style)
+            peak = max(peak, np.max(values))
+        ax.set_xlim(0, energy_grid[-1] + 0.05 * (energy_grid[-1] - energy_grid[0]))
+        ax.set_ylim(0, 1.05 * peak if peak > 0 else 1)
+        ax.set_xlabel(f"Neutron energy [{unit}]")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.grid()
+        if lines:
+            ax.legend()
+        _save_figure(fig, stem + ".png", close=False)
+
+        if peak > 0:
+            ax.set_yscale("log")
+            ax.set_ylim(peak * 10**-5.25, peak * 10**0.25)
+        _save_figure(fig, stem + "_log.png")
 
     @_plot_style
     def plot_neutron_energy_surface(self, directory):

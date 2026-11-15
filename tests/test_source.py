@@ -770,7 +770,7 @@ def test_text_files_pure_deuterium(tmp_path):
     assert results["yield_DD"] == pytest.approx(results["yield_total"], rel=1e-6)
 
 
-@pytest.mark.parametrize("T_frac, num_plots", [(0.0, 8), (0.5, 10)])
+@pytest.mark.parametrize("T_frac, num_plots", [(0.0, 10), (0.5, 12)])
 def test_plots(tmp_path, T_frac, num_plots):
     make_source(T_frac=T_frac).make_plots(tmp_path / "plots")
     assert len(list((tmp_path / "plots").glob("*.png"))) == num_plots
@@ -791,7 +791,7 @@ def test_plots_and_sdef_at_any_energy(tmp_path, overrides):
     source = make_source(**overrides)
     source.get_mcnp_sdef()
     source.make_plots(tmp_path / "plots")
-    assert len(list((tmp_path / "plots").glob("*.png"))) == 10
+    assert len(list((tmp_path / "plots").glob("*.png"))) == 12
 
 
 # --- Regions: per-region walls and values calculated in any region ----------------------------

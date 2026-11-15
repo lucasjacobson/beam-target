@@ -145,7 +145,8 @@ columns and units.
 | `neutron_angle.png` | Neutrons per steradian against emission angle |
 | `neutron_energy_angle_<rxn>.png` | Neutron energy against emission angle, colored by intensity, for each reaction |
 | `neutron_energy_angle_surface_<rxn>.png` | The same as a surface, with a linear vertical axis, colored by height and lit from one side |
-| `neutron_energy.png`, `neutron_energy_log.png` | The neutron energy spectrum |
+| `neutron_energy.png`, `neutron_energy_log.png` | The neutron energy spectrum, integrated over angle |
+| `neutron_energy_0deg.png`, `neutron_energy_0deg_log.png` | The neutron energy spectrum at 0° (in the first angle bin), per unit solid angle |
 
 Position plots mark the boundaries between regions with dashed lines. `python -m
 beamtarget.view <case>/source.h5` opens the surface plots in windows, to turn them around.
