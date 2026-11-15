@@ -10,6 +10,7 @@ default; set it with `-o`):
 | `summary.toml` | The key inputs and results | `tomllib` |
 | `axial_profile.txt`, `energy_spectrum.txt`, `angular_distribution.txt` | The source integrated down to one variable | `numpy.loadtxt` |
 | `plots/*.png` | Plots of the beam and the source | an image viewer |
+| `surface.html` | The energy-angle surface of each reaction (and of all of them), to turn around | a web browser |
 
 All the text files are ASCII with Unix (LF) line endings. Values are in the units the case
 uses in its input file (see the README; for example, a case that gives `energy_bin_width =
@@ -143,10 +144,19 @@ columns and units.
 | `beam.png` | Beam energy, radius (with the wall), current, and deposited power along the beam |
 | `neutron_position.png`, `neutron_position_log.png` | Neutrons per unit length along the beam |
 | `neutron_angle.png` | Neutrons per steradian against emission angle |
-| `neutron_energy_angle_<rxn>.png` | Neutron energy against emission angle, colored by intensity, for each reaction |
-| `neutron_energy_angle_surface_<rxn>.png` | The same as a surface, with a linear vertical axis, colored by height and lit from one side |
+| `neutron_energy_angle_<rxn>.png` | Neutron energy against emission angle, colored by intensity, for each reaction (and `_all` for all of them, if there are several) |
 | `neutron_energy.png`, `neutron_energy_log.png` | The neutron energy spectrum, integrated over angle |
 | `neutron_energy_0deg.png`, `neutron_energy_0deg_log.png` | The neutron energy spectrum at 0° (in the first angle bin), per unit solid angle |
 
-Position plots mark the boundaries between regions with dashed lines. `python -m
-beamtarget.view <case>/source.h5` opens the surface plots in windows, to turn them around.
+Position plots mark the boundaries between regions with dashed lines.
+
+## `surface.html`
+
+The neutrons per unit energy and solid angle against emission angle and neutron energy, as a
+surface with a linear vertical axis, for each reaction and (if there are several) for all of
+them together, which it shows first. Open it in a web browser: drag to turn it, right-drag to
+move it, scroll to zoom, and point at the surface to read a value. Its controls set the
+colormap, the light (direction, height, fill light, gloss, and shadows), and the vertical
+scale, and save the view as a PNG. The page holds its own data; it loads three.js from
+cdn.jsdelivr.net, so it needs an internet connection. `python -m beamtarget.view
+<case>/source.h5` writes it again from source.h5 and opens it.

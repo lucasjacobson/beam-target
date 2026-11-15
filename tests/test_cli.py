@@ -433,10 +433,11 @@ def test_main_runs_cases(tmp_path):
             "axial_profile.txt",
             "energy_spectrum.txt",
             "angular_distribution.txt",
+            "surface.html",
         ]:
             assert (case_dir / fname).is_file()
         assert not (case_dir / "input.toml").exists()  # The summary records the inputs instead
-        assert len(list((case_dir / "plots").glob("*.png"))) in (10, 12)
+        assert len(list((case_dir / "plots").glob("*.png"))) in (9, 11)
         with open(case_dir / "summary.toml", "rb") as f:
             summary = tomllib.load(f)
         run = summary["run"]
@@ -469,6 +470,7 @@ def test_main_without_plots(tmp_path):
     out = tmp_path / "out"
     main([str(write_input(tmp_path, TWO_CASES)), "-o", str(out), "-c", "mix", "--no-plots"])
     assert (out / "mix" / "source.h5").is_file() and not (out / "mix" / "plots").exists()
+    assert not (out / "mix" / "surface.html").exists()
 
 
 def test_main_selected_case_in_parallel(tmp_path):

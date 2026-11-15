@@ -29,6 +29,7 @@ from .source import (
     Region,
 )
 from .units import DEFAULT_UNITS, example, from_internal, parse, to_internal, units_of
+from .webview import write_surface_page
 
 logger = logging.getLogger(__name__)
 
@@ -491,9 +492,10 @@ def run_case(name, settings, output_dir="output", input_file=None, name_width=0,
     """Calculate one case from load_input() and write its outputs to <output_dir>/<name>/.
 
     Writes source.h5, source.sdef, summary.toml, the profiles, and (unless plots is False)
-    plots/*.png (see docs/outputs.md), and returns the BeamTarget. input_file, if given, is recorded in the
-    summary and the SDEF header. The case's result line pads its name to name_width
-    characters (the longest name of the run), so the lines line up.
+    plots/*.png and surface.html (see docs/outputs.md), and returns the BeamTarget.
+    input_file, if given, is recorded in the summary and the SDEF header. The case's result
+    line pads its name to name_width characters (the longest name of the run), so the lines
+    line up.
     """
     t0 = time.time()
     s = settings["source"]
@@ -520,6 +522,8 @@ def run_case(name, settings, output_dir="output", input_file=None, name_width=0,
     source.write_mcnp_sdef(os.path.join(case_dir, "source.sdef"), direction, run_info, entry)
     if plots:
         source.make_plots(os.path.join(case_dir, "plots"))
+        # The energy-angle surfaces, to turn around in a web browser (see webview.py)
+        write_surface_page(os.path.join(case_dir, "source.h5"))
     sdef_info = {
         "sdef_direction": direction,
         "sdef_entry_position": entry,
@@ -592,7 +596,9 @@ def main(argv=None):
         help="also show each case's settings and detailed results",
     )
     parser.add_argument(
-        "--no-plots", action="store_true", help="skip the plots (about 2 s per case)"
+        "--no-plots",
+        action="store_true",
+        help="skip the plots and surface.html (about 2 s per case)",
     )
     parser.add_argument("--list", action="store_true", help="list the cases and exit")
     args = parser.parse_args(argv)

@@ -12,7 +12,6 @@ from beamtarget.nuclear import REACTIONS
 from beamtarget.source import (
     HDF5_FORMAT_VERSION,
     SDEF_RADIUS_DECIMALS,
-    _height_bands,
     _plot_label,
     _toml_wrapped,
 )
@@ -406,32 +405,6 @@ def test_long_summary_lists_one_per_line():
     assert max(len(line) for line in s.get_mcnp_sdef().splitlines()) <= 128
 
 
-def test_height_bands_partition_the_surface():
-    """The pieces of a surface cut at height levels cover each triangle exactly (their areas
-    in the x-y plane add up) and each lies within its band, so its color can follow its
-    height alone. All-zero triangles are left out."""
-    rng = np.random.default_rng(0)
-    x, y = np.meshgrid(np.arange(6.0), np.arange(5.0), indexing="ij")
-    z = rng.random(x.shape) * 3
-    z[:2, :2] = 0  # One all-zero cell corner region
-    levels = np.linspace(0, z.max(), 9)
-    pieces, band = _height_bands(x, y, z, levels)
-    assert np.all(pieces[:, :, 2] >= levels[band][:, None] - 1e-12)
-    assert np.all(pieces[:, :, 2] <= levels[band + 1][:, None] + 1e-12)
-
-    def area(P):  # Shoelace, in the x-y plane (repeated padding vertices add nothing)
-        xs, ys = P[..., 0], P[..., 1]
-        return 0.5 * np.abs(np.sum(xs * np.roll(ys, -1, -1) - np.roll(xs, -1, -1) * ys, -1))
-
-    pts = np.stack([x, y, z], -1)
-    a, b, c, d = pts[:-1, :-1], pts[1:, :-1], pts[1:, 1:], pts[:-1, 1:]
-    tri = np.concatenate([np.stack([a, b, c], 2).reshape(-1, 3, 3),
-                          np.stack([a, c, d], 2).reshape(-1, 3, 3)])  # fmt: skip
-    drawn = tri[np.any(tri[:, :, 2] > 0, axis=1)]
-    assert len(drawn) < len(tri)
-    assert area(pieces).sum() == pytest.approx(area(drawn).sum(), rel=1e-12)
-
-
 def test_warnings_in_hdf5(tmp_path):
     s = make_source(beam_energy_entry=MAX_ENERGY + 1, position_bins=[1], position_substeps=[2])
     s.write_hdf5(tmp_path / "s.h5")
@@ -770,7 +743,7 @@ def test_text_files_pure_deuterium(tmp_path):
     assert results["yield_DD"] == pytest.approx(results["yield_total"], rel=1e-6)
 
 
-@pytest.mark.parametrize("T_frac, num_plots", [(0.0, 10), (0.5, 12)])
+@pytest.mark.parametrize("T_frac, num_plots", [(0.0, 9), (0.5, 11)])
 def test_plots(tmp_path, T_frac, num_plots):
     make_source(T_frac=T_frac).make_plots(tmp_path / "plots")
     assert len(list((tmp_path / "plots").glob("*.png"))) == num_plots
@@ -791,7 +764,7 @@ def test_plots_and_sdef_at_any_energy(tmp_path, overrides):
     source = make_source(**overrides)
     source.get_mcnp_sdef()
     source.make_plots(tmp_path / "plots")
-    assert len(list((tmp_path / "plots").glob("*.png"))) == 12
+    assert len(list((tmp_path / "plots").glob("*.png"))) == 11
 
 
 # --- Regions: per-region walls and values calculated in any region ----------------------------
@@ -886,3 +859,14 @@ def test_wall_only_where_given():
     s = make_source(**{**TWO_REGIONS, "wall_radius": [None, 1.0]})
     first = s.position_bins_internal[0]
     assert np.all(s.scrape_grid[: first + 1] == 0) and s.scrape_grid[-1] > 0
+
+
+def test_sum_on_common_grid():
+    from beamtarget.source import sum_on_common_grid
+
+    grid, total = sum_on_common_grid(
+        [np.array([0.2, 0.3, 0.4]), np.array([0.3, 0.4, 0.5, 0.6])],
+        [np.array([[1.0, 2.0]]), np.array([[10.0, 20.0, 30.0]])],
+    )
+    np.testing.assert_allclose(grid, [0.2, 0.3, 0.4, 0.5, 0.6])
+    np.testing.assert_allclose(total, [[1.0, 12.0, 20.0, 30.0]])

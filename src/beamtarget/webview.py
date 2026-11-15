@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .source import ALL_REACTIONS
 from .view import read_surfaces
 
 TEMPLATE = Path(__file__).with_name("web") / "surface.html"
@@ -59,7 +60,7 @@ def surface_page(path, reactions=None, energy=None):
         heights = np.round(density / top, HEIGHT_DECIMALS) if top > 0 else np.zeros_like(density)
         entries.append(
             {
-                "key": _label_text(label),
+                "key": "all" if label == ALL_REACTIONS[1] else _label_text(label),
                 "label_html": _label_html(label),
                 "label_text": _label_text(label),
                 "angles": [round(float(a), 6) for a in angles],

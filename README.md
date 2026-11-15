@@ -51,13 +51,15 @@ parallel and share them, and a long case takes over the cores of those that fini
 lists the cases, `--no-plots` skips the plots (about 2 s per case), and `-v` shows more
 detail.
 
+Each case's energy-angle surfaces are written as a web page, `surface.html` next to its
+`source.h5`: open it in your browser to turn them around with the mouse. It is a WebGL view lit
+from a direction you choose, with a choice of colormaps, optional shadows, and the value under
+the pointer (it loads three.js from cdn.jsdelivr.net).
+
     python -m beamtarget.view output/DT90/source.h5
 
-writes the energy-angle surface plots of a case as a web page (`surface.html` next to
-`source.h5`) and opens it in your browser, to turn them around with the mouse: a WebGL view
-lit from a direction you choose, with shadows, a choice of colormaps, and the value under the
-pointer (it loads three.js from cdn.jsdelivr.net). `--energy LOW HIGH` shows only those neutron
-energies, in the case's unit for them; `--matplotlib` opens matplotlib windows instead.
+writes the page again and opens it; give reaction keys (or `all`) to show only those, and
+`--energy LOW HIGH` to show only those neutron energies, in the case's unit for them.
 
 From Python:
 
@@ -111,7 +113,7 @@ radii, and so on); the beam power is in kW. The MCNP SDEF card is always in cm a
 ## Outputs
 
 Each case writes `source.h5` (the full source), `source.sdef` (an MCNP SDEF card),
-`summary.toml`, text profiles, and plots to its own directory. `get_openmc_sources` turns
+`summary.toml`, text profiles, plots, and `surface.html` to its own directory. `get_openmc_sources` turns
 `source.h5` into OpenMC sources that keep the full correlation between position, angle, and
 energy, which an SDEF card cannot. [`docs/outputs.md`](docs/outputs.md) describes every file.
 

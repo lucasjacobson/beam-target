@@ -1,6 +1,5 @@
 """The surface viewer (python -m beamtarget.view)."""
 
-import matplotlib
 import pytest
 from conftest import make_source
 
@@ -16,7 +15,11 @@ def source_h5(tmp_path_factory):
 
 def test_read_surfaces(source_h5):
     surfaces = view.read_surfaces(source_h5)
-    assert [s[0].split(" neutron")[0] for s in surfaces] == ["D(d,n)$^{3}$He", "T(d,n)$^{4}$He"]
+    assert [s[0].split(" neutron")[0] for s in surfaces] == [
+        "D(d,n)$^{3}$He",
+        "T(d,n)$^{4}$He",
+        "All reactions",
+    ]
     title, angles, energies, density, unit = view.read_surfaces(source_h5, ["DT"], (14.0, 15.0))[0]
     assert title.endswith("(test)") and unit == "MeV"
     assert density.shape == (len(angles), len(energies))
@@ -28,18 +31,6 @@ def test_unknown_reaction_or_empty_range(source_h5):
         view.read_surfaces(source_h5, ["XX"])
     with pytest.raises(SystemExit, match="no neutrons between"):
         view.read_surfaces(source_h5, ["DT"], (0.0, 1.0))
-
-
-def test_main_opens_a_window_per_reaction(source_h5, monkeypatch):
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    shown = []
-    monkeypatch.setattr(plt, "show", lambda: shown.append(len(plt.get_fignums())))
-    plt.close("all")
-    view.main([str(source_h5), "--matplotlib"])
-    assert shown == [2]
-    plt.close("all")
 
 
 def test_web_page(source_h5, tmp_path):
@@ -54,7 +45,7 @@ def test_web_page(source_h5, tmp_path):
     text = out.read_text(encoding="utf-8")
     data = json.loads(re.search(r'id="surface-data"[^>]*>(.*?)</script>', text, re.S).group(1))
     assert data["name"] == "test" and data["default_colormap"] == DEFAULT_COLORMAP
-    assert [r["key"] for r in data["reactions"]] == ["D(d,n)3He", "T(d,n)4He"]
+    assert [r["key"] for r in data["reactions"]] == ["D(d,n)3He", "T(d,n)4He", "all"]
     assert data["reactions"][1]["label_html"] == "T(d,n)<sup>4</sup>He"
     assert set(data["colormaps"]) == set(COLORMAPS)
     for r in data["reactions"]:
@@ -74,6 +65,17 @@ def test_web_page_by_default(source_h5, monkeypatch):
     assert out.stat().st_size > 1000 and opened == [out.resolve().as_uri()]
 
 
-def test_matplotlib_takes_no_page_options(source_h5):
-    with pytest.raises(SystemExit):
-        view.main([str(source_h5), "--matplotlib", "--no-open"])
+def test_all_reactions_is_their_sum(source_h5):
+    """The "all" surface holds every reaction's neutrons, on one energy mesh."""
+    import h5py
+    import numpy as np
+
+    ((_, angles, energies, density, _),) = view.read_surfaces(source_h5, ["all"])
+    with h5py.File(source_h5) as f:
+        total = sum(f[f"neutrons_{r}"][()].sum() for r in ("DD", "DT"))
+        cos = np.cos(np.radians(f["angle_grid"][()]))
+    solid = 2 * np.pi * (cos[:-1] - cos[1:])
+    width = energies[1] - energies[0]
+    assert np.sum(density * solid[:, None]) * width == pytest.approx(total, rel=1e-9)
+    with pytest.raises(SystemExit, match="it has DD, DT and all"):
+        view.read_surfaces(source_h5, ["XX"])
