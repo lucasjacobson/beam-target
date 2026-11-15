@@ -53,11 +53,11 @@ detail.
 
     python -m beamtarget.view output/DT90/source.h5
 
-opens the energy-angle surface plots of a case in windows, to turn them around with the
-mouse (`--energy LOW HIGH` shows only those neutron energies, in the case's unit for them).
-With `--html` it writes them instead as a web page (`surface.html` next to `source.h5`) and
-opens it in your browser: a WebGL view lit from a direction you choose, with shadows, a choice
-of colormaps, and the value under the pointer (it loads three.js from cdn.jsdelivr.net).
+writes the energy-angle surface plots of a case as a web page (`surface.html` next to
+`source.h5`) and opens it in your browser, to turn them around with the mouse: a WebGL view
+lit from a direction you choose, with shadows, a choice of colormaps, and the value under the
+pointer (it loads three.js from cdn.jsdelivr.net). `--energy LOW HIGH` shows only those neutron
+energies, in the case's unit for them; `--matplotlib` opens matplotlib windows instead.
 
 From Python:
 

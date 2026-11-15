@@ -37,7 +37,7 @@ def test_main_opens_a_window_per_reaction(source_h5, monkeypatch):
     shown = []
     monkeypatch.setattr(plt, "show", lambda: shown.append(len(plt.get_fignums())))
     plt.close("all")
-    view.main([str(source_h5)])
+    view.main([str(source_h5), "--matplotlib"])
     assert shown == [2]
     plt.close("all")
 
@@ -62,8 +62,18 @@ def test_web_page(source_h5, tmp_path):
         assert max(r["heights"]) == 1.0 and r["unit"] == "MeV"
 
 
-def test_web_page_default_location(source_h5):
-    from beamtarget.webview import write_surface_page
+def test_web_page_by_default(source_h5, monkeypatch):
+    """With no options the web page is written next to the source.h5 and opened."""
+    import webbrowser
 
-    out = write_surface_page(source_h5, reactions=["DT"])
-    assert out == source_h5.with_name("surface.html") and out.stat().st_size > 1000
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+    out = source_h5.with_name("surface.html")
+    out.unlink(missing_ok=True)
+    view.main([str(source_h5), "DT"])
+    assert out.stat().st_size > 1000 and opened == [out.resolve().as_uri()]
+
+
+def test_matplotlib_takes_no_page_options(source_h5):
+    with pytest.raises(SystemExit):
+        view.main([str(source_h5), "--matplotlib", "--no-open"])

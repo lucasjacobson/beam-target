@@ -1,14 +1,15 @@
-"""Open the surface plots of a source.h5 in windows, to turn them around with the mouse.
+"""Open the surface plots of a source.h5, to turn them around with the mouse.
 
     python -m beamtarget.view output/p18_Be/source.h5              # every reaction
     python -m beamtarget.view output/Apollo/source.h5 DT           # one reaction
     python -m beamtarget.view output/p18_Be/source.h5 --energy 0 3 # only 0-3 MeV (if in MeV)
-    python -m beamtarget.view output/p18_Be/source.h5 --html       # in the web browser
+    python -m beamtarget.view output/p18_Be/source.h5 --matplotlib # in matplotlib windows
 
-Each window shows the same plot as plots/neutron_energy_angle_surface_<rxn>.png (see
-source.draw_energy_surface), starting from the same view: drag to turn it, right-drag or
-scroll to zoom. With --html, a web page (surface.html next to source.h5, or the file named)
-is written and opened instead: a WebGL view with its own controls (see webview.py).
+By default a web page (surface.html next to source.h5, or the file given with --html) is
+written and opened in the web browser: a WebGL view with its own controls (see webview.py).
+With --matplotlib, each reaction opens in a window instead, the same plot as
+plots/neutron_energy_angle_surface_<rxn>.png (see source.draw_energy_surface), starting from
+the same view: drag to turn it, right-drag or scroll to zoom.
 """
 
 import argparse
@@ -60,7 +61,8 @@ def read_surfaces(path, reactions=None, energy=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="python -m beamtarget.view",
-        description="Open the energy-angle surface plots of a source.h5 to turn them around.",
+        description="Open the energy-angle surface plots of a source.h5 to turn them around "
+        "(in the web browser, unless --matplotlib).",
     )
     parser.add_argument("path", help="a source.h5 written by beamtarget")
     parser.add_argument("reactions", nargs="*", help="reaction keys, such as DT (default: all)")
@@ -73,23 +75,27 @@ def main(argv=None):
     )
     parser.add_argument(
         "--html",
-        nargs="?",
-        const="",
         metavar="FILE",
-        help="write a web page to view them in a browser (default FILE: surface.html next to "
-        "the source.h5) and open it",
+        help="where to write the web page (default: surface.html next to the source.h5)",
     )
     parser.add_argument(
-        "--no-open", action="store_true", help="with --html, write the page without opening it"
+        "--no-open", action="store_true", help="write the web page without opening it"
+    )
+    parser.add_argument(
+        "--matplotlib",
+        action="store_true",
+        help="open matplotlib windows instead of the web page",
     )
     args = parser.parse_args(argv)
+    if args.matplotlib and (args.html or args.no_open):
+        parser.error("--html and --no-open are for the web page, not --matplotlib")
 
-    if args.html is not None:
+    if not args.matplotlib:
         import webbrowser
 
         from .webview import write_surface_page
 
-        out = write_surface_page(args.path, args.html or None, args.reactions, args.energy)
+        out = write_surface_page(args.path, args.html, args.reactions, args.energy)
         print(f"Wrote {out}")
         if not args.no_open:
             webbrowser.open(out.resolve().as_uri())
