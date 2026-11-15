@@ -3,10 +3,12 @@
     python -m beamtarget.view output/p18_Be/source.h5              # every reaction
     python -m beamtarget.view output/Apollo/source.h5 DT           # one reaction
     python -m beamtarget.view output/p18_Be/source.h5 --energy 0 3 # only 0-3 MeV (if in MeV)
+    python -m beamtarget.view output/p18_Be/source.h5 --html       # in the web browser
 
 Each window shows the same plot as plots/neutron_energy_angle_surface_<rxn>.png (see
 source.draw_energy_surface), starting from the same view: drag to turn it, right-drag or
-scroll to zoom.
+scroll to zoom. With --html, a web page (surface.html next to source.h5, or the file named)
+is written and opened instead: a WebGL view with its own controls (see webview.py).
 """
 
 import argparse
@@ -69,7 +71,29 @@ def main(argv=None):
         metavar=("LOW", "HIGH"),
         help="neutron energies, in the file's unit (that of the case's energy_bin_width)",
     )
+    parser.add_argument(
+        "--html",
+        nargs="?",
+        const="",
+        metavar="FILE",
+        help="write a web page to view them in a browser (default FILE: surface.html next to "
+        "the source.h5) and open it",
+    )
+    parser.add_argument(
+        "--no-open", action="store_true", help="with --html, write the page without opening it"
+    )
     args = parser.parse_args(argv)
+
+    if args.html is not None:
+        import webbrowser
+
+        from .webview import write_surface_page
+
+        out = write_surface_page(args.path, args.html or None, args.reactions, args.energy)
+        print(f"Wrote {out}")
+        if not args.no_open:
+            webbrowser.open(out.resolve().as_uri())
+        return
 
     import matplotlib.pyplot as plt  # The default (interactive) backend
 

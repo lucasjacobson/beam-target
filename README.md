@@ -55,6 +55,9 @@ detail.
 
 opens the energy-angle surface plots of a case in windows, to turn them around with the
 mouse (`--energy LOW HIGH` shows only those neutron energies, in the case's unit for them).
+With `--html` it writes them instead as a web page (`surface.html` next to `source.h5`) and
+opens it in your browser: a WebGL view lit from a direction you choose, with shadows, a choice
+of colormaps, and the value under the pointer (it loads three.js from cdn.jsdelivr.net).
 
 From Python:
 

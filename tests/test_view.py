@@ -40,3 +40,30 @@ def test_main_opens_a_window_per_reaction(source_h5, monkeypatch):
     view.main([str(source_h5)])
     assert shown == [2]
     plt.close("all")
+
+
+def test_web_page(source_h5, tmp_path):
+    """--html writes a self-contained page holding every reaction's surface and the colormaps."""
+    import json
+    import re
+
+    from beamtarget.webview import COLORMAPS, DEFAULT_COLORMAP
+
+    out = tmp_path / "page" / "surface.html"
+    view.main([str(source_h5), "--html", str(out), "--no-open"])
+    text = out.read_text(encoding="utf-8")
+    data = json.loads(re.search(r'id="surface-data"[^>]*>(.*?)</script>', text, re.S).group(1))
+    assert data["name"] == "test" and data["default_colormap"] == DEFAULT_COLORMAP
+    assert [r["key"] for r in data["reactions"]] == ["D(d,n)3He", "T(d,n)4He"]
+    assert data["reactions"][1]["label_html"] == "T(d,n)<sup>4</sup>He"
+    assert set(data["colormaps"]) == set(COLORMAPS)
+    for r in data["reactions"]:
+        assert len(r["heights"]) == len(r["angles"]) * len(r["energies"])
+        assert max(r["heights"]) == 1.0 and r["unit"] == "MeV"
+
+
+def test_web_page_default_location(source_h5):
+    from beamtarget.webview import write_surface_page
+
+    out = write_surface_page(source_h5, reactions=["DT"])
+    assert out == source_h5.with_name("surface.html") and out.stat().st_size > 1000

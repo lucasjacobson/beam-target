@@ -20,7 +20,7 @@ dev = ["ruff", "pytest"]
 beam-target = "beamtarget.cli:main"
 
 [tool.setuptools.package-data]
-beamtarget = ["data/*"]
+beamtarget = ["data/*", "web/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
