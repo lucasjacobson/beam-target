@@ -23,6 +23,9 @@ from beamtarget import BeamTarget, Region
 from beamtarget.source import dt_gas
 from beamtarget.units import KEV, MEV, MILLIAMPERE, MILLIRADIAN, TORR, ZERO_CELSIUS
 
+# Slow: skipped by default; run with pytest -m slow (see pyproject.toml)
+pytestmark = pytest.mark.slow
+
 # The largest change allowed when a setting is refined: rms relative over the (angle, energy)
 # cells holding over 1% of the peak (summed over position), and largest relative change of the
 # neutrons in a position bin

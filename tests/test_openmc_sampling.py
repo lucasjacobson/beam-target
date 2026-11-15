@@ -21,6 +21,9 @@ except (ImportError, OSError):  # No compiled library
 
 from beamtarget.openmc_source import get_openmc_sources  # noqa: E402
 
+# Slow: skipped by default; run with pytest -m slow (see pyproject.toml)
+pytestmark = pytest.mark.slow
+
 NUM_SAMPLES = 200_000
 
 # Placements: get_openmc_sources arguments, and the expected beam axis and entry point

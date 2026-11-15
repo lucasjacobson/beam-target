@@ -38,7 +38,7 @@ This installs the package, its dependencies (numpy, h5py, matplotlib, and numba)
 numba, which takes a few seconds once; the compiled code is cached for later runs. The nuclear data it needs are included, except evaluated
 libraries, which are optional (see [Nuclear data](#nuclear-data)). Writing OpenMC sources
 also needs the `openmc` Python package (0.16 or later). For development,
-`pip install -e ".[dev]"` adds pytest and ruff.
+`pip install -e ".[dev]"` adds pytest (with pytest-xdist) and ruff.
 
 ## Quick start
 
@@ -130,7 +130,7 @@ measurements, and how to choose between libraries.
 
 ## Validation
 
-The test suite (`python -m pytest`, about 500 tests) checks the physics and the outputs,
+The test suite (`python -m pytest -m ""`, about 680 tests) checks the physics and the outputs,
 including:
 
 - **MCNP and OpenMC sampling:** MCNP and OpenMC sample the generated sources, and the sampled
@@ -182,8 +182,10 @@ including:
 
 ## Development
 
-Run the tests with `python -m pytest`, and format and lint with `ruff format` and `ruff check`
-(settings in `pyproject.toml`). The naming conventions used in the code are at the top of
+Run the tests with `python -m pytest`: in parallel, and without the slow ones (MCNP and OpenMC
+sampling, convergence, and regression), about 20 s on 16 cores. `python -m pytest -m slow` runs
+those alone (about a minute), and `python -m pytest -m ""` runs everything. Format and lint
+with `ruff format` and `ruff check` (settings in `pyproject.toml`). The naming conventions used in the code are at the top of
 [`source.py`](src/beamtarget/source.py).
 [`scripts/make_srim_tables.py`](scripts/make_srim_tables.py) regenerates the SRIM stopping
 tables, and [`docs/figures/`](docs/figures/) holds the figures in the data README and the

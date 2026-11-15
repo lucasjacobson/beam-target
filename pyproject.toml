@@ -14,7 +14,7 @@ authors = [{ name = "Lucas Jacobson" }]
 dependencies = ["numpy", "h5py", "matplotlib", "numba"]
 
 [project.optional-dependencies]
-dev = ["ruff", "pytest"]
+dev = ["ruff", "pytest", "pytest-xdist"]
 
 [project.scripts]
 beam-target = "beamtarget.cli:main"
@@ -25,6 +25,11 @@ beamtarget = ["data/*", "web/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# In parallel (pytest-xdist; worksteal measured fastest), and without the slow tests (MCNP and
+# OpenMC sampling, convergence, regression) unless asked: pytest -m slow for those alone,
+# pytest -m "" for everything, and pytest -n 0 for one process
+addopts = "-n auto --dist worksteal -m 'not slow'"
+markers = ["slow: long-running checks, skipped unless selected with -m slow or -m \"\""]
 
 [tool.ruff]
 line-length = 100

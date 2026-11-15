@@ -7,6 +7,9 @@ import numpy as np
 import pytest
 from regression_cases import CASES, REFERENCE_DIR, run_case
 
+# Slow: skipped by default; run with pytest -m slow (see pyproject.toml)
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture(scope="module")
 def library_dir(tmp_path_factory):

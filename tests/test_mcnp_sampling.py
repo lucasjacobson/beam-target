@@ -26,6 +26,9 @@ from conftest import MAX_Z, assert_counts_match, assert_mean_matches, make_sourc
 from beamtarget import Material
 from beamtarget.units import MEV
 
+# Slow: skipped by default; run with pytest -m slow (see pyproject.toml)
+pytestmark = pytest.mark.slow
+
 ENDF_DIR = Path(__file__).parent / "data" / "endf" / "ENDF-B-VIII.1"
 
 mcnptools = pytest.importorskip("mcnptools")
