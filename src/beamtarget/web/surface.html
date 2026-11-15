@@ -85,7 +85,7 @@
   <div class="row"><span>Height</span><input id="elevation" type="range" min="5" max="85" step="1"><output id="elevation-out"></output></div>
   <div class="row"><span>Fill light</span><input id="ambient" type="range" min="0" max="1" step="0.01"><output id="ambient-out"></output></div>
   <div class="row"><span>Gloss</span><input id="gloss" type="range" min="0" max="1" step="0.01"><output id="gloss-out"></output></div>
-  <div class="row"><label><input id="shadows" type="checkbox" checked> Cast shadows</label></div>
+  <div class="row"><label><input id="shadows" type="checkbox"> Cast shadows</label></div>
 
   <div class="label">Shape</div>
   <div class="row"><span>Vertical scale</span><input id="vscale" type="range" min="0.2" max="2" step="0.05"><output id="vscale-out"></output></div>
@@ -239,18 +239,24 @@ function buildBox(r, vscale) {
   const grid = new THREE.LineSegments(
     new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(lines, 3)),
     new THREE.LineBasicMaterial({ color: 0xcccccc }));
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(BOX.x, BOX.z), new THREE.MeshPhongMaterial({ color: 0xf7f7f7, shininess: 0 }));
+  // The floor: a pale, unlit base (lit, it came out as gray as the grid lines, which then
+  // showed only in shadow), and over it a translucent layer that shows the surface's shadow
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(BOX.x, BOX.z), new THREE.MeshBasicMaterial({ color: 0xfafafa }));
   floor.rotation.x = -Math.PI / 2;
-  floor.position.y = -0.001;
-  floor.receiveShadow = true;
+  floor.position.y = -0.002;
+  const shade = new THREE.Mesh(new THREE.PlaneGeometry(BOX.x, BOX.z), new THREE.ShadowMaterial({ opacity: 0.12 }));
+  shade.rotation.x = -Math.PI / 2;
+  shade.position.y = -0.001;
+  shade.receiveShadow = true;
   const walls = new THREE.Group();
-  walls.add(grid, floor);
+  walls.add(floor, shade, grid);
   walls.visible = document.getElementById("floor").checked;
   box.add(walls);
   const edge = 0.18;
   for (const a of angleTicks) box.add(label(a + "", "tick", new THREE.Vector3(xOf(a), 0, z1 + edge)));
   for (const e of energyTicks) box.add(label(+e.toPrecision(6) + "", "tick", new THREE.Vector3(x1 + edge, 0, zOf(e, r))));
-  for (const v of valueTicks) box.add(label(formatValue(v), "tick", new THREE.Vector3(x1 + edge, top * v / r.max, z0)));
+  // (No label at 0: the floor marks it, and the first energy label is there)
+  for (const v of valueTicks.filter(v => v > 0)) box.add(label(formatValue(v), "tick", new THREE.Vector3(x1 + edge, top * v / r.max, z0)));
   box.add(label("Emission angle [degrees]", "axis", new THREE.Vector3(0, 0, z1 + 0.6)));
   box.add(label(`Neutron energy [${r.unit}]`, "axis", new THREE.Vector3(x1 + 0.75, 0, 0)));
   box.add(label(`Neutrons [n/(${r.unit}&middot;s&middot;sr)]`, "axis", new THREE.Vector3(x1 + 0.5, top + 0.35, z0)));
@@ -313,7 +319,10 @@ for (const [id, value] of Object.entries(DEFAULTS)) {
   if (element) element.value = value;
 }
 setColormap(DEFAULTS.colormap);
-setReaction(0);
+// Start with all reactions together, if the case has several (the "all" entry)
+const start = Math.max(0, DATA.reactions.findIndex(r => r.key === "all"));
+reactionSelect.value = start;
+setReaction(start);
 
 // ----- Colorbar ticks, readout ----------------------------------------------------------------
 function colorbarTicks() {
