@@ -84,14 +84,19 @@ from .units import (
 PACKAGE_NAME = "beam-target"
 logger = logging.getLogger(__name__)
 
-# Beam-energy step [relative, and at least the absolute value in MeV] of the grids on which
-# the spectra of evaluated (ENDF) reactions are calculated and then interpolated: continua
-# (LAW=1), and lab-frame tables (LAW=7), whose sharper features need a finer grid. Checked
-# against steps half as large: within 2.2% in any energy bin for continua (ENDF/B p + Be, W
-# and alpha + Be), and 9% for tables at 2% (FENDL Ta, U, C, d + Li, d + Be; bins holding
-# under 0.4% of the neutrons), which is why tables use 1%.
+# The spectra of evaluated (ENDF) continua and lab-frame tables are calculated on a grid of
+# beam energies and interpolated linearly between them. The grid starts with steps of
+# ENDF_ENERGY_STEP [relative, and at least the absolute value in MeV] and is halved until
+# halving it changes the neutrons (summed over position) in the (angle, energy) cells holding
+# over ENDF_INTERPOLATION_CELLS of the peak by at most ENDF_INTERPOLATION_TOLERANCE (rms
+# relative change); the result, on the finer grid, is then within about half that. A grid
+# too coarse leaves a jitter of up to 25% between neighboring cells (18 MeV p + Be at 4%
+# steps on 1 degree and 0.1 MeV cells). At most ENDF_MAX_HALVINGS halvings; if that is not
+# enough, the case gets a warning.
 ENDF_ENERGY_STEP = (0.04, 0.01)
-ENDF_TABLE_ENERGY_STEP = (0.01, 0.0025)
+ENDF_INTERPOLATION_TOLERANCE = 0.02
+ENDF_INTERPOLATION_CELLS = 0.01
+ENDF_MAX_HALVINGS = 6
 # Angle cells over which evaluated continuum distributions are integrated before conversion to
 # the lab: this many per output angle bin, and at least ENDF_MIN_ANGLE_CELLS (two-body lines
 # are binned exactly, see nuclear.bin_two_body)
@@ -128,10 +133,18 @@ SUMMARY_LINE_LENGTH = 100
 SURFACE_MAX_CELLS = 300
 # Heights at which a surface plot's color changes (see plot_neutron_energy_surface)
 SURFACE_COLOR_LEVELS = 128
-# Light for the shading of surface plots: azimuth and elevation [deg] in the plot box, and the
-# brightness of a surface facing away from it (see _surface_shade)
-SURFACE_LIGHT = (60.0, 45.0)
+# Resolution of the surface plots [dots per inch] (the other plots use PLOT_STYLE's)
+SURFACE_DPI = 300
+# Light for the shading of surface plots (see _surface_shade): azimuth and elevation [deg] in
+# the plot box, from the side of the view so that ridges cast shadows that can be seen; the
+# brightness of a surface facing away from it or in shadow; the strength and shininess of the
+# highlights; and how sharp the edges of shadows are
+SURFACE_LIGHT = (150.0, 25.0)
 SURFACE_AMBIENT = 0.55
+SURFACE_SPECULAR = (0.18, 12.0)
+SURFACE_SHADOW_SHARPNESS = 6.0
+# The view of surface plots: elevation and azimuth [deg]
+SURFACE_VIEW = (30.0, -60.0)
 
 # Version of the HDF5 output layout; increase it whenever the layout changes
 HDF5_FORMAT_VERSION = 11
@@ -590,6 +603,16 @@ def get_code_version():
     return get_package_version()
 
 
+def _interpolation_change(fine, coarse):
+    """The rms relative change from coarse to fine over the (angle, energy) cells of fine
+    holding over ENDF_INTERPOLATION_CELLS of its peak (0 if it has no neutrons)."""
+    top = np.max(fine)
+    if top <= 0:
+        return 0.0
+    cells = fine > ENDF_INTERPOLATION_CELLS * top
+    return float(np.sqrt(np.mean(((fine[cells] - coarse[cells]) / fine[cells]) ** 2)))
+
+
 def _unit_label(unit):
     """A unit's name for plot labels: um as a micro sign."""
     return r"$\mu$m" if unit == "um" else unit
@@ -786,10 +809,48 @@ def surface_density(angle_grid, energy_grid, neutrons):
     return (angle_grid[:-1] + angle_grid[1:]) / 2, energies, density
 
 
+def _direction(azimuth, elevation):
+    """Unit vector toward azimuth and elevation [deg]."""
+    a, e = np.radians(azimuth), np.radians(elevation)
+    return np.array([np.cos(e) * np.cos(a), np.cos(e) * np.sin(a), np.sin(e)])
+
+
+def _surface_shadow(x, y, z, light, step=0.01):
+    """Return how much of the light reaches each point of the height field z on the evenly
+    spaced grid (x, y), from 0 (in shadow) to 1: marching from each point toward the light,
+    SURFACE_SHADOW_SHARPNESS x (height of the ray - height of the surface) / distance, at its
+    lowest, clipped to [0, 1], so that shadows have soft edges."""
+    if len(x) < 2 or len(y) < 2:
+        return np.ones_like(z)
+    X, Y = np.meshgrid(x, y, indexing="ij")
+    horizontal = np.hypot(light[0], light[1])
+    dx, dy, rise = light[0] / horizontal, light[1] / horizontal, light[2] / horizontal
+    fx, fy = (len(x) - 1) / x[-1], (len(y) - 1) / y[-1]
+    seen = np.ones_like(z)
+    for s in np.arange(step, np.hypot(x[-1], y[-1]), step):
+        px, py = X + s * dx, Y + s * dy
+        inside = (px >= 0) & (px <= x[-1]) & (py >= 0) & (py <= y[-1])
+        if not np.any(inside):
+            break
+        i, j = np.clip(px * fx, 0, len(x) - 1), np.clip(py * fy, 0, len(y) - 1)
+        i0, j0 = np.minimum(i.astype(int), len(x) - 2), np.minimum(j.astype(int), len(y) - 2)
+        a, b = i - i0, j - j0
+        surface = ((1 - a) * (1 - b) * z[i0, j0] + a * (1 - b) * z[i0 + 1, j0]
+                   + (1 - a) * b * z[i0, j0 + 1] + a * b * z[i0 + 1, j0 + 1])  # fmt: skip
+        ray = z + s * rise
+        seen = np.where(
+            inside, np.minimum(seen, SURFACE_SHADOW_SHARPNESS * (ray - surface) / s), seen
+        )
+    return np.clip(seen, 0, 1)
+
+
 def _surface_shade(angles, energies, density):
-    """Return the brightness (SURFACE_AMBIENT to 1) of the surface at each grid point, lit from
-    SURFACE_LIGHT (azimuth, elevation [deg]) like a hill shade: Lambert's cosine law on the
-    surface normal, worked out in the plot box (each axis scaled to its length on screen)."""
+    """Return (brightness, highlight) of the surface at each grid point, lit from
+    SURFACE_LIGHT: the brightness (SURFACE_AMBIENT to 1) by Lambert's cosine law on the
+    surface normal, and the white highlight added by Blinn-Phong's specular term toward the
+    view (SURFACE_VIEW, SURFACE_SPECULAR), both dimmed where the surface is in its own shadow
+    (see _surface_shadow). Worked out in the plot box (each axis scaled to its length on
+    screen, the energy axis drawn decreasing)."""
     box_x, box_y, box_z = 4.0, 4.0, 3.0  # Matplotlib's 3-D box shape
     x = (angles - angles[0]) / max(angles[-1] - angles[0], 1e-300) * box_x
     y = (energies - energies[0]) / max(energies[-1] - energies[0], 1e-300) * box_y
@@ -798,15 +859,16 @@ def _surface_shade(angles, energies, density):
     dz_dy = np.gradient(z, y, axis=1) if len(y) > 1 else np.zeros_like(z)
     normal = np.stack([-dz_dx, -dz_dy, np.ones_like(z)], axis=-1)
     normal /= np.linalg.norm(normal, axis=-1, keepdims=True)
-    azimuth, elevation = np.radians(SURFACE_LIGHT)
-    light = np.array(
-        [
-            np.cos(elevation) * np.cos(azimuth),
-            np.cos(elevation) * np.sin(azimuth),
-            np.sin(elevation),
-        ]
-    )
-    return SURFACE_AMBIENT + (1 - SURFACE_AMBIENT) * np.clip(normal @ light, 0, 1)
+    light = _direction(*SURFACE_LIGHT)
+    facing = np.clip(normal @ light, 0, 1)
+    seen = _surface_shadow(x, y, z, light)
+    brightness = SURFACE_AMBIENT + (1 - SURFACE_AMBIENT) * facing * seen
+    elevation, azimuth = SURFACE_VIEW
+    view = _direction(azimuth, elevation) * np.array([1.0, -1.0, 1.0])  # Energy axis reversed
+    half = (light + view) / np.linalg.norm(light + view)
+    strength, shininess = SURFACE_SPECULAR
+    highlight = strength * np.clip(normal @ half, 0, 1) ** shininess * seen * (facing > 0)
+    return brightness, highlight
 
 
 def _bilinear(angles, energies, values, x, y):
@@ -834,9 +896,9 @@ def draw_energy_surface(fig, angles, energies, density, title, energy_unit="MeV"
     The color follows the height alone: each facet is cut where it crosses one of
     SURFACE_COLOR_LEVELS heights, and each piece colored by its height, so no flat-colored
     facet spans a range of heights (which shows as stripes). For depth, each piece is
-    darkened by a hill shade (see _surface_shade) interpolated smoothly to the middle of the
-    piece, so the brightness has no jumps either. Facets with all corners at zero are left
-    out (transparent), so the grid shows beneath.
+    lit (see _surface_shade: a low light from the side, with highlights and cast shadows)
+    interpolated smoothly to the middle of the piece, so the brightness has no jumps either.
+    Facets with all corners at zero are left out (transparent), so the grid shows beneath.
     """
     from matplotlib import colormaps
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -848,10 +910,12 @@ def draw_energy_surface(fig, angles, energies, density, title, energy_unit="MeV"
     pieces, band = _height_bands(angle, energy, density, levels)
     colors = colormaps["Spectral_r"]((band + 0.5) / SURFACE_COLOR_LEVELS)
     middles = pieces.mean(axis=1)
-    shade = _bilinear(
-        angles, energies, _surface_shade(angles, energies, density), middles[:, 0], middles[:, 1]
+    brightness, highlight = _surface_shade(angles, energies, density)
+    brightness, highlight = (
+        _bilinear(angles, energies, values, middles[:, 0], middles[:, 1])
+        for values in (brightness, highlight)
     )
-    colors[:, :3] *= shade[:, None]
+    colors[:, :3] = np.clip(colors[:, :3] * brightness[:, None] + highlight[:, None], 0, 1)
     ax.add_collection3d(
         Poly3DCollection(
             pieces, facecolors=colors, linewidths=0, edgecolors="none", antialiased=False
@@ -860,19 +924,21 @@ def draw_energy_surface(fig, angles, energies, density, title, energy_unit="MeV"
     ax.set_xlim(0, 180)
     ax.set_xticks(np.arange(0, 181, 30))
     ax.set_xlabel("Emission angle [degrees]")
-    ax.set_ylim(energies[-1], energies[0])
+    if energies[-1] > energies[0]:  # (one energy cell: left to matplotlib)
+        ax.set_ylim(energies[-1], energies[0])
     ax.set_ylabel(f"Neutron energy [{energy_unit}]")
     ax.set_zlim(0, top)
     ax.set_zlabel(rf"Neutrons [n/({energy_unit}$\cdot$s$\cdot$sr)]", labelpad=12)
-    ax.view_init(elev=30, azim=-60)
+    ax.view_init(elev=SURFACE_VIEW[0], azim=SURFACE_VIEW[1])
     ax.set_title(title)
     return ax
 
 
-def _save_figure(fig, fname, close=True):
-    """Lay out fig, save it to fname and (unless close is False) close it."""
+def _save_figure(fig, fname, close=True, dpi=None):
+    """Lay out fig, save it to fname (at dpi dots per inch, if given) and (unless close is
+    False) close it."""
     fig.tight_layout()
-    fig.savefig(fname)
+    fig.savefig(fname, **({} if dpi is None else {"dpi": dpi}))
     if close:
         _pyplot().close(fig)
 
@@ -2084,10 +2150,10 @@ class BeamTarget:
         band for each beam energy calculated. The other channels, whose spectra change
         smoothly with the beam energy, are calculated (see lab_spectrum) at beam energies from
         the highest to the lowest in the target and interpolated linearly to the beam energy
-        in each internal bin: continua ENDF_ENERGY_STEP apart, and lab-frame tables (LAW=7),
-        whose spectra have sharper features that move with the beam energy,
-        ENDF_TABLE_ENERGY_STEP apart. The neutron energy mesh runs from 0
-        to the highest lab energy, in steps of energy_bin_width.
+        in each internal bin, continua and lab-frame tables (LAW=7) each on their own grid,
+        refined until the interpolation has converged (see ENDF_ENERGY_STEP and
+        _interpolated_spectra). The neutron energy mesh runs from 0 to the highest lab energy,
+        in steps of energy_bin_width.
 
         Returns {"energy_grid": the energy mesh [eV], "per_particle": neutrons per beam
         particle on the output (position, angle, energy) mesh, "sigma_mids": the neutron
@@ -2120,42 +2186,16 @@ class BeamTarget:
         rows = self._output_position_index()[idx]
 
         # Smooth channels, interpolated between beam energies: continua (LAW=1) and lab-frame
-        # tables (LAW=7), each on its own grid of beam energies (see ENDF_ENERGY_STEP)
+        # tables (LAW=7), each on its own grid of beam energies
         laws = {c.law for c in production.channels if c.law != 2}
-        groups = [
-            ({law for law in laws if law != 7}, ENDF_ENERGY_STEP),
-            ({7} & laws, ENDF_TABLE_ENERGY_STEP),
-        ]
-        for group, (rel, step_min) in groups:
+        for group in ({law for law in laws if law != 7}, {7} & laws):
             if not group:
                 continue
-            # Beam energies to calculate at, from the top down
-            top, bottom = E[active].max(), E[active].min()
-            energies = [top]
-            while energies[-1] > bottom:
-                energies.append(max(bottom, energies[-1] - max(rel * energies[-1], step_min)))
-            energies = np.array(energies)
-            # Interpolation: each active bin between energies[k] (above) and energies[k + 1]
-            if len(energies) == 1:
-                k, t = np.zeros(len(idx), dtype=int), np.zeros(len(idx))
-            else:
-                k = np.clip(
-                    np.searchsorted(-energies, -E[idx], side="right") - 1, 0, len(energies) - 2
-                )
-                t = (energies[k] - E[idx]) / (energies[k] - energies[k + 1])
-            k1 = np.minimum(k + 1, len(energies) - 1)
-            totals = np.zeros(len(energies))
-            needed = [
-                j
-                for j in np.unique(np.concatenate((k, k1)))
-                if np.any((k == j) & (t < 1)) or np.any((k1 == j) & (k1 != k) & (t > 0))
-            ]
-
             binned = {}  # Lab-frame tables binned on this mesh, shared by the beam energies
 
-            def spectrum_at(j, group=group, binned=binned):
+            def spectrum_at(energy, group=group, binned=binned):
                 return production.lab_spectrum(
-                    energies[j],
+                    energy,
                     self.angle_grid_out,
                     grid,
                     num_cm_angles=num_cm_angles,
@@ -2164,16 +2204,11 @@ class BeamTarget:
                     cache=binned,
                 )
 
-            # In order, so the sums do not depend on how the work is shared out
-            for j, (spectrum, totals[j]) in zip(needed, in_parallel(spectrum_at, needed)):
-                weight = np.where(k == j, 1 - t, 0.0) + np.where((k1 == j) & (k1 != k), t, 0.0)
-                use = weight > 0
-                by_row = np.bincount(
-                    rows[use], coef[use] * weight[use], minlength=self.position_bins_total
-                )
-                touched = np.flatnonzero(by_row)
-                per_particle[touched] += by_row[touched, None, None] * spectrum[None]
-            sigma_mids[idx] += (1 - t) * totals[k] + t * totals[k1]
+            spectra, sigma = self._interpolated_spectra(
+                rxn, group, E[idx], coef, rows, spectrum_at, per_particle.shape
+            )
+            per_particle += spectra
+            sigma_mids[idx] += sigma
         if production.has_two_body:  # Discrete levels: at each bin's own beam energy
             two_body, sigma_two_body = production.two_body_spectrum(
                 E[idx],
@@ -2186,6 +2221,105 @@ class BeamTarget:
             per_particle += two_body
             sigma_mids[idx] += sigma_two_body
         return {"energy_grid": grid * MEV, "per_particle": per_particle, "sigma_mids": sigma_mids}
+
+    def _interpolated_spectra(self, rxn, group, E, coef, rows, spectrum_at, shape):
+        """Return (per_particle, sigma) for the channels of an evaluated reaction with laws
+        in group, calculated at a grid of beam energies and interpolated linearly to the beam
+        energy of each active internal bin (E [MeV], with coef the n_target dx (beam
+        fraction) and rows the output position bin of each): the neutrons per beam particle on
+        the output mesh (an array of shape shape) and the production cross section [b] of
+        each bin. spectrum_at(energy) returns (spectrum, cross section) at a beam energy.
+
+        The grid starts ENDF_ENERGY_STEP apart and is halved (adding the midpoints) until the
+        neutrons, summed over position, change by at most ENDF_INTERPOLATION_TOLERANCE (see
+        ENDF_ENERGY_STEP) from the coarser grid to the finer one, whose result is kept. Each
+        pass calculates the spectra of the finer grid once and builds both results from them,
+        so no spectra are kept between passes. If ENDF_MAX_HALVINGS are not enough, a warning
+        is added to self.warnings.
+        """
+        top, bottom = E.max(), E.min()
+        rel, step_min = ENDF_ENERGY_STEP
+        coarse = [top]
+        while coarse[-1] > bottom:
+            coarse.append(max(bottom, coarse[-1] - max(rel * coarse[-1], step_min)))
+        coarse = np.array(coarse)
+        if len(coarse) == 1:  # One beam energy: nothing to interpolate
+            per_particle, sigma, _, _ = self._spectra_on_grid(
+                coarse, None, E, coef, rows, spectrum_at, shape
+            )
+            return per_particle, sigma
+        for halving in range(1, ENDF_MAX_HALVINGS + 1):
+            fine = np.empty(2 * len(coarse) - 1)
+            fine[0::2], fine[1::2] = coarse, (coarse[:-1] + coarse[1:]) / 2
+            per_particle, sigma, cells_fine, cells_coarse = self._spectra_on_grid(
+                fine, coarse, E, coef, rows, spectrum_at, shape
+            )
+            change = _interpolation_change(cells_fine, cells_coarse)
+            if change <= ENDF_INTERPOLATION_TOLERANCE:
+                break
+            coarse = fine
+        else:
+            self.warnings.append(
+                f"{self.reactions[rxn].label}: the interpolation of its spectra between beam "
+                f"energies had not converged after {ENDF_MAX_HALVINGS} halvings of the beam "
+                f"energy step (halving it again changed the neutrons by {change:.1%} rms in "
+                "the (angle, energy) cells): expect a jitter of about that size between "
+                "neighboring cells"
+            )
+        logger.debug(
+            f"{self.name}: {self.reactions[rxn].label} laws {sorted(group)}: {len(fine)} beam "
+            f"energies ({halving} halving(s)), last change {change:.2%} rms"
+        )
+        return per_particle, sigma
+
+    def _spectra_on_grid(self, fine, coarse, E, coef, rows, spectrum_at, shape):
+        """Interpolate spectra between the beam energies fine (descending) to the active bins
+        (see _interpolated_spectra), and also, if coarse (every other energy of fine) is
+        given, between those alone. Returns (per_particle on fine, sigma on fine, neutrons
+        per (angle, energy) cell on fine, the same on coarse or None)."""
+
+        def interpolation(grid):
+            # Each bin between grid[k] (above) and grid[k + 1], a fraction t of the way down
+            if len(grid) == 1:
+                return np.zeros(len(E), dtype=int), np.zeros(len(E))
+            k = np.clip(np.searchsorted(-grid, -E, side="right") - 1, 0, len(grid) - 2)
+            return k, (grid[k] - E) / (grid[k] - grid[k + 1])
+
+        def weights(k, t, j, last):
+            k1 = np.minimum(k + 1, last)
+            return np.where(k == j, 1 - t, 0.0) + np.where((k1 == j) & (k1 != k), t, 0.0)
+
+        k, t = interpolation(fine)
+        kc, tc = interpolation(coarse) if coarse is not None else (None, None)
+        used = [j for j in range(len(fine)) if np.any(weights(k, t, j, len(fine) - 1) > 0)]
+        if coarse is not None:
+            used = sorted(
+                set(used)
+                | {
+                    2 * j
+                    for j in range(len(coarse))
+                    if np.any(weights(kc, tc, j, len(coarse) - 1) > 0)
+                }
+            )
+        per_particle = np.zeros(shape)
+        cells_fine = np.zeros(shape[1:])
+        cells_coarse = np.zeros(shape[1:]) if coarse is not None else None
+        totals = np.zeros(len(fine))
+        # In order, so the sums do not depend on how the work is shared out
+        results = in_parallel(spectrum_at, [fine[j] for j in used])
+        for j, (spectrum, totals[j]) in zip(used, results):
+            w = coef * weights(k, t, j, len(fine) - 1)
+            use = w > 0
+            if np.any(use):
+                by_row = np.bincount(rows[use], w[use], minlength=shape[0])
+                touched = np.flatnonzero(by_row)
+                per_particle[touched] += by_row[touched, None, None] * spectrum[None]
+                cells_fine += np.sum(w) * spectrum
+            if coarse is not None and j % 2 == 0:
+                cells_coarse += np.sum(coef * weights(kc, tc, j // 2, len(coarse) - 1)) * spectrum
+        k1 = np.minimum(k + 1, len(fine) - 1)
+        sigma = (1 - t) * totals[k] + t * totals[k1]
+        return per_particle, sigma, cells_fine, cells_coarse
 
     def bin_neutrons(self):
         """Scale each reaction's neutrons per beam particle (see calculate_reactions) by the
@@ -3200,4 +3334,8 @@ class BeamTarget:
                 f"{label} neutron energy against emission angle ({self.name})",
                 unit,
             )
-            _save_figure(fig, os.path.join(directory, f"neutron_energy_angle_surface_{rxn}.png"))
+            _save_figure(
+                fig,
+                os.path.join(directory, f"neutron_energy_angle_surface_{rxn}.png"),
+                dpi=SURFACE_DPI,
+            )
