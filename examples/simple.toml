@@ -17,12 +17,12 @@ molecules = { D2 = 0.1, T2 = 0.9 }  # mole fractions of the molecules
 
 [regions.chamber]
 material          = "DT90"
-length            = 137.0   # cm
-pressure          = "38 torr"
+length            = 100.0   # cm
+pressure          = "57 torr"
 temperature       = "1800 degC"
-wall_radius       = 4.1783  # cm
+wall_radius       = 4.0     # cm
 divergence        = "36 mrad"
-position_bins     = 137     # position bins
+position_bins     = 100     # position bins
 # position_substeps = 10     # steps the beam is followed in across each bin (default 10)
 
 [cases.DT90]
@@ -30,7 +30,7 @@ position_bins     = 137     # position bins
 # "alpha" or "4He"
 beam                = "deuteron"
 regions             = ["chamber"]
-beam_energy_entry   = "280 keV"
+beam_energy_entry   = "300 keV"
 beam_current        = "50 mA"
 beam_radius_entry   = 0.2     # cm, beam radius at entry
 angle_bin_width     = 3.0     # deg, output

@@ -2,7 +2,7 @@
 mouse.
 
     python -m beamtarget.view output/p18_Be/source.h5              # every reaction
-    python -m beamtarget.view output/Apollo/source.h5 DT           # one reaction
+    python -m beamtarget.view output/DT50/source.h5 DT             # one reaction
     python -m beamtarget.view output/p18_Be/source.h5 --energy 0 3 # only 0-3 MeV (if in MeV)
 
 A web page (surface.html next to source.h5, or the file given with --html) is written and

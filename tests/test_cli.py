@@ -6,7 +6,7 @@ import tomllib
 
 import h5py
 import pytest
-from conftest import EXAMPLE_INPUT, channel_warnings
+from conftest import EXAMPLE_INPUT
 
 from beamtarget import BeamTarget, InputError, load_input, main
 from beamtarget.units import KEV, MILLIAMPERE, MILLIRADIAN, TORR
@@ -134,8 +134,8 @@ def test_example_input():
     assert dd["source"]["angle_bin_width"] == 3.0
     (chamber,) = dd["source"]["regions"]
     assert chamber.name == "chamber" and chamber.material.name == "D2"
-    assert chamber.position_bins == 137 and chamber.position_substeps == 10
-    assert chamber.pressure == pytest.approx(38 * TORR, rel=1e-15)
+    assert chamber.position_bins == 100 and chamber.position_substeps == 10
+    assert chamber.pressure == pytest.approx(57 * TORR, rel=1e-15)
 
 
 @pytest.fixture(scope="module")
@@ -532,27 +532,6 @@ def test_main_errors(tmp_path, capsys, args, message):
     assert message in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("name, expected", [("Artemis", 1.7756e13), ("Apollo", 3.1611e13)])
-def test_shine_systems_example(name, expected):
-    """examples/shine_systems.toml: SHINE's systems at their operating points give the
-    yields quoted in the file (about 1.8e13 and 3.2e13 n/s; 1.7756e13 and 3.1611e13 at the
-    file's full mesh), with the chamber pressure solved for 10 keV at the beam stop."""
-    cases = load_input(EXAMPLE_INPUT.with_name("shine_systems.toml"))
-    assert list(cases) == ["Artemis", "Apollo"]
-    s = cases[name]["source"]
-    assert (s["beam_current"], s["beam_energy_entry"], s["beam_energy_backstop"]) == (
-        pytest.approx(45 * MILLIAMPERE, rel=1e-15),
-        280 * KEV,
-        10 * KEV,
-    )
-    for region in s["regions"]:
-        region.position_substeps = 1  # A coarse mesh, for speed
-    source = BeamTarget(name=name, **s)
-    assert source.calculated == "pressure"
-    assert source.yield_total == pytest.approx(expected, rel=0.01)
-    assert channel_warnings(source) == []
-
-
 def test_simple_example():
     """examples/simple.toml, the smallest input file, holds one case that runs."""
     cases = load_input(EXAMPLE_INPUT.with_name("simple.toml"))
@@ -560,7 +539,7 @@ def test_simple_example():
     s = cases["DT90"]["source"]
     (chamber,) = s["regions"]
     assert chamber.material.atom_fractions["T"] == pytest.approx(0.9)
-    assert chamber.pressure == pytest.approx(38 * TORR, rel=1e-15)
+    assert chamber.pressure == pytest.approx(57 * TORR, rel=1e-15)
     assert s["beam_current"] == pytest.approx(50 * MILLIAMPERE, rel=1e-15)
     assert s["beam"] == "deuteron"
     chamber.position_substeps = 1  # A coarse mesh, for speed

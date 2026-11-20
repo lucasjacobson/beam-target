@@ -15,7 +15,7 @@ authors:
     affiliation: "SHINE Technologies, LLC"
 version: 0.1.0
 license: MIT
-repository-code: "https://github.com/PhoenixNuclearLabs/beam-target"
+repository-code: "https://github.com/lucasjacobson/beam-target"
 keywords:
   - neutron source
   - neutron generator

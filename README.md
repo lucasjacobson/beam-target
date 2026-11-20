@@ -6,8 +6,8 @@ An accelerator-driven neutron generator makes neutrons as a light-ion beam slows
 or solid target, so each neutron's starting position, direction, and energy are all
 correlated. This package calculates that source term deterministically, in seconds to minutes,
 with no statistical noise, and writes it as an MCNP SDEF card, OpenMC sources, and an HDF5
-file. It is developed at SHINE Technologies for its gas-target deuterium-tritium generators,
-and handles any light-ion beam on any target that nuclear data cover.
+file. It handles any light-ion beam on any target that nuclear data cover. Its development
+is funded by SHINE Technologies.
 
 ## What it calculates
 
@@ -107,8 +107,6 @@ radii, and so on); the beam power is in kW. The MCNP SDEF card is always in cm a
   solid targets, other beams, calculated settings, placement in the MCNP geometry, etc.),
   sharing settings through a `[defaults]` table and named `[materials.<name>]` and
   `[regions.<name>]` tables.
-- [`examples/shine_systems.toml`](examples/shine_systems.toml): SHINE's Artemis and Apollo
-  generators at their operating points.
 
 ## Outputs
 
@@ -200,5 +198,5 @@ nuclear data you use (see the [data README](src/beamtarget/data/README.md)).
 ## License
 
 The code and documentation are released under the MIT License (see [`LICENSE`](LICENSE)),
-copyright SHINE Technologies, LLC. The data files are redistributed under their own sources'
-terms; see the [data README](src/beamtarget/data/README.md#licensing).
+copyright SHINE Technologies and beam-target contributors. The data files are redistributed
+under their own sources' terms; see the [data README](src/beamtarget/data/README.md#licensing).
