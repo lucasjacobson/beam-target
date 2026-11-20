@@ -38,10 +38,10 @@ UNITS = {
     "C": ("temperature", 1.0, ZERO_CELSIUS),
     "degF": ("temperature", 5 / 9, ZERO_CELSIUS - 32 * 5 / 9),
     "F": ("temperature", 5 / 9, ZERO_CELSIUS - 32 * 5 / 9),
-    "rad": ("divergence", 1.0, 0.0),
-    "mrad": ("divergence", MILLIRADIAN, 0.0),
-    "urad": ("divergence", 1e-6, 0.0),
-    "deg": ("divergence", 0.017453292519943295, 0.0),  # pi / 180
+    "rad": ("angle", 1.0, 0.0),
+    "mrad": ("angle", MILLIRADIAN, 0.0),
+    "urad": ("angle", 1e-6, 0.0),
+    "deg": ("angle", 0.017453292519943295, 0.0),  # pi / 180
     "W": ("power", 1.0, 0.0),
     "kW": ("power", KILOWATT, 0.0),
     "m": ("length", 100.0, 0.0),
@@ -115,7 +115,7 @@ def example(quantity):
         "current": "10 mA",
         "pressure": "5 torr",
         "temperature": "25 degC",
-        "divergence": "30 mrad",
+        "angle": "30 mrad",
         "length": "50 cm",
         "density": "1.848 g/cm3",
     }[quantity]

@@ -338,18 +338,18 @@ def test_data_recorded_in_outputs(tmp_path):
 INPUT = """
 [materials.Be]
 phase = "solid"
-density = 1.848
+density = "1.848 g/cm3"
 atoms = { Be = 1 }
 
 [cases.p18]
 beam = "proton"
 beam_energy_entry = "18 MeV"
 beam_current = "1 mA"
-beam_radius_entry = 0.1
-angle_bin_width = 10.0
+beam_radius_entry = "0.1 cm"
+angle_bin_width = "10 deg"
 energy_bin_width = "0.1 MeV"
 nuclear_data = ["drosg", "LIBRARY"]
-regions = [{ material = "Be", length = 0.5, wall_radius = 10.0, position_bins = 10, position_substeps = 10 }]
+regions = [{ material = "Be", length = "0.5 cm", wall_radius = "10 cm", position_bins = 10, position_substeps = 10 }]
 """
 
 

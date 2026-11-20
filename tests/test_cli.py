@@ -24,35 +24,35 @@ molecules = { D2 = 0.5, T2 = 0.5 }
 
 [materials."TiD1.5"]
 phase = "solid"
-density = 3.9
+density = "3.9 g/cm3"
 atoms = { Ti = 1, D = 1.5 }
 
 [regions.gas]
 material = "DT50"
-length = 50.0
+length = "50 cm"
 pressure = "5 torr"
 temperature = "25 degC"
-wall_radius = 1.0
+wall_radius = "1 cm"
 divergence = "30 mrad"
 position_bins = 10
 position_substeps = 2
 
 [regions.stage]
 material = "DT50"
-length = 10.0
+length = "10 cm"
 pressure = "1e-3 torr"
 temperature = "25 degC"
-wall_radius = 0.5
+wall_radius = "0.5 cm"
 position_bins = 1
 position_substeps = 4
 
 [defaults]
 regions = ["gas"]
-angle_bin_width = 10.0
+angle_bin_width = "10 deg"
 energy_bin_width = "0.01 MeV"
 beam_energy_entry = "280 keV"
 beam_current = "10 mA"
-beam_radius_entry = 0.2
+beam_radius_entry = "0.2 cm"
 """
 
 
@@ -199,7 +199,7 @@ def test_regions_by_name_inline_and_use(tmp_path):
 regions = ["stage", "gas"]
 
 [cases.inline]
-regions = [{ material = "D2", length = 5, density = 1e-6, wall_radius = 2, position_bins = 2, position_substeps = 2 }]
+regions = [{ material = "D2", length = "5 cm", density = "1e-6 g/cm3", wall_radius = "2 cm", position_bins = 2 }]
 
 [cases.use]
 regions = [{ use = "gas", material = "D2", length = false }]
@@ -238,7 +238,7 @@ beam_energy_backstop = "200 keV"
         ('regions = [{ use = "gas", material = "nope" }]', r"no \[materials.nope\] table"),
         ('regions = [{ use = "gas", length = "long" }]', "length = 'long': expected a number"),
         ('regions = [{ use = "gas", density = false }]', "density must be a number and a unit"),
-        ('regions = [{ material = "DT50", length = 1.0 }]', "missing position_bins"),
+        ('regions = [{ material = "DT50", length = "1 cm" }]', "missing position_bins"),
     ],
     ids=[
         "unknown name",
@@ -272,11 +272,17 @@ def test_named_region_checked_even_if_unused(tmp_path):
     [
         ('phase = "gas"\natoms = { D = 1 }', "give a gas's composition as molecules"),
         ('phase = "gas"\nmolecules = { D = 1 }', "D on its own is a lone atom"),
-        ('phase = "solid"\ndensity = 4.0\nmolecules = { TiD2 = 1 }', "give a solid's composition"),
+        (
+            'phase = "solid"\ndensity = "4 g/cm3"\nmolecules = { TiD2 = 1 }',
+            "give a solid's composition",
+        ),
         ("atoms = { D = 1 }", "missing phase"),
         ('phase = "solid"\natoms = { Ti = 1 }', "a solid needs a positive density"),
         ('phase = "gas"\nmolecules = { D2 = "a" }', "molecules D2 must be float"),
-        ('phase = "solid"\ndensity = 1.0\natoms = { d = 1 }', "cannot read the chemical formula"),
+        (
+            'phase = "solid"\ndensity = "1 g/cm3"\natoms = { d = 1 }',
+            "cannot read the chemical formula",
+        ),
         ('phase = "plasma"\natoms = { D = 1 }', "phase must be one of"),
     ],
 )
@@ -292,7 +298,7 @@ def test_solid_region(tmp_path):
         BASE
         + """
 [cases.a]
-regions = [{ material = "TiD1.5", length = 5e-4, wall_radius = 1.0, position_bins = 10, position_substeps = 4 }]
+regions = [{ material = "TiD1.5", length = "5e-4 cm", wall_radius = "1 cm", position_bins = 10, position_substeps = 4 }]
 """,
     )
     (film,) = regions_of(path)
@@ -331,9 +337,9 @@ def test_current_or_yield(tmp_path):
 def test_beam_setting(tmp_path):
     """beam picks the beam particle, a deuteron by default; a proton beam on lithium."""
     lithium = (
-        '\n[materials.Li]\nphase = "solid"\ndensity = 0.534\natoms = { 7Li = 1 }\n'
+        '\n[materials.Li]\nphase = "solid"\ndensity = "0.534 g/cm3"\natoms = { 7Li = 1 }\n'
         '\n[cases.d]\n\n[cases.p]\nbeam = "proton"\nbeam_energy_entry = "2.5 MeV"\n'
-        'regions = [{ material = "Li", length = 1e-3, wall_radius = 1.0, position_bins = 2, '
+        'regions = [{ material = "Li", length = "1e-3 cm", wall_radius = "1 cm", position_bins = 2, '
         "position_substeps = 2 }]\n"
     )
     cases = load_input(write_input(tmp_path, BASE + lithium))
@@ -367,13 +373,22 @@ def test_beam_setting(tmp_path):
         ('[cases.a]\nregions = [{ use = "gas", pressure = 5 }]\n', "pressure needs a unit"),
         ('[cases.a]\nregions = [{ use = "gas", temperature = 25 }]\n', "temperature needs a unit"),
         ('[cases.a]\nregions = [{ use = "gas", divergence = 30 }]\n', "divergence needs a unit"),
+        ('[cases.a]\nregions = [{ use = "gas", length = 50 }]\n', "length needs a unit"),
+        ('[cases.a]\nregions = [{ use = "gas", wall_radius = 1 }]\n', "wall_radius needs a unit"),
+        ("[cases.a]\nbeam_radius_entry = 0.2\n", "beam_radius_entry needs a unit"),
+        ("[cases.a]\nangle_bin_width = 3\n", 'angle_bin_width needs a unit, such as "3 deg"'),
+        (
+            '[cases.a]\nregions = [{ use = "gas", temperature = false, density = 1e-6 }]\n',
+            "density needs a unit",
+        ),
         ('[cases.a]\nregions = [{ use = "gas", length = "5 furlongs" }]\n', "unknown length unit"),
         ("[cases.a]\nbeam_radius_entry = [0.2]\n", "beam_radius_entry must be a number and a unit"),
         ('[cases.a]\nbeam_direction = "z"\n', "beam_direction must be one of"),
         ('[cases.a]\nstopping_power = "pstar"\n', "stopping_power must be one of"),
         ('[cases.a]\nbeam = "p"\n', 'beam must be one of "1H", "proton"'),
-        ("[cases.a]\nentry_position = [1.0, 2.0]\n", "entry_position must be"),
-        ('[cases.a]\nentry_position = [1, 2, "z"]\n', "entry_position must be"),
+        ('[cases.a]\nentry_position = ["1 cm", "2 cm"]\n', "entry_position must be a list"),
+        ('[cases.a]\nentry_position = ["1 cm", "2 cm", "z"]\n', r"entry_position\[2\] = 'z'"),
+        ("[cases.a]\nentry_position = [1, 2, 3]\n", r"entry_position\[0\] needs a unit"),
         ('[cases."a/b"]\n', "case names may only use"),
         ("", r"no \[cases.<name>\] tables"),
         ("[case.a]\n", "unknown table"),
@@ -396,6 +411,11 @@ def test_beam_setting(tmp_path):
         "plain pressure",
         "plain temperature",
         "plain divergence",
+        "plain length",
+        "plain wall radius",
+        "plain beam radius",
+        "plain angle bin width",
+        "plain density",
         "unknown length unit",
         "length type",
         "direction",
@@ -403,6 +423,7 @@ def test_beam_setting(tmp_path):
         "beam",
         "entry position length",
         "entry position type",
+        "plain entry position",
         "case name",
         "no cases",
         "unknown table",
@@ -455,7 +476,8 @@ def test_main_runs_cases(tmp_path):
 
 def test_entry_position_reaches_sdef(tmp_path):
     text = TWO_CASES.replace(
-        "[cases.mix]\n", '[cases.mix]\nentry_position = [5, 0, 10.5]\nbeam_direction = "+z"\n'
+        "[cases.mix]\n",
+        '[cases.mix]\nentry_position = ["5 cm", "0 cm", "105 mm"]\nbeam_direction = "+z"\n',
     )
     path = write_input(tmp_path, text)
     assert load_input(path)["mix"]["entry_position"] == [5.0, 0.0, 10.5]
@@ -554,10 +576,12 @@ def test_simple_example():
 def test_backstop_position(tmp_path):
     """backstop_position places the source by its backstop end, even when its length is
     calculated; entry_position set in a case replaces it from [defaults]."""
-    text = BASE.replace("[defaults]\n", "[defaults]\nbackstop_position = [0.0, 0.0, 0.0]\n") + (
+    text = BASE.replace(
+        "[defaults]\n", '[defaults]\nbackstop_position = ["0 cm", "0 cm", "0 cm"]\n'
+    ) + (
         '\n[cases.fixed]\n\n[cases.find_length]\nregions = [{ use = "gas", length = false }]\n'
         'beam_energy_backstop = "200 keV"\n\n'
-        "[cases.by_entry]\nentry_position = [0, 0, 7]\n"
+        '[cases.by_entry]\nentry_position = ["0 cm", "0 cm", "7 cm"]\n'
     )
     path = write_input(tmp_path, text)
     cases = load_input(path)
@@ -587,10 +611,13 @@ def test_backstop_position(tmp_path):
     "case, message",
     [
         (
-            "entry_position = [0, 0, 1]\nbackstop_position = [0, 0, 0]\n",
+            'entry_position = ["0 cm", "0 cm", "1 cm"]\nbackstop_position = ["0 cm", "0 cm", "0 cm"]\n',
             "give entry_position or backstop_position, not both",
         ),
-        ("backstop_position = [0, 0]\n", "backstop_position must be a list of three numbers"),
+        (
+            'backstop_position = ["0 cm", "0 cm"]\n',
+            "backstop_position must be a list of three lengths",
+        ),
     ],
 )
 def test_placement_rejected(tmp_path, case, message):
@@ -621,3 +648,16 @@ def test_region_without_wall(tmp_path):
     text = BASE + '\n[cases.a]\nregions = [{ use = "gas", wall_radius = false }]\n'
     (region,) = load_input(write_input(tmp_path, text))["a"]["source"]["regions"]
     assert region.wall_radius is None
+
+
+@pytest.mark.parametrize("width", ["3 deg", "0.05235987755982988 rad", "52.35987755982988 mrad"])
+def test_angle_bin_width_in_any_angle_unit(tmp_path, width):
+    """angle_bin_width takes any angle unit; the code works in degrees, exactly 3 here."""
+    text = BASE + f'\n[cases.a]\nangle_bin_width = "{width}"\n'
+    assert load_input(write_input(tmp_path, text))["a"]["source"]["angle_bin_width"] == 3.0
+
+
+def test_plain_material_density_rejected(tmp_path):
+    text = BASE + '\n[materials.Be]\nphase = "solid"\ndensity = 1.848\natoms = { Be = 1 }\n'
+    with pytest.raises(InputError, match=r"\[materials.Be\]: density needs a unit"):
+        load_input(write_input(tmp_path, text + "\n[cases.a]\n"))

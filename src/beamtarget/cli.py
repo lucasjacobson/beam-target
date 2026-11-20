@@ -16,6 +16,8 @@ import re
 import time
 import tomllib
 
+import numpy as np
+
 from .config import DROSG, ConfigError, load_config, resolve_nuclear_data
 from .nuclear import BEAM_NAMES, BEAMS, beam_key
 from .parallel import set_parallel
@@ -28,7 +30,8 @@ from .source import (
     Material,
     Region,
 )
-from .units import DEFAULT_UNITS, example, from_internal, parse, to_internal, units_of
+from .units import DEFAULT_UNITS, from_internal, parse, to_internal, units_of
+from .units import example as example_of
 from .webview import write_surface_page
 
 logger = logging.getLogger(__name__)
@@ -37,11 +40,13 @@ logger = logging.getLogger(__name__)
 class Measure:
     """The type of a setting with a unit: a string such as "280 keV" (any unit of quantity in
     units.UNITS), or, if plain is a unit, also a plain number in that unit. The first unit a
-    case uses for each kind of result (output, a quantity of units.DEFAULT_UNITS) is the unit
-    its results are reported in."""
+    case uses for each kind of result (output, a quantity of units.DEFAULT_UNITS; None for a
+    setting whose results have fixed units) is the unit its results are reported in. example
+    is a value for messages (default: units.example of the quantity)."""
 
-    def __init__(self, quantity, output, plain=None):
+    def __init__(self, quantity, output, plain=None, example=None):
         self.quantity, self.output, self.plain = quantity, output, plain
+        self.example = example or example_of(quantity)
 
 
 BEAM_ENERGY = Measure("energy", "beam_energy")
@@ -49,10 +54,14 @@ NEUTRON_ENERGY = Measure("energy", "neutron_energy")
 CURRENT = Measure("current", "current")
 PRESSURE = Measure("pressure", "pressure")
 TEMPERATURE = Measure("temperature", "temperature")
-DIVERGENCE = Measure("divergence", "divergence")
-LENGTH = Measure("length", "length", plain="cm")
-RADIUS = Measure("length", "radius", plain="cm")
-DENSITY = Measure("density", "density", plain="g/cm3")
+DIVERGENCE = Measure("angle", "divergence")
+LENGTH = Measure("length", "length")
+RADIUS = Measure("length", "radius")
+DENSITY = Measure("density", "density")
+# The emission-angle bins (always in degrees in the results) and the SDEF placement (in cm,
+# MCNP's unit), whose units do not set those of the results
+ANGLE_BIN = Measure("angle", None, example="3 deg")
+POSITION = Measure("length", None, example="0 cm")
 
 # Case settings: name -> required type. Every case needs all of them, either directly or
 # from [defaults].
@@ -60,7 +69,7 @@ CASE_SETTINGS = {
     "regions": list,  # The regions the beam passes through, in order (see REGION_SETTINGS)
     "beam_energy_entry": BEAM_ENERGY,  # Beam energy where it enters the first region
     "beam_radius_entry": RADIUS,  # Beam radius where it enters the first region
-    "angle_bin_width": float,  # Width of the emission-angle bins [deg] (output mesh)
+    "angle_bin_width": ANGLE_BIN,  # Width of the emission-angle bins (output mesh)
     "energy_bin_width": NEUTRON_ENERGY,  # Width of the neutron energy bins (output mesh)
 }
 
@@ -172,21 +181,20 @@ def _read_measure(where, key, value, measure, units=None):
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if measure.plain is None:
             raise InputError(
-                f'{where}: {key} needs a unit, such as "{example(measure.quantity)}" '
-                f"(units: {accepted})"
+                f'{where}: {key} needs a unit, such as "{measure.example}" (units: {accepted})'
             )
         return to_internal(float(value), measure.plain)
     if not isinstance(value, str):
         plain = f" or a number in {measure.plain}" if measure.plain else ""
         raise InputError(
-            f'{where}: {key} must be a number and a unit, such as "{example(measure.quantity)}"'
+            f'{where}: {key} must be a number and a unit, such as "{measure.example}"'
             f" (units: {accepted}){plain}, got {value!r}"
         )
     try:
         internal, unit = parse(value, measure.quantity)
     except ValueError as e:
         raise InputError(f"{where}: {key} = {value!r}: {e}") from None
-    if units is not None:
+    if units is not None and measure.output is not None:
         units.setdefault(measure.output, unit)
     return internal
 
@@ -406,6 +414,7 @@ def load_input(path):
             raise InputError(
                 f"{where}: give one of beam_current and yield_total (the other is calculated)"
             )
+        angle_bin_width = measured["angle_bin_width"]  # [rad]
         rate = {key: None for key in BEAM_SETTINGS}
         if given[0] == "beam_current":
             rate["beam_current"] = _read_measure(where, "beam_current", s[given[0]], CURRENT, units)
@@ -440,15 +449,14 @@ def load_input(path):
         positions = {key: None for key in PLACEMENT_SETTINGS}
         for key in placement:
             point = s[key]
-            if not (
-                isinstance(point, list)
-                and len(point) == 3
-                and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in point)
-            ):
+            if not (isinstance(point, list) and len(point) == 3):
                 raise InputError(
-                    f"{where}: {key} must be a list of three numbers [x, y, z], got {point!r}"
+                    f"{where}: {key} must be a list of three lengths [x, y, z] with units, such "
+                    f'as ["0 cm", "0 cm", "-10 cm"], got {point!r}'
                 )
-            positions[key] = [float(v) for v in point]
+            positions[key] = [  # [cm]
+                _read_measure(where, f"{key}[{i}]", v, POSITION) for i, v in enumerate(point)
+            ]
         if s["stopping_power"] not in STOPPING_POWERS:
             raise InputError(
                 f"{where}: stopping_power must be one of {', '.join(STOPPING_POWERS)}, "
@@ -463,7 +471,8 @@ def load_input(path):
                 "beam_current": rate["beam_current"],
                 "yield_total": rate["yield_total"],
                 "beam_radius_entry": measured["beam_radius_entry"],
-                "angle_bin_width": s["angle_bin_width"],
+                # [deg], rounded so that "3 deg" stays exactly 3 through the radians
+                "angle_bin_width": float(f"{np.degrees(angle_bin_width):.12g}"),
                 "energy_bin_width": measured["energy_bin_width"],
                 "stopping_power": s["stopping_power"],
                 "beam_energy_backstop": backstop,

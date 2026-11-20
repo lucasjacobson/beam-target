@@ -17,11 +17,12 @@
 #
 # Values with units are written with them, such as "300 keV": energies in eV, keV, MeV, or
 # GeV; currents in A, mA, uA, or nA; pressures in Pa, kPa, torr, mtorr, mbar, bar, atm, or psi;
-# temperatures in K, degC (or C), or degF (or F); divergences in rad, mrad, urad, or deg. Lengths
-# (m, cm, mm, um, nm, in, ft) and densities (g/cm3, kg/m3, g/L) may also be plain numbers, in
-# cm and g/cm3. A case's results are in the units it uses (the first one, where it uses
-# several for one kind of value, such as lengths along the beam or radii); the MCNP SDEF is
-# always in cm and MeV.
+# temperatures in K, degC (or C), or degF (or F); angles (divergence, angle_bin_width) in rad,
+# mrad, urad, or deg; lengths, radii, and positions in m, cm, mm, um, nm, in, or ft; densities in
+# g/cm3, kg/m3, or g/L. Only yield_total (n/s) and counts are plain numbers. A case's results are
+# in the units it uses (the first one, where it uses several for one kind of value, such as
+# lengths along the beam or radii); emission angles are always in degrees, and the MCNP SDEF in
+# cm and MeV.
 #
 # Settings in [defaults] apply to every case unless the case sets them itself. Here they hold
 # a deuteron beam into a 50/50 D/T gas target chamber, and each case changes only what it
@@ -34,10 +35,10 @@ beam              = "deuteron"
 regions           = ["chamber"]
 beam_energy_entry = "300 keV"
 beam_current      = "50 mA"
-beam_radius_entry = 0.2    # cm, beam radius where it enters the first region
+beam_radius_entry = "0.2 cm"  # beam radius where it enters the first region
 
 # Angle and energy mesh (the position mesh belongs to each region)
-angle_bin_width   = 3.0    # deg (180 gives an isotropic source)
+angle_bin_width   = "3 deg"  # "180 deg" gives an isotropic source
 energy_bin_width  = "0.01 MeV"
 
 # MCNP SDEF card: where the source goes in the MCNP geometry. Place it by where the beam
@@ -45,7 +46,7 @@ energy_bin_width  = "0.01 MeV"
 # (entry_position); a case may set either. Here the backstop is at the origin, whatever the
 # case's length (even a calculated one).
 beam_direction    = "-z"             # beam direction: -x, +x, -y, +y, -z, or +z
-backstop_position = [0.0, 0.0, 0.0]  # cm
+backstop_position = ["0 cm", "0 cm", "0 cm"]
 
 # Physics
 stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
@@ -80,17 +81,17 @@ molecules = { D2 = 0.49, T2 = 0.49, Ar = 0.02 }
 
 [materials."TiD1.5"]
 phase   = "solid"
-density = 3.9  # g/cm3
+density = "3.9 g/cm3"
 atoms   = { Ti = 1.0, D = 1.5 }
 
 [materials.Li]
 phase   = "solid"
-density = 0.534         # g/cm3
+density = "0.534 g/cm3"
 atoms   = { Li = 1.0 }  # Natural lithium
 
 [materials.Be]
 phase   = "solid"
-density = 1.848  # g/cm3
+density = "1.848 g/cm3"
 atoms   = { Be = 1.0 }
 
 # --- Regions ---------------------------------------------------------------------------------
@@ -99,10 +100,10 @@ atoms   = { Be = 1.0 }
 # 10 keV at the backstop
 [regions.chamber]
 material          = "DT50"
-length            = 100.0   # cm
+length            = "100 cm"
 pressure          = "57 torr"
 temperature       = "1800 degC"
-wall_radius       = 4.0     # cm; the beam outside it is scraped off (leave it out: no wall)
+wall_radius       = "4 cm"  # the beam outside it is scraped off (leave it out: no wall)
 divergence        = "36 mrad"
 position_bins     = 100     # 1 cm each
 position_substeps = 10      # steps the beam is followed in across each bin (10 is the default)
@@ -110,27 +111,27 @@ position_substeps = 10      # steps the beam is followed in across each bin (10 
 # Two differential-pumping stages in front of the chamber (illustrative values)
 [regions.stage1]
 material          = "DT50"
-length            = 50.0
+length            = "50 cm"
 pressure          = "0.05 torr"
 temperature       = "25 degC"
-wall_radius       = 1.0
+wall_radius       = "1 cm"
 position_bins     = 1
 
 [regions.stage2]
 material          = "DT50"
-length            = 50.0
+length            = "50 cm"
 pressure          = "0.5 torr"
 temperature       = "25 degC"
-wall_radius       = 1.0
+wall_radius       = "1 cm"
 position_bins     = 1
 
 # A 1 cm aperture with a 2 cm radius inside the chamber gas (illustrative)
 [regions.aperture]
 material          = "DT50"
-length            = 1.0
+length            = "1 cm"
 pressure          = "57 torr"
 temperature       = "1800 degC"
-wall_radius       = 2.0
+wall_radius       = "2 cm"
 divergence        = "36 mrad"
 position_bins     = 1
 
@@ -139,14 +140,14 @@ position_bins     = 1
 [regions.TiD_film]
 material          = "TiD1.5"
 length            = "5 um"  # with a unit: this case's lengths are reported in um
-wall_radius       = 4.0
+wall_radius       = "4 cm"
 position_bins     = 100
 
 # A lithium metal film 10 micrometers thick
 [regions.Li_film]
 material          = "Li"
 length            = "10 um"
-wall_radius       = 4.0
+wall_radius       = "4 cm"
 position_bins     = 100
 
 # --- Gas mixtures ----------------------------------------------------------------------------
@@ -169,7 +170,7 @@ regions = [{ use = "chamber", material = "DT_argon" }]
 # The same gas as DT50 given by its density (that of 57 torr at 1800 degC) instead of its
 # pressure and temperature: the same results
 [cases.DT50_by_density]
-regions = [{ use = "chamber", pressure = false, temperature = false, density = 2.217655e-6 }]
+regions = [{ use = "chamber", pressure = false, temperature = false, density = "2.217655e-6 g/cm3" }]
 
 # --- Solid targets ---------------------------------------------------------------------------
 
@@ -210,7 +211,7 @@ beam_current      = "0.1 mA"
 energy_bin_width  = "0.1 MeV"
 nuclear_data      = ["drosg", "../tests/data/endf/ENDF-B-VIII.1"]
 regions           = [
-    { material = "Be", length = 0.5, wall_radius = 4.0, position_bins = 50, position_substeps = 20 },
+    { material = "Be", length = "0.5 cm", wall_radius = "4 cm", position_bins = 50, position_substeps = 20 },
 ]
 
 # --- Physics ---------------------------------------------------------------------------------
@@ -247,19 +248,19 @@ yield_total = 1e13  # n/s
 [cases.DT50_upstream]
 regions        = ["stage1", "stage2", "chamber"]
 beam_direction = "+x"
-entry_position = [-100.0, 0.0, 0.0]  # cm
+entry_position = ["-100 cm", "0 cm", "0 cm"]
 
 # A narrower aperture halfway along the chamber scrapes the beam there (each region has its
 # own wall radius)
 [cases.DT50_aperture]
 regions = [
-    { use = "chamber", length = 49.5, position_bins = 50 },
+    { use = "chamber", length = "49.5 cm", position_bins = 50 },
     "aperture",
-    { use = "chamber", length = 49.5, position_bins = 50 },
+    { use = "chamber", length = "49.5 cm", position_bins = 50 },
 ]
 
 # No divergence (a constant beam radius, so no scraping) and one output angle bin (an
 # isotropic source)
 [cases.DT50_isotropic]
 regions             = [{ use = "chamber", divergence = "0 mrad" }]
-angle_bin_width     = 180.0  # deg
+angle_bin_width     = "180 deg"

@@ -30,8 +30,8 @@ from beamtarget.units import DEFAULT_UNITS, UNITS, from_internal, parse, to_inte
         ("25 C", "temperature", 298.15, "C"),
         ("212 degF", "temperature", 373.15, "degF"),
         ("300 K", "temperature", 300.0, "K"),
-        ("30 mrad", "divergence", 0.03, "mrad"),
-        ("1 deg", "divergence", np.pi / 180, "deg"),
+        ("30 mrad", "angle", 0.03, "mrad"),
+        ("1 deg", "angle", np.pi / 180, "deg"),
         ("1 ft", "length", 30.48, "ft"),
         ("2 in", "length", 5.08, "in"),
         ("5 um", "length", 5e-4, "um"),
@@ -66,9 +66,12 @@ def test_conversions_round_trip(unit):
 
 def test_default_units_are_known():
     for quantity, unit in DEFAULT_UNITS.items():
-        kind = {"beam_energy": "energy", "neutron_energy": "energy", "radius": "length"}.get(
-            quantity, quantity
-        )
+        kind = {
+            "beam_energy": "energy",
+            "neutron_energy": "energy",
+            "radius": "length",
+            "divergence": "angle",
+        }.get(quantity, quantity)
         assert UNITS[unit][0] == kind
 
 

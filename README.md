@@ -85,21 +85,23 @@ Cases are described in TOML input files, and the examples are the reference for 
 setting. Values with units are written with them, such as `beam_energy_entry = "280 keV"` or
 `pressure = "5 torr"`:
 
-| Quantity | Units | Plain number |
-|---|---|---|
-| Energies (beam energies, `energy_bin_width`) | eV, keV, MeV, GeV | not accepted |
-| Beam current | A, mA, uA, nA | not accepted |
-| Pressure | Pa, kPa, torr (or Torr), mtorr (or mTorr), mbar, bar, atm, psi | not accepted |
-| Temperature | K, degC (or C), degF (or F) | not accepted |
-| Divergence | rad, mrad, urad, deg | not accepted |
-| Lengths and radii | m, cm, mm, um, nm, in (or inch), ft | cm |
-| Density | g/cm3, kg/m3, g/L | g/cm3 |
+| Quantity | Units |
+|---|---|
+| Energies (beam energies, `energy_bin_width`) | eV, keV, MeV, GeV |
+| Beam current | A, mA, uA, nA |
+| Pressure | Pa, kPa, torr (or Torr), mtorr (or mTorr), mbar, bar, atm, psi |
+| Temperature | K, degC (or C), degF (or F) |
+| Angles (`divergence`, `angle_bin_width`) | rad, mrad, urad, deg |
+| Lengths, radii, and positions (`entry_position`, `backstop_position`, one unit per entry) | m, cm, mm, um, nm, in (or inch), ft |
+| Density | g/cm3, kg/m3, g/L |
 
-Unit names are case-sensitive, and `µ` may be written for `u`. Emission angles
-(`angle_bin_width`) are plain numbers in degrees, and `yield_total` in n/s. A case's results
-(summary, text files, `source.h5`, and plots) are in the units it uses, the first one where it
-uses several for one kind of value (beam energies, neutron energies, lengths along the beam,
-radii, and so on); the beam power is in kW. The MCNP SDEF card is always in cm and MeV.
+A plain number is an error for all of these. Unit names are case-sensitive, and `µ` may be
+written for `u`. Only `yield_total` (in n/s) and counts (`position_bins`, `position_substeps`,
+and material compositions) are plain numbers. A case's results (summary, text files,
+`source.h5`, and plots) are in the units it uses, the first one where it uses several for one
+kind of value (beam energies, neutron energies, lengths along the beam, radii, and so on); the
+beam power is in kW and emission angles in degrees. The MCNP SDEF card is always in cm and
+MeV.
 
 - [`examples/simple.toml`](examples/simple.toml): one case, using every setting that can be
   given together, each explained.

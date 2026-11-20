@@ -875,9 +875,12 @@ class BeamTarget:
         self.units = dict(DEFAULT_UNITS)
         self.units_given = set()  # The quantities whose units were chosen
         for quantity, unit in (units or {}).items():
-            kind = {"beam_energy": "energy", "neutron_energy": "energy", "radius": "length"}.get(
-                quantity, quantity
-            )
+            kind = {
+                "beam_energy": "energy",
+                "neutron_energy": "energy",
+                "radius": "length",
+                "divergence": "angle",
+            }.get(quantity, quantity)
             try:
                 ok = quantity in DEFAULT_UNITS and quantity_of(unit) == kind
             except KeyError:
