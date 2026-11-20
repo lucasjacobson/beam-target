@@ -36,6 +36,7 @@ The complete result, from which the other files can all be remade. Its file attr
 |---|---|
 | `format`, `format_version` | `"beam-target"`, and the layout version, increased whenever the layout changes |
 | `name`, `created`, `code_version` | Case name, UTC creation time, and the code version: the git commit (with `-dirty` if there were uncommitted changes) when run from a checkout, otherwise the package version |
+| `code_url` | Where the code lives (its repository) |
 | `input_file` | The input file, when run from one |
 | `direction`, `entry_position`, `backstop_position` | Where the source was placed for the case: the beam direction, and the points where the beam enters and reaches the backstop [cm] |
 | `warnings` | Open neutron channels that were not modeled, and regions whose position mesh is too coarse (empty if none) |
@@ -115,8 +116,8 @@ it. It can also move or turn the source; see its docstring.
 
 The key inputs and results as TOML, with units in comments, in these tables:
 
-- `[run]`: case name, code version, creation time, input file, the source placement, and any
-  warnings.
+- `[run]`: case name, code version and repository URL, creation time, input file, the source
+  placement, and any warnings.
 - `[inputs]`: every input; values per region are lists in beam order.
 - `[results]`: the yield of each reaction and in total, the share of each reaction, the mean
   neutron energy over all reactions and of each one, the atom density and the beam energy at the end of each region, the beam

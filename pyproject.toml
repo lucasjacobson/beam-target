@@ -13,6 +13,9 @@ license-files = ["LICENSE"]
 authors = [{ name = "Lucas Jacobson" }]
 dependencies = ["numpy", "h5py", "matplotlib", "numba"]
 
+[project.urls]
+Repository = "https://github.com/lucasjacobson/beam-target"
+
 [project.optional-dependencies]
 dev = ["ruff", "pytest", "pytest-xdist"]
 

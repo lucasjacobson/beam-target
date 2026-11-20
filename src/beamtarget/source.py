@@ -82,6 +82,8 @@ from .units import (
 )
 
 PACKAGE_NAME = "beam-target"
+# Where the code lives, recorded in the outputs with its version (also in pyproject.toml)
+CODE_URL = "https://github.com/lucasjacobson/beam-target"
 logger = logging.getLogger(__name__)
 
 # The spectra of evaluated (ENDF) continua and lab-frame tables are calculated on a grid of
@@ -2360,6 +2362,7 @@ class BeamTarget:
             hf.attrs["format_version"] = HDF5_FORMAT_VERSION
             hf.attrs["name"] = self.name
             hf.attrs["code_version"] = get_code_version()
+            hf.attrs["code_url"] = CODE_URL
             hf.attrs["created"] = self.created
             hf.attrs["warnings"] = self.warnings  # See check_channels and check_position_mesh
             hf.attrs["direction"] = direction
@@ -2785,6 +2788,7 @@ class BeamTarget:
             "run": [
                 ("name", self.name, ""),
                 ("code_version", get_code_version(), ""),
+                ("code_url", CODE_URL, ""),
                 ("created", self.created, ""),  # ISO 8601 with "+00:00": UTC
             ]
             + [(name, value, "") for name, value in (run_info or {}).items()]

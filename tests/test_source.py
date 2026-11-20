@@ -10,6 +10,7 @@ from conftest import SMALL_CASE, channel_warnings, in_code_units, make_source
 
 from beamtarget.nuclear import REACTIONS
 from beamtarget.source import (
+    CODE_URL,
     HDF5_FORMAT_VERSION,
     SDEF_RADIUS_DECIMALS,
     _plot_label,
@@ -619,6 +620,7 @@ def test_hdf5_file(mixed_source, tmp_path):
         assert f.attrs["format_version"] == HDF5_FORMAT_VERSION
         assert f.attrs["name"] == "test"
         assert f.attrs["code_version"]
+        assert f.attrs["code_url"] == CODE_URL
         assert f.attrs["created"] == s.created
         assert f.attrs["input_file"] == "cases.toml"
         assert f["inputs/material"][0].decode() == "D/T gas"
@@ -697,6 +699,7 @@ def test_text_files(mixed_source, tmp_path):
         summary = tomllib.load(f)  # The summary is valid TOML
     assert summary["run"]["name"] == "test"
     assert summary["run"]["code_version"]
+    assert summary["run"]["code_url"] == CODE_URL
     for name, value, _ in s.get_inputs():  # Every input, with the right type
         expected = value.tolist() if isinstance(value, np.ndarray) else value
         if isinstance(expected, str) or (
