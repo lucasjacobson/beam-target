@@ -59,9 +59,9 @@ def test_parse_errors(text, quantity, message):
         parse(text, quantity)
 
 
-@pytest.mark.parametrize("unit", list(UNITS))
-def test_conversions_round_trip(unit):
-    assert from_internal(to_internal(12.5, unit), unit) == pytest.approx(12.5, rel=1e-12)
+def test_conversions_round_trip():
+    for unit in UNITS:
+        assert from_internal(to_internal(12.5, unit), unit) == pytest.approx(12.5, rel=1e-12), unit
 
 
 def test_default_units_are_known():

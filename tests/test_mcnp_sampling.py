@@ -54,13 +54,11 @@ def _gas(formula):
 # Cases: (make_source overrides, direction, placement keyword, point)
 CASES = {
     # The 50/50 D/T case (diverging beam, 10 degree bins: radius and energy depend on
-    # position and angle), along every axis, placed by its backstop or its entry point
+    # position and angle), placed by its backstop or by an entry point off the origin. The
+    # other cases run along +x and +y; the SDEF cards for every direction are checked in
+    # test_source.py (test_sdef_directions, test_sdef_entry_position), without MCNP.
     "DT50_-z": ({}, "-z", "backstop_position", (0.0, 0.0, 0.0)),
     "DT50_+z": ({}, "+z", "entry_position", (1.0, 2.0, 3.0)),
-    "DT50_-x": ({}, "-x", "backstop_position", (5.0, -3.0, 10.0)),
-    "DT50_+x": ({}, "+x", "entry_position", (-100.0, 0.0, 0.0)),
-    "DT50_-y": ({}, "-y", "entry_position", (0.0, 7.0, 0.0)),
-    "DT50_+y": ({}, "+y", "backstop_position", (0.0, 0.0, 0.0)),
     # Three regions of 1, 2, and 3 output bins (si1 with no, one "i", and "2i" points)
     "regions": (
         dict(

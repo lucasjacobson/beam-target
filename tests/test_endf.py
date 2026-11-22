@@ -231,16 +231,20 @@ def test_choose_variant_raises_if_no_variant_can_be_read(tmp_path, monkeypatch):
         choose_variant(paths, 40)
 
 
-TENDL25_VARIANTS = Path(
-    os.environ.get(
-        "BEAM_TARGET_TENDL_VARIANTS_DIR",
-        r"C:\Users\LJ0489\Software\ENDF\_downloads\tendl2025-variants",
-    )
-)
+def local_library(variable):
+    """A full library on this machine, from an environment variable (None if it is not set):
+    a few tests need files that are not bundled in tests/data/endf."""
+    value = os.environ.get(variable)
+    return Path(value) if value else None
+
+
+# The TENDL-2025 variant files (standard, -mt, -s60, -s20, -s0) of p + 9Be and d + 9Be
+TENDL25_VARIANTS = local_library("BEAM_TARGET_TENDL_VARIANTS_DIR")
 
 
 @pytest.mark.skipif(
-    not (TENDL25_VARIANTS / "p-Be009").is_dir(), reason="no local TENDL-2025 variants"
+    not (TENDL25_VARIANTS and (TENDL25_VARIANTS / "p-Be009").is_dir()),
+    reason="BEAM_TARGET_TENDL_VARIANTS_DIR (TENDL-2025 variant files) not set",
 )
 def test_tendl2025_variants():
     """In TENDL-2025, -mt misses most p + 9Be channels above 30 MeV and the standard file
@@ -448,12 +452,18 @@ def test_invalid_configuration(tmp_path, monkeypatch, text, message):
         thick_be("proton", 18, None)
 
 
-# --- Lab-frame tables (LAW=7), with a local FENDL library ----------------------------------
+# --- Lab-frame tables (LAW=7), from the bundled FENDL-3.2c files ---------------------------
 
-FENDL_D = Path(os.environ.get("BEAM_TARGET_FENDL_DIR", r"C:\Users\LJ0489\Software\ENDF\FENDL-3.2c"))
+# A full FENDL-3.2c library, for the few files not bundled (d + 238U)
+FENDL_FULL = local_library("BEAM_TARGET_FENDL_DIR")
 
 
-@pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
+@pytest.fixture(scope="module")
+def fendl(unpacked):
+    """The bundled FENDL-3.2c files (p + 7Li, 12C, 181Ta, 238U; d + 7Li, 9Be), unpacked."""
+    return unpacked("FENDL-3.2c")
+
+
 @pytest.mark.parametrize("path, energy", [(P_BE9, 18.0)])  # Smooth there in the data
 def test_slow_lab_neutrons_bin_smoothly_in_angle(path, energy):
     """Neutrons that are slow in the lab come from CM energies near the CM's own speed,
@@ -492,7 +502,7 @@ def test_energy_pieces_follow_the_requested_widths():
 
 
 @pytest.mark.parametrize("angle_bin_width", [2.0, 3.0, 5.0])
-def test_lab_tables_bin_smoothly_at_any_angle_bin(angle_bin_width):
+def test_lab_tables_bin_smoothly_at_any_angle_bin(angle_bin_width, fendl):
     """FENDL-3.2c's p + 181Ta is given as lab-frame tables every 10 degrees. Cells that ignored
     the output bin edges gave some bins one cell more than their neighbors: a regular stripe
     of up to 25% with 3-degree bins. Each bin must now be within 3% of its neighbors' mean."""
@@ -501,7 +511,7 @@ def test_lab_tables_bin_smoothly_at_any_angle_bin(angle_bin_width):
         name="ta", regions=[Region(ta, wall_radius=10.0, position_bins=4, position_substeps=10)],
         beam_energy_entry=30 * MEV, beam_current=1e-3 * MILLIAMPERE, beam_energy_backstop=10 * KEV,
         beam_radius_entry=0.5, angle_bin_width=angle_bin_width,
-        energy_bin_width=0.5 * MEV, beam="proton", nuclear_data=[str(FENDL_D)],
+        energy_bin_width=0.5 * MEV, beam="proton", nuclear_data=[str(fendl)],
     )  # fmt: skip
     assert s.reactions["p181Ta_xn"].production.channels[0].law == 7
     per_sr = np.sum(s.neutrons["p181Ta_xn"], axis=(0, 2)) / s.solid_angles_out
@@ -509,10 +519,9 @@ def test_lab_tables_bin_smoothly_at_any_angle_bin(angle_bin_width):
     assert np.all(np.abs(per_sr[1:-1] / neighbors - 1) < 0.03)
 
 
-@pytest.mark.skipif(not (FENDL_D / "deuteron").is_dir(), reason="no local FENDL-3.2c library")
-def test_deuterons_with_lab_tables_match_mcnp():
+def test_deuterons_with_lab_tables_match_mcnp(fendl):
     """FENDL-3.2c's d + 9Be (JENDL/DEU-2020) is given as lab-frame tables (LAW=7)."""
-    s = thick_be("deuteron", 18, ["drosg", FENDL_D], length=0.5)
+    s = thick_be("deuteron", 18, ["drosg", fendl], length=0.5)
     assert s.reactions["d9Be_xn"].production.channels[0].law == 7
     assert s.yield_total / s.particle_rate == pytest.approx(1.2896e-02, rel=0.01)
 
@@ -533,29 +542,28 @@ def better_warnings(s):
     return [w for w in s.warnings if "that gives these channels' neutrons" in w]
 
 
-@pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
-def test_better_evaluation_named_for_open_channels(tmp_path, monkeypatch):
+def test_better_evaluation_named_for_open_channels(tmp_path, monkeypatch, fendl):
     """Above 7Li(p,n3He)4He (3.70 MeV) the built-in 7Li(p,n) lines miss neutrons; FENDL-3.2c's
     p + 7Li gives them, so a warning says to list it before "drosg", in the case's
     nuclear_data or (if not there) from the configuration file. Below the threshold, or with
     FENDL-3.2c first (so it is used), there is no such warning."""
-    (better,) = better_warnings(thin_li7(5.0, ["drosg", FENDL_D]))
+    (better,) = better_warnings(thin_li7(5.0, ["drosg", fendl]))
     assert 'before "drosg" in nuclear_data' in better and "p_0328_3-Li-7.endf" in better
-    assert better_warnings(thin_li7(3.0, ["drosg", FENDL_D])) == []
-    s = thin_li7(5.0, [FENDL_D, "drosg"])
+    assert better_warnings(thin_li7(3.0, ["drosg", fendl])) == []
+    s = thin_li7(5.0, [fendl, "drosg"])
     assert better_warnings(s) == [] and "p7Li_xn" in s.reactions
-    write_config(tmp_path, monkeypatch, f'[libraries]\nfendl = "{FENDL_D.as_posix()}"\n')
+    write_config(tmp_path, monkeypatch, f'[libraries]\nfendl = "{fendl.as_posix()}"\n')
     (better,) = better_warnings(thin_li7(5.0, ["drosg"]))
     assert 'add "fendl" (from your configuration file)' in better
 
 
-ENDFB_FULL = Path(
-    os.environ.get("BEAM_TARGET_ENDFB_DIR", r"C:\Users\LJ0489\Software\ENDF\ENDF-B-VIII.1")
-)
+# A full ENDF/B-VIII.1 library (the bundled one has no p + 7Li)
+ENDFB_FULL = local_library("BEAM_TARGET_ENDFB_DIR")
 
 
 @pytest.mark.skipif(
-    not find_evaluation(ENDFB_FULL, "p", (3, 7)), reason="no local ENDF/B-VIII.1 library"
+    not (ENDFB_FULL and find_evaluation(ENDFB_FULL, "p", (3, 7))),
+    reason="BEAM_TARGET_ENDFB_DIR (a full ENDF/B-VIII.1 library) not set",
 )
 def test_no_better_evaluation_from_two_body_levels_only():
     """ENDF/B-VIII.1's p + 7Li gives only the two levels the built-in data have (MT=50, 51),
@@ -565,11 +573,10 @@ def test_no_better_evaluation_from_two_body_levels_only():
     assert better_warnings(s) == []
 
 
-@pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
-def test_every_neutron_product_of_a_section_is_read():
+def test_every_neutron_product_of_a_section_is_read(fendl):
     """FENDL-3.2c's p + 7Li (JENDL-5) lists the MT=5 neutrons twice, below and above 10 MeV;
     reading only the first lost every neutron above 10 MeV."""
-    x = NeutronProduction(FENDL_D / "proton" / "p_0328_3-Li-7.endf")
+    x = NeutronProduction(fendl / "proton" / "p_0328_3-Li-7.endf")
     assert [c.mt for c in x.channels].count(5) == 2
     assert x.production_cross_section(30.0) > 0.1  # b, all from the second product
     angles = np.arange(0, 181, 10.0)
@@ -578,11 +585,10 @@ def test_every_neutron_product_of_a_section_is_read():
     assert spectrum.sum() == pytest.approx(x.production_cross_section(30.0), rel=1e-10)
 
 
-@pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
-def test_lab_tables_with_histogram_spectra():
+def test_lab_tables_with_histogram_spectra(fendl):
     """FENDL-3.2c's p + 12C gives its lab-frame (LAW=7) spectra as histograms (INT=1), and
     writes some exponents with a blank after the sign ("6.01200+ 3")."""
-    x = NeutronProduction(FENDL_D / "proton" / "p_0625_6-C-12.endf")
+    x = NeutronProduction(fendl / "proton" / "p_0625_6-C-12.endf")
     assert set(x.channels[0].distributions[0].spectra[0].codes) == {1}
     angles = np.arange(0, 181, 10.0)
     edges = np.arange(0, np.ceil(x.max_lab_energy(70.0) / 0.1) * 0.1 + 0.05, 0.1)
@@ -625,18 +631,20 @@ def test_no_fission_warning_below_thorium():
     assert fission_warnings(s) == []
 
 
-@pytest.mark.skipif(not (FENDL_D / "proton").is_dir(), reason="no local FENDL-3.2c library")
-def test_fission_neutrons_from_fendl_protons():
+def test_fission_neutrons_from_fendl_protons(fendl):
     """FENDL-3.2c's p + 238U gives fission (MT=18) neutrons explicitly: no warning."""
-    s = uranium_source("proton", 30.0, {"238U": 1}, [FENDL_D])
+    s = uranium_source("proton", 30.0, {"238U": 1}, [fendl])
     assert 18 in [c.mt for c in s.reactions["p238U_xn"].production.channels]
     assert fission_warnings(s) == []
 
 
-@pytest.mark.skipif(not (FENDL_D / "deuteron").is_dir(), reason="no local FENDL-3.2c library")
+@pytest.mark.skipif(
+    not (FENDL_FULL and (FENDL_FULL / "deuteron").is_dir()),
+    reason="BEAM_TARGET_FENDL_DIR (a full FENDL-3.2c library) not set",
+)
 def test_fission_warning_for_an_evaluation_without_fission():
     """FENDL-3.2c's d + 238U (TENDL-2011) has no fission channel: warned about."""
-    s = uranium_source("deuteron", 30.0, {"238U": 1}, [FENDL_D])
+    s = uranium_source("deuteron", 30.0, {"238U": 1}, [FENDL_FULL])
     [message] = fission_warnings(s)
     assert "d_9237_92-U-238.endf" in message and "no fission (MT=18)" in message
 
