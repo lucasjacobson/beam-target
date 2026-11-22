@@ -1,0 +1,75 @@
+SRIM's legal notice, which applies to srim_stopping.h5 (SRIM output)
+
+The text below is copied verbatim from the file Data/LEGAL.rtf distributed with SRIM-2013
+(formatting removed). See README.md in this directory ("Licensing").
+
+------------------------------------------------------------------------------------------------
+
+Legal Notices about SRIM
+
+SRIM may be copied and distributed freely.
+
+However, no commercial use may be made of the code, the associated files, or of its results
+(e.g. you may not incorporate any part of SRIM in a commercial product) without a written
+license from SRIM.org. See legal note below for details.
+
+This program is quite complex and is undoubtedly full of little bugs. You are encouraged to
+send any comments to J. F. Ziegler at Ziegler@SRIM.org. E-mail is usually answered
+immediately.
+
+___________________________________________________________
+
+Program name: SRIM (PC version only)
+Copyright: SRIM.com, 1984, 1986, 1989, 1991, 1992, 1994, 1995, 1998, 2000, 2003, 2008, 2011.
+All Rights Reserved
+
+SRIM.com Research Software Disclaimer
+
+As experimental, research software, this program is provided free of charge on an "as is"
+basis without warranty of any kind, either expressed or implied, including but not limited to
+implied warranties of merchantability and fitness for a particular purpose. SRIM.com does not
+warrant that the functions contained in this program will meet the user's requirements or
+that the operation of this program will be uninterrupted or error-free. Acceptance and use of
+this program constitutes the user's understanding that he will have no recourse to SRIM.com
+for any actual or consequential damages, including, but not limited to, lost profits or
+savings, arising out of the use or inability to use this program. Even if the user informs
+SRIM.com of the possibility of such damages, SRIM.com expects the user of this program to
+accept the risk of any harm arising out of the use of this program, or the user shall not
+attempt to use this program for any purpose.
+
+User agreement:
+
+By acceptance and use of this experimental program the user agrees to the following:
+
+This program is provided for the user's personal, non-commercial, experimental use and the
+user is granted permission to copy this program to the extent reasonably required for such
+use.
+
+All title, ownership and rights to this program and its associated files and any copies
+remain with SRIM.com, irrespective of the ownership of the media on which the program resides.
+
+The user is permitted to create non-commercial derivative works to this program. However, all
+copies of the program and its derivative works must contain the SRIM.com copyright notice, the
+Experimental Software Disclaimer and this User Agreement.
+
+By furnishing this program to the user, SRIM.com does NOT grant either directly or by
+implication, estoppel, or otherwise any license under any patents, patent applications,
+trademarks, copyrights or other rights belonging to SRIM.com or to any third party, except as
+expressly provided herein.
+
+The user understands and agrees that this program and its associated files, and any
+derivative works, are to be used solely for experimental uses and are not to be sold,
+distributed to a commercial organization, or be commercially exploited in any manner.
+
+SRIM.com requests that the user supply to SRIM.com a copy of any changes, enhancements, or
+derivative works which the user may create. The user grants SRIM.com and its subsidiaries an
+irrevocable, nonexclusive, worldwide and royalty-free license to use, execute, reproduce,
+display, perform, prepare derivative works based upon, and distribute (internally and
+externally) copies of any and all such materials and derivative works thereof, and to
+sublicense others to do any, some, or all of the foregoing, (including supporting
+documentation). Copies of these modifications should be sent to:
+
+J. F. Ziegler
+SRIM.com
+2835 Cox Neck Road
+Chester, MD, 21619, USA

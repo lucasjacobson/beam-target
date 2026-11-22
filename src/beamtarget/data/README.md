@@ -14,6 +14,7 @@ line endings (see `.gitattributes`).
 | `p7ligs.koe` | ⁷Li(p,n₀)⁷Be cross sections (⁷Be ground state) | DROSG-2000 v12.01 |
 | `p7lies.koe` | ⁷Li(p,n₁)⁷Be* cross sections (⁷Be first excited state, 0.429 MeV) | DROSG-2000 v12.01 |
 | `srim_stopping.h5` | Stopping powers of p, d, t, ³He, and α in every element, solid and gas | SRIM-2012.01 |
+| `SRIM_LEGAL.txt` | SRIM's legal notice, which applies to `srim_stopping.h5` | SRIM-2013 |
 | `pstar_hydrogen.txt` | Stopping power of protons in hydrogen gas | ICRU Report 49 (NIST PSTAR) |
 | `nist_isotopic_compositions.txt` | Natural isotopic compositions of the elements | NIST SRD 144 |
 | `mass_1.mas20.txt` | Atomic masses of 3558 nuclides, and the element symbols | AME2020 |
@@ -131,6 +132,15 @@ every single-element target, generated with SRIM's batch program (SR Module) by
 [`scripts/make_srim_tables.py`](../../../scripts/make_srim_tables.py), which documents every
 setting. SRIM is needed only to regenerate the file, not to use it. The code reads the
 deuteron (`d`) tables with `read_srim_h5`.
+
+**Terms of use.** These tables are SRIM output, and SRIM's terms apply to them, not this
+project's MIT License: SRIM "may be copied and distributed freely", and its output may be used
+"for any non-commercial research purpose", but "no commercial use may be made of the code, the
+associated files, or of its results ... without a written license from SRIM.org". So **using
+these tables commercially needs a license from SRIM.org.** That includes using beam-target
+with its default stopping power, `"srim"`; `"icru49"` replaces only the electronic stopping
+(hydrogen-isotope gases only), not SRIM's nuclear stopping. SRIM's full legal notice, copyright,
+disclaimer, and user agreement are in [`SRIM_LEGAL.txt`](SRIM_LEGAL.txt).
 
 - **Beam particles:** proton, deuteron, triton, helion (³He) and alpha, with CODATA 2022
   nuclear masses.
@@ -381,11 +391,17 @@ angular distributions near threshold.
 ## Licensing
 
 The MIT License in the repository's `LICENSE` file covers this project's code and
-documentation, not the data files in this directory. The `.koe` files (DROSG-2000),
-`srim_stopping.h5` (SRIM output) and
-`pstar_hydrogen.txt` (NIST PSTAR / ICRU Report 49), `nist_isotopic_compositions.txt` (NIST)
-and `mass_1.mas20.txt` (AME2020) are redistributed unmodified, or with values copied exactly, from the sources above, which are freely available, and remain subject to their
-sources' terms. Please cite those sources when using the data.
+documentation, not the data files in this directory, which remain subject to their sources'
+terms. Please cite those sources when using the data.
+
+- **SRIM** (`srim_stopping.h5`, SRIM output): free to copy and distribute, and to use for
+  non-commercial research, but **commercial use of SRIM's results needs a written license
+  from SRIM.org** (see "Terms of use" above, and SRIM's full notice in
+  [`SRIM_LEGAL.txt`](SRIM_LEGAL.txt), which SRIM requires copies to carry).
+- **DROSG-2000** (the `.koe` files), **NIST PSTAR / ICRU Report 49**
+  (`pstar_hydrogen.txt`), **NIST SRD 144** (`nist_isotopic_compositions.txt`), and
+  **AME2020** (`mass_1.mas20.txt`): freely available, and redistributed unmodified or with
+  values copied exactly.
 
 ## References
 
