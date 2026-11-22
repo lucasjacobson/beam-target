@@ -128,9 +128,10 @@ def get_openmc_sources(path, direction=None, entry_position=None, backstop_posit
       angle bin, and uniform in azimuth.
     - energy: the neutron spectrum of that position and angle, all reactions together, as a
       histogram on the output energy bins (each run of empty bins merged into one).
-    - strength: the neutrons it emits [n/s]. OpenMC treats strengths as relative weights and
-      normalizes tallies per source particle, so multiply tallies by the total of the
-      strengths (yield_total in the file's results) for absolute rates.
+    - strength: the neutrons it emits [n/s]. OpenMC samples the sources in proportion to
+      their strengths and scales tallies by the total of the strengths (yield_total in the
+      file's results), so tallies come out per second: absolute rates, with no further
+      normalization.
 
     Adding the reactions' spectra gives the same distribution as a source for each reaction,
     with half the sources or fewer, so a smaller settings.xml.

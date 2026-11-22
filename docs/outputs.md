@@ -109,8 +109,10 @@ from beamtarget.openmc_source import get_openmc_sources
 settings.source = get_openmc_sources("output/DT90/source.h5")
 ```
 
-It needs the `openmc` Python package (0.16 or later); the rest of the package runs without
-it. It can also move or turn the source; see its docstring.
+Each source's strength is the neutrons it emits [n/s], and OpenMC scales tallies by the total
+of the strengths, so OpenMC tallies come out as absolute rates (per second) with no further
+normalization, unlike MCNP's. It needs the `openmc` Python package (0.16 or later); the rest of
+the package runs without it. It can also move or turn the source; see its docstring.
 
 ## `summary.toml`
 
