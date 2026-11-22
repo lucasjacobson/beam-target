@@ -137,9 +137,9 @@ including:
   positions, angles, and energies are checked against the calculation. These tests are
   skipped without MCNP and mcnptools, or without the `openmc` package.
 - **Thick-target yields:** with evaluated data, the neutron yields of beams stopping in a
-  target agree with MCNP's own calculation from the same data within 1-5%: protons,
-  deuterons, and alphas on beryllium (in `tests/test_endf.py`), protons and deuterons on
-  aluminum, tantalum, and uranium, and protons on thorium (see the
+  target agree with MCNP's own calculation from the same data within 1-5%: protons and
+  deuterons on beryllium (tested in `tests/test_endf.py`), and alphas on beryllium, protons
+  and deuterons on aluminum, tantalum, and uranium, and protons on thorium (see the
   [data README](src/beamtarget/data/README.md)). This tests the calculation, not the data:
   for deuterons on uranium and protons on thorium, the data lack or may lack fission
   neutrons.
