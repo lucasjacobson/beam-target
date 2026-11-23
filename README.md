@@ -206,7 +206,7 @@ nuclear data you use (see the [data README](src/beamtarget/data/README.md)).
 ## License
 
 The code and documentation are released under the MIT License (see [`LICENSE`](LICENSE)),
-copyright SHINE Technologies and beam-target contributors. The data files are redistributed
+copyright SHINE Technologies, LLC and beam-target contributors. The data files are redistributed
 under their own sources' terms; see the [data README](src/beamtarget/data/README.md#licensing).
 In particular, the optional SRIM stopping-power tables are SRIM output: free for
 non-commercial research, but **commercial use of them, by running beam-target with

@@ -52,7 +52,7 @@ def test_written_copy(tmp_path):
     assert f"beam-target {get_code_version()} ({CODE_URL})" in header
     with open(OPENMC_MODULE, encoding="utf-8") as f:
         assert body == f.read()
-    assert "Copyright (c) 2026 SHINE Technologies and beam-target contributors" in body
+    assert "Copyright (c) 2026 SHINE Technologies, LLC and beam-target contributors" in body
 
 
 def test_copy_works_without_beamtarget(tmp_path, mixed_source):
