@@ -1,4 +1,4 @@
-"""Reading the nuclear data files: DROSG-2000, SRIM, and PSTAR."""
+"""Reading the nuclear data files: DROSG-2000, SRIM, and ICRU 49 (NIST PSTAR, ASTAR)."""
 
 import shutil
 
@@ -7,13 +7,13 @@ import numpy as np
 import pytest
 from conftest import data_path
 
+from beamtarget import stopping
 from beamtarget.nuclear import REACTIONS
 from beamtarget.source import (
-    PSTAR_FILE,
+    DEFAULT_DATA_DIR,
     SRIM_STOPPING_FILE,
     _fortran_float,
     read_drosg_koe,
-    read_pstar,
     read_srim_h5,
 )
 
@@ -108,17 +108,29 @@ def test_drosg_damaged_file_rejected(tmp_path, damage, message):
 # --- PSTAR (ICRU 49) ---------------------------------------------------------------------------
 
 
-def test_pstar_table():
-    E, S_elec, S_nuc = read_pstar(data_path(PSTAR_FILE))
-    assert len(E) == 132
-    assert E[0] == 1e-3 and E[-1] == 1e4  # 1 keV - 10 GeV protons
-    assert np.all(np.diff(E) > 0)
-    assert np.all(S_elec > 0) and np.all(S_nuc > 0)
+def test_icru49_data_file():
+    """The ICRU 49 file holds NIST PSTAR and ASTAR for the same 25 elements, as printed (1 keV
+    to 10 GeV protons, 1 keV to 1 GeV alphas), and Geant4's tables for every element."""
+    with h5py.File(data_path(stopping.DATA_FILE)) as f:
+        assert sorted(f["pstar"], key=int) == sorted(f["astar"], key=int)
+        assert len(f["pstar"]) == 25 and set(map(int, f["pstar"])) == set(
+            stopping.NIST_ATOMIC_WEIGHT
+        )
+        hydrogen = f["pstar/1"][()]
+        assert hydrogen.shape == (132, 2) and list(hydrogen[0]) == [1e-3, 746.5]
+        assert hydrogen[-1, 0] == 1e4 and f["astar/1"][-1, 0] == 1e3
+        assert f["geant4/proton_fit"].shape == f["geant4/helium_fit"].shape == (92, 5)
+        excitation = f["geant4/mean_excitation_energy"][()]
+        assert excitation.shape == (92,) and (excitation[0], excitation[91]) == (
+            19.2,
+            890.0,
+        )  # H, U (ICRU 37)
+        assert f["geant4/barkas"].shape == (47, 2)
     # Peak electronic stopping of protons in hydrogen gas: about 3800 MeV cm^2/g near 80 keV,
-    # i.e. 6.4 eV/(1e15 atoms/cm^2) per atom (hydrogen has the most electrons per gram)
-    i = np.argmax(S_elec)
-    assert 0.05 < E[i] < 0.12
-    assert 3700 < S_elec[i] < 3950
+    # 6.4 eV/(1e15 atoms/cm^2) per atom
+    E, S = stopping.load(DEFAULT_DATA_DIR)["p"][1]
+    i = np.argmax(S)
+    assert 50 < E[i] < 120 and 6.2e-18 < S[i] < 6.6e-18  # keV, keV cm^2 per atom
 
 
 def test_data_files_unchanged_line_endings():

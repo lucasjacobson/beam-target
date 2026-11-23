@@ -195,7 +195,6 @@ def test_solid_outputs_record_material(tmp_path):
     [
         (dict(pressure=[5.0]), "is a solid, so it takes no pressure"),
         (dict(temperature=[25.0]), "is a solid, so it takes no pressure, temperature, or density"),
-        (dict(stopping_power="icru49"), "icru49 is for hydrogen-isotope gases only.*is a solid"),
         (dict(length=[None]), "only one value can be calculated"),
     ],
 )
@@ -310,16 +309,21 @@ def test_small_case_unchanged_by_materials():
     assert s.target_density_per_region["DT"][0] == 0.5 * s.atom_density_per_region[0]
 
 
-@pytest.mark.parametrize("molecules", [{"D2": 0.9, "Ar": 0.1}, {"D2": 0.5, "N2": 0.5}])
-def test_icru49_refused_for_other_elements(molecules):
-    """ICRU 49 data here are for hydrogen gas only, so a gas with any other element is
-    refused rather than half run with SRIM."""
+@pytest.mark.parametrize(
+    "molecules", [{"D2": 0.9, "Ar": 0.1}, {"D2": 0.5, "N2": 0.5}, {"H2": 0.2, "D2": 0.4, "T2": 0.4}]
+)
+def test_icru49_and_srim_agree_for_gases(molecules):
+    """ICRU 49 covers every element, so gases with other elements run with it too, and give
+    yields within a few percent of SRIM's."""
     gas = Material("mix", "gas", molecules=molecules)
-    with pytest.raises(ValueError, match="icru49 is for hydrogen-isotope gases only.*contains"):
-        make_source(material=gas, stopping_power="icru49")
-    assert make_source(material=gas).yield_total > 0  # Fine with srim
+    icru = make_source(material=gas, stopping_power="icru49").yield_total
+    srim = make_source(material=gas, stopping_power="srim").yield_total
+    assert icru == pytest.approx(srim, rel=0.04)
 
 
-def test_icru49_for_any_hydrogen_isotope_gas():
-    gas = Material("H2 + D2 + T2", "gas", molecules={"H2": 0.2, "D2": 0.4, "T2": 0.4})
-    assert make_source(material=gas, stopping_power="icru49").yield_total > 0
+def test_icru49_for_solids():
+    """A solid (here TiD1.5) runs with ICRU 49, the default, within a few percent of SRIM's
+    solid-phase stopping."""
+    icru = make_solid().yield_total
+    srim = make_solid(stopping_power="srim").yield_total
+    assert icru == pytest.approx(srim, rel=0.05)

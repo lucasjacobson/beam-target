@@ -1,8 +1,8 @@
 # Nuclear data
 
 The files in this directory are read by `BeamTarget` (see `read_drosg_koe`,
-`read_srim_h5`, `read_pstar`, `read_cross_sections` and `read_stopping_power` in
-`source.py`, and `mass_table` and `natural_abundances` in `nuclear.py`). The DROSG files and
+`read_srim_h5`, `read_cross_sections` and `read_stopping_power` in `source.py`, `load` in
+`stopping.py`, and `mass_table` and `natural_abundances` in `nuclear.py`). The DROSG files and
 the mass table are kept exactly as distributed, the DROSG files including their Windows (CRLF)
 line endings (see `.gitattributes`).
 
@@ -15,7 +15,8 @@ line endings (see `.gitattributes`).
 | `p7lies.koe` | ⁷Li(p,n₁)⁷Be* cross sections (⁷Be first excited state, 0.429 MeV) | DROSG-2000 v12.01 |
 | `srim_stopping.h5` | Stopping powers of p, d, t, ³He, and α in every element, solid and gas | SRIM-2012.01 |
 | `SRIM_LEGAL.txt` | SRIM's legal notice, which applies to `srim_stopping.h5` | SRIM-2013 |
-| `pstar_hydrogen.txt` | Stopping power of protons in hydrogen gas | ICRU Report 49 (NIST PSTAR) |
+| `icru49_stopping.h5` | Stopping powers of protons and α in 25 elements, and coefficients for every element | ICRU Report 49 (NIST PSTAR, ASTAR), Geant4 v11.3.2 |
+| `NOTICE_GEANT4.txt` | Geant4's license, which applies to the Geant4 numbers in `icru49_stopping.h5` | Geant4 |
 | `nist_isotopic_compositions.txt` | Natural isotopic compositions of the elements | NIST SRD 144 |
 | `mass_1.mas20.txt` | Atomic masses of 3558 nuclides, and the element symbols | AME2020 |
 
@@ -106,18 +107,20 @@ file, or the `stopping_power` argument of `BeamTarget`):
 
 | `stopping_power` | Electronic stopping | Nuclear stopping |
 |---|---|---|
-| `"srim"` (default) | SRIM-2012.01 (`srim_stopping.h5`) | SRIM-2012.01 |
-| `"icru49"` | ICRU Report 49 (`pstar_hydrogen.txt`); hydrogen-isotope gases only | SRIM-2012.01 |
+| `"icru49"` (default) | ICRU Report 49 (`icru49_stopping.h5`), every element | ZBL universal formula |
+| `"srim"` | SRIM-2012.01 (`srim_stopping.h5`), every element | SRIM-2012.01 |
 
-The code uses the deuteron stopping per atom of each element in a region's material, in the
+`"icru49"` uses only open data; `"srim"` needs a license from SRIM.org for commercial use
+(see below). The code uses the beam particle's stopping per atom of each element (or, for
+nuclear stopping with `"icru49"`, each isotope) in a region's material, with `"srim"` in the
 material's phase (gas or solid), and combines them per atom (Bragg additivity): the stopping
 per atom of the material is the sum over its atoms of each atom fraction times that element's
 stopping, and the energy loss per unit length is that times the region's atom density. For
 a D/T gas with a fraction f of its atoms tritium this is (1 − f) × the value in deuterium +
 f × the value in tritium.
 Electronic stopping, which dominates, is the same for D and T (one electron each). Nuclear
-stopping per atom is about 45% higher in deuterium than in tritium, but it is below 1.5% of
-the total above 10 keV and below 0.1% above 100 keV.
+stopping of deuterons per atom is about 45% higher in deuterium than in tritium, but it is
+below 1.5% of the total above 10 keV and below 0.1% above 100 keV.
 
 Per-atom mixing of D and T was checked against SRIM runs for D/T mixtures from 5% to 95%
 tritium, which SRIM models as a single hydrogen target with the average mass: total stopping
@@ -137,10 +140,9 @@ deuteron (`d`) tables with `read_srim_h5`.
 project's MIT License: SRIM "may be copied and distributed freely", and its output may be used
 "for any non-commercial research purpose", but "no commercial use may be made of the code, the
 associated files, or of its results ... without a written license from SRIM.org". So **using
-these tables commercially needs a license from SRIM.org.** That includes using beam-target
-with its default stopping power, `"srim"`; `"icru49"` replaces only the electronic stopping
-(hydrogen-isotope gases only), not SRIM's nuclear stopping. SRIM's full legal notice, copyright,
-disclaimer, and user agreement are in [`SRIM_LEGAL.txt`](SRIM_LEGAL.txt).
+these tables commercially, by running beam-target with `stopping_power = "srim"`, needs a
+license from SRIM.org.** The default, `"icru49"`, uses no SRIM data. SRIM's full legal notice,
+copyright, disclaimer, and user agreement are in [`SRIM_LEGAL.txt`](SRIM_LEGAL.txt).
 
 - **Beam particles:** proton, deuteron, triton, helion (³He) and alpha, with CODATA 2022
   nuclear masses.
@@ -178,21 +180,49 @@ Until version 0.1.0 the code used two SRIM text tables instead, for deuterons in
 for D and T gas reproduce them within 0.06%, the rounding of SRIM's printed values in the two
 unit systems; switching to it changed neutron yields by about 3 × 10⁻⁵.
 
-### ICRU Report 49: `pstar_hydrogen.txt`
+### ICRU Report 49 for every element: `icru49_stopping.h5`
 
-Stopping powers of protons in hydrogen gas from ICRU Report 49, as tabulated by NIST PSTAR
-(<https://physics.nist.gov/PhysRefData/Star/Text/PSTAR.html>, material 001, retrieved
-9 November 2026), with the values copied exactly as printed (see the file header). The code
-uses the electronic stopping at the proton energy with the same velocity as the deuteron,
-E_p = E_d × m_p/m_d ≈ E_d/2, converted to stopping per atom with the atomic weight ICRU 49 uses
-(1.00794). The ICRU 49 nuclear stopping is for protons, so the nuclear part comes from SRIM,
-mixed per atom as above. Because this file holds ICRU 49 data for hydrogen gas only,
-`"icru49"` can be used only for gases made of hydrogen isotopes (H, D, T); a solid, or a gas
-with any other element, is refused, so that a case run with it uses ICRU 49 throughout.
-(PSTAR also tabulates about 25 other elements, but not hydrogen as a solid, so hydride
-targets could not be described consistently with it.) The table starts
-at a proton energy of 1 keV, so it covers deuteron energies from 2 keV; below that the beam is
-treated as stopped.
+The default stopping, `"icru49"`, follows ICRU Report 49 for every element and beam particle,
+from open data only; [`stopping.py`](../stopping.py) implements it.
+
+- **Electronic stopping, 25 elements** (H, He, Be, C, N, O, Ne, Al, Si, Ar, Ti, Fe, Cu, Ge,
+  Kr, Mo, Ag, Sn, Xe, Gd, W, Pt, Au, Pb, and U): ICRU 49 itself, as tabulated by NIST PSTAR
+  (protons) and ASTAR (alpha particles), interpolated log-log. Deuterons and tritons use the
+  proton values, and ³He ions the alpha values, at the same velocity: electronic stopping
+  depends on the particle's velocity and charge, not its mass.
+- **Electronic stopping, every other element:** the model ICRU 49 itself uses where it has no
+  data, as Geant4 implements it. Up to 2 MeV for a proton (at the same velocity for the
+  others), the ICRU 49 / Ziegler parameterizations of proton and He-ion stopping; above
+  that, Bethe's formula with the shell, Barkas, Bloch, and Mott corrections and the element's
+  ICRU 37 mean excitation energy, scaled to meet the parameterization at 2 MeV, with the scale
+  fading as 2 MeV / energy. Tested against the 25 NIST elements from 10 keV/u to 100 MeV/u,
+  the model's largest difference from ICRU 49 has a median of 2.1% over the elements for
+  protons and 3.4% for alphas (SRIM's: 6.4% and 5.4%), and is up to about 10% for a few
+  heavy elements near 2–5 MeV/u and 26% for carbon below 30 keV (NIST's carbon is graphite).
+- **Nuclear stopping:** the universal formula of Ziegler, Biersack, and Littmark (ZBL), with
+  each isotope's own mass. It is within 2% of SRIM's (which is also ZBL) from 1 keV to 1 MeV.
+- **Phase:** the same stopping for gas and solid targets. ICRU 49 tabulates hydrogen only as a
+  gas, so metal hydrides use gas-phase hydrogen; SRIM's solid-phase hydrogen stops up to about
+  9% more at low energies.
+
+The tables start at 1 keV for a proton or an alpha (2 keV for a deuteron, 3 keV for a triton,
+and about 0.75 keV for ³He); below that the beam is treated as stopped.
+
+The file holds the numbers exactly as printed by their sources, written by
+[`scripts/make_icru49_tables.py`](../../../scripts/make_icru49_tables.py):
+
+| Path | Contents |
+|---|---|
+| `pstar/<Z>`, `astar/<Z>` | NIST PSTAR and ASTAR on NIST's default energies: columns energy [MeV] and electronic stopping [MeV cm²/g]; attributes `material` and `nist_material_number` |
+| `geant4/proton_fit`, `geant4/helium_fit` | coefficients of the ICRU 49 / Ziegler parameterizations for Z = 1–92, shape (92, 5) (`G4BraggModel`, `G4BraggIonModel`) |
+| `geant4/mean_excitation_energy` | ICRU 37 mean excitation energies of Z = 1–92 [eV] (`G4NistMaterialBuilder`) |
+| `geant4/barkas` | the Ashley–Ritchie–Brandt Barkas correction function, (W, value) pairs (`G4EmCorrections`) |
+
+NIST PSTAR and ASTAR were retrieved on 22 November 2026 from
+<https://physics.nist.gov/PhysRefData/Star/Text/> (carbon: graphite, material 906), and the
+Geant4 numbers taken from release v11.3.2 (<https://github.com/Geant4/geant4>). Each group
+records its source in a `source` attribute. Stopping per gram is converted to stopping per atom
+with the atomic weights NIST used.
 
 ### How the two compare
 
@@ -204,10 +234,21 @@ Electronic stopping per atom, deuterons in hydrogen gas:
 | 20–100 keV | 0.97–1.00 |
 | 150–400 keV | 0.965–0.985 |
 
-SRIM is 2–3.5% lower than ICRU 49 where the beam enters the target. For the generic cases in
-`examples/generic.toml`, `"icru49"` gives neutron yields 1.4% (pure tritium) to 2.2% (pure deuterium) lower than
-`"srim"`, and a beam energy at the backstop of about 9.2–9.3 keV instead of 11.7–11.8 keV. The choice of
-stopping powers is therefore a systematic uncertainty of about 2% on the yields.
+SRIM is 2–3.5% lower than ICRU 49 where the beam enters a D/T gas target. Neutron yields of
+the cases in `examples/generic.toml` with `"icru49"`, relative to `"srim"`:
+
+| Case | `"icru49"` / `"srim"` | Beam energy at the end, `"icru49"` / `"srim"` |
+|---|---|---|
+| DD, DT, and DT50 (300 keV deuterons into D/T gas) | 0.978–0.988 | 10.3–10.4 keV / 13.3–13.4 keV |
+| DT50_argon (with 5% argon) | 0.988 | 6.0 keV / 8.3 keV |
+| t_D2 (tritons into D₂ gas) | 0.989 | 9.7 keV / 11.4 keV |
+| TiD_thick (deuterons stopping in TiD₁.₅) | 0.969 | stopped |
+| p_Li_thin (2.5 MeV protons, thin lithium) | 1.001 | 2436 keV / 2437 keV |
+| p_Be_thick (protons stopping in beryllium) | 1.003 | stopped |
+
+Other regression cases (protons, deuterons, and alphas on Li, Be, C, Ta, W, and U) differ
+by −2.0% to +2.2%. The choice of stopping powers is therefore a systematic uncertainty of
+about 2–3% on the yields.
 
 ![Stopping power of deuterons in tritium gas, SRIM vs ICRU 49](../../../docs/figures/stopping_power.png)
 
@@ -398,10 +439,15 @@ terms. Please cite those sources when using the data.
   non-commercial research, but **commercial use of SRIM's results needs a written license
   from SRIM.org** (see "Terms of use" above, and SRIM's full notice in
   [`SRIM_LEGAL.txt`](SRIM_LEGAL.txt), which SRIM requires copies to carry).
-- **DROSG-2000** (the `.koe` files), **NIST PSTAR / ICRU Report 49**
-  (`pstar_hydrogen.txt`), **NIST SRD 144** (`nist_isotopic_compositions.txt`), and
-  **AME2020** (`mass_1.mas20.txt`): freely available, and redistributed unmodified or with
-  values copied exactly.
+- **Geant4** (the `geant4` group of `icru49_stopping.h5`, and the formulas in `stopping.py`
+  that use it): the Geant4 Software License, reproduced with the required acknowledgment in
+  [`NOTICE_GEANT4.txt`](NOTICE_GEANT4.txt): "This product includes software developed by
+  Members of the Geant4 Collaboration ( http://cern.ch/geant4 )."
+- **DROSG-2000** (the `.koe` files), **NIST PSTAR and ASTAR / ICRU Report 49** (the `pstar`
+  and `astar` groups of `icru49_stopping.h5`; US government data, not subject to copyright in
+  the United States), **NIST SRD 144** (`nist_isotopic_compositions.txt`), and **AME2020**
+  (`mass_1.mas20.txt`): freely available, and redistributed unmodified or with values copied
+  exactly.
 
 ## References
 
@@ -424,6 +470,13 @@ terms. Please cite those sources when using the data.
 - M. J. Berger, J. S. Coursey, M. A. Zucker, and J. Chang, *ESTAR, PSTAR, and ASTAR: Computer
   Programs for Calculating Stopping-Power and Range Tables for Electrons, Protons, and Helium
   Ions*, NIST Standard Reference Database 124.
+- ICRU Report 37, *Stopping Powers for Electrons and Positrons*, International Commission on
+  Radiation Units and Measurements (1984).
+- J. F. Ziegler, J. P. Biersack, and U. Littmark, *The Stopping and Range of Ions in Solids*,
+  Pergamon Press (1985).
+- S. Agostinelli et al., "Geant4—a simulation toolkit", Nucl. Instrum. Methods Phys. Res. A 506
+  (2003) 250–303; J. Allison et al., "Recent developments in Geant4", Nucl. Instrum. Methods
+  Phys. Res. A 835 (2016) 186–225.
 
 Measurements compared with above:
 

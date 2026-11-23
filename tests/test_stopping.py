@@ -21,10 +21,10 @@ def _stopping(source, region=-1):
 
 @pytest.mark.parametrize("T_frac, isotope", [(0.0, "D"), (1.0, "T")])
 def test_pure_gas_stopping_is_srim(T_frac, isotope):
-    """In pure D or T gas the code's stopping per atom is SRIM's gas-phase value."""
+    """With stopping_power="srim", the stopping per atom in pure D or T gas is SRIM's gas-phase value."""
     E_srim, _, srim = read_srim_h5(data_path(SRIM_STOPPING_FILE))
     elec, nuc = srim["gas"][isotope]
-    E, eps = _stopping(make_source(T_frac=T_frac))
+    E, eps = _stopping(make_source(T_frac=T_frac, stopping_power="srim"))
     np.testing.assert_allclose(E, E_srim, rtol=1e-15)
     np.testing.assert_allclose(eps, elec + nuc, rtol=1e-14)
 

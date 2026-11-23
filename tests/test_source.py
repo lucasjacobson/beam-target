@@ -296,11 +296,11 @@ def test_neutron_energies(mixed_source):
 # check that it was meant to and update them.
 REFERENCE = {
     (0.0, "srim"): (3.6280995176e10, 0.0, 194.2685042747, 1.7222163350e-01),
-    (0.0, "icru49"): (3.6135189661e10, 0.0, 191.6598797221, 1.7142878816e-01),
+    (0.0, "icru49"): (3.6137269672e10, 0.0, 191.6993840071, 1.7144264669e-01),
     (0.5, "srim"): (1.8140795839e10, 7.8054192052e11, 194.2802627760, 2.3018647368e-01),
-    (0.5, "icru49"): (1.8067895741e10, 7.8737794161e11, 191.6716694942, 2.3159261200e-01),
+    (0.5, "icru49"): (1.8068930843e10, 7.8727839921e11, 191.7110102020, 2.3156815148e-01),
     (1.0, "srim"): (0.0, 1.5610283426e12, 194.2920207672, 2.3152707935e-01),
-    (1.0, "icru49"): (0.0, 1.5746990699e12, 191.6834643212, 2.3296652543e-01),
+    (1.0, "icru49"): (0.0, 1.5745008289e12, 191.7226358932, 2.3294153427e-01),
 }
 
 
@@ -477,7 +477,7 @@ def test_sdef_file(mixed_source, tmp_path):
     summary = tomllib.loads(mixed_source.get_summary(run))
     assert header == summary
     assert header["run"]["sdef_direction"] == "-z"
-    assert header["inputs"]["stopping_power"] == "srim"
+    assert header["inputs"]["stopping_power"] == "icru49"
     # Then notes on using the source
     notes = text.split(dashed)[3]
     assert "multiply them by yield_total" in notes
@@ -624,7 +624,7 @@ def test_hdf5_file(mixed_source, tmp_path):
         assert f.attrs["created"] == s.created
         assert f.attrs["input_file"] == "cases.toml"
         assert f["inputs/material"][0].decode() == "D/T gas"
-        assert f["inputs/stopping_power"][()] == b"srim"
+        assert f["inputs/stopping_power"][()] == b"icru49"
         assert f["inputs/beam_energy_entry"].attrs["units"] == "keV"
         for name, value, units in s.get_results():  # The same results as summary.toml
             np.testing.assert_allclose(f[f"results/{name}"][()], value, rtol=1e-12)

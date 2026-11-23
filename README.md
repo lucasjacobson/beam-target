@@ -15,7 +15,7 @@ is funded by SHINE Technologies.
 - **Targets:** one or more regions in a row, each a gas (any mixture of molecules, by pressure
   and temperature or by density) or a solid (any atoms, by density): for example, a D/T gas
   cell with pumping stages, a titanium deuteride film, or a lithium or beryllium block.
-- **The beam:** slowing down with SRIM (or ICRU 49) stopping powers, spreading with its
+- **The beam:** slowing down with ICRU 49 (or SRIM) stopping powers, spreading with its
   divergence, scraping on each region's wall, and losses to nuclear reactions, with the power
   it deposits along the way.
 - **Neutrons:** from the built-in DROSG-2000 reactions D(d,n)³He, T(d,n)⁴He, T(p,n)³He, and
@@ -119,8 +119,8 @@ energy, which an SDEF card cannot. [`docs/outputs.md`](docs/outputs.md) describe
 
 ## Nuclear data
 
-The cross sections of the built-in reactions (DROSG-2000), stopping powers (SRIM and
-ICRU 49), atomic masses (AME2020), and natural isotopic compositions (NIST) are included in
+The cross sections of the built-in reactions (DROSG-2000), stopping powers (ICRU 49
+and SRIM), atomic masses (AME2020), and natural isotopic compositions (NIST) are included in
 [`src/beamtarget/data/`](src/beamtarget/data/). For other reactions, point
 the code at evaluated libraries you download (ENDF/B, FENDL, TENDL, etc.); a per-user
 configuration file names them once for every input file. The
@@ -160,8 +160,11 @@ including:
 - **Compounds and mixtures** stop the beam as the sum of their atoms (Bragg additivity). SRIM's
   compound corrections (for water vapor, CO₂, air, etc.) are not applied, a few-percent
   effect for such additives; there are none for D/T gas or metal hydrides.
-- **ICRU 49 stopping** (`stopping_power = "icru49"`) is available for hydrogen-isotope gases
-  only.
+- **Stopping powers** are ICRU Report 49's by default (`stopping_power = "icru49"`): NIST
+  PSTAR and ASTAR for the 25 elements they cover, and ICRU 49's model (as in Geant4) for the
+  others, within a few percent of the tables; the same for gas and solid targets. SRIM's
+  (`"srim"`) give yields 2–3% different (see the
+  [data README](src/beamtarget/data/README.md#how-the-two-compare)).
 - **Open neutron channels** that are not modeled, such as the competing channels of the
   built-in reactions or reactions on other isotopes in the target, are reported as warnings
   (in the log, the summary, and the HDF5 file); the case still runs. When a built-in reaction
@@ -187,7 +190,8 @@ sampling, convergence, and regression), about 20 s on 16 cores. `python -m pytes
 those alone (about a minute), and `python -m pytest -m ""` runs everything. Format and lint
 with `ruff format` and `ruff check` (settings in `pyproject.toml`). The naming conventions used in the code are at the top of
 [`source.py`](src/beamtarget/source.py).
-[`scripts/make_srim_tables.py`](scripts/make_srim_tables.py) regenerates the SRIM stopping
+[`scripts/make_icru49_tables.py`](scripts/make_icru49_tables.py) and
+[`scripts/make_srim_tables.py`](scripts/make_srim_tables.py) regenerate the stopping-power
 tables, and [`docs/figures/`](docs/figures/) holds the figures in the data README and the
 scripts that draw them.
 
@@ -202,7 +206,10 @@ nuclear data you use (see the [data README](src/beamtarget/data/README.md)).
 The code and documentation are released under the MIT License (see [`LICENSE`](LICENSE)),
 copyright SHINE Technologies and beam-target contributors. The data files are redistributed
 under their own sources' terms; see the [data README](src/beamtarget/data/README.md#licensing).
-In particular, the bundled stopping-power tables are SRIM output: free for non-commercial
-research, but **commercial use of them, including running beam-target with its default
+In particular, the optional SRIM stopping-power tables are SRIM output: free for
+non-commercial research, but **commercial use of them, by running beam-target with
 `stopping_power = "srim"`, needs a written license from SRIM.org** (see
-[`SRIM_LEGAL.txt`](src/beamtarget/data/SRIM_LEGAL.txt)).
+[`SRIM_LEGAL.txt`](src/beamtarget/data/SRIM_LEGAL.txt)); the default, `"icru49"`, uses no SRIM
+data. The ICRU 49 stopping uses numbers from Geant4 under its license (see
+[`NOTICE_GEANT4.txt`](src/beamtarget/data/NOTICE_GEANT4.txt)): this product includes software
+developed by Members of the Geant4 Collaboration (http://cern.ch/geant4).

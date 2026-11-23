@@ -71,7 +71,8 @@ def test_natural_lithium_is_mostly_7Li():
     s = make_source(**{**LITHIUM_CASE, "material": natural})
     np.testing.assert_allclose(s.atom_density_per_region, enriched.atom_density_per_region)
     ratio = s.yields["p7Li_n0"] / enriched.yields["p7Li_n0"]
-    assert ratio == pytest.approx(natural.isotope_fractions[(3, 7)], rel=1e-9)
+    # (Not exactly: nuclear stopping, a tiny part, depends on each isotope's mass)
+    assert ratio == pytest.approx(natural.isotope_fractions[(3, 7)], rel=1e-5)
     assert mean_atomic_mass(natural.isotope_fractions) == natural.mean_mass
 
 
@@ -193,10 +194,10 @@ def test_natural_hydrogen_holds_deuterium():
 
 def test_proton_stopping_in_hydrogen_icru49():
     """ICRU 49 is protons in hydrogen: it applies to a proton beam directly."""
-    srim = make_source(beam="proton", material=_gas("T2"), beam_energy_entry=2000.0)
-    icru = make_source(
-        beam="proton", material=_gas("T2"), beam_energy_entry=2000.0, stopping_power="icru49"
+    srim = make_source(
+        beam="proton", material=_gas("T2"), beam_energy_entry=2000.0, stopping_power="srim"
     )
+    icru = make_source(beam="proton", material=_gas("T2"), beam_energy_entry=2000.0)
     assert icru.beam_energy_grid[-1] == pytest.approx(srim.beam_energy_grid[-1], rel=0.01)
 
 

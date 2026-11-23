@@ -17,12 +17,12 @@ molecules = { D2 = 0.1, T2 = 0.9 }  # mole fractions of the molecules
 
 [regions.chamber]
 material          = "DT90"
-length            = "100 cm"
-pressure          = "57 torr"
+length            = "140 cm"
+pressure          = "40 torr"
 temperature       = "1800 degC"
 wall_radius       = "4 cm"
 divergence        = "36 mrad"
-position_bins     = 100     # position bins
+position_bins     = 140     # position bins
 # position_substeps = 10     # steps the beam is followed in across each bin (default 10)
 
 [cases.DT90]
@@ -35,6 +35,6 @@ beam_current        = "50 mA"
 beam_radius_entry   = "0.2 cm"  # beam radius at entry
 angle_bin_width     = "3 deg"  # output
 energy_bin_width    = "0.01 MeV"  # output
-stopping_power      = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
+stopping_power      = "icru49"  # "icru49" (ICRU Report 49, open data) or "srim" (SRIM-2012.01)
 beam_direction      = "-z"    # beam direction in MCNP and OpenMC: -x, +x, -y, +y, -z, or +z
 backstop_position   = ["0 cm", "0 cm", "0 cm"]  # where the beam reaches the backstop

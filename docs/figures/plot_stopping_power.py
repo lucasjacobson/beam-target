@@ -4,7 +4,7 @@ Writes stopping_power.png next to this script. Needs the package installed (pip 
 
 Both curves are the stopping per tritium atom exactly as BeamTarget uses it (pure T2 gas):
 "srim" is the SRIM electronic + nuclear stopping; "icru49" is the ICRU 49 electronic stopping
-for protons at the same velocity plus the SRIM nuclear stopping.
+for protons at the same velocity plus the ZBL nuclear stopping.
 """
 
 import os

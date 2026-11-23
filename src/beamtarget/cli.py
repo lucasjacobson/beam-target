@@ -102,7 +102,7 @@ OPTIONAL_CASE_SETTINGS = {
     # left out
     "beam_energy_backstop": None,
     "beam_direction": "-z",  # Beam direction in MCNP and OpenMC, see SDEF_DIRECTIONS
-    "stopping_power": "srim",  # Stopping-power set, see STOPPING_POWERS
+    "stopping_power": "icru49",  # Stopping-power set, see STOPPING_POWERS
     # Nuclear-data libraries, searched in order for each target isotope: "drosg" (the built-in
     # two-body reactions), names of libraries defined in the user's configuration file (see
     # config.py), or directories of evaluated files (relative to the input file's directory).

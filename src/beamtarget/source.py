@@ -7,7 +7,7 @@ isotopes: the built-in two-body reactions D(d,n)3He, T(d,n)4He, T(p,n)3He and 7L
 library (ENDF/B, FENDL, TENDL; see endf.py). For each region the user gives the material and
 its state, a length, a wall radius, and the beam divergence. The calculation:
 
-1. Slows the beam down along its path using SRIM or ICRU 49 stopping powers.
+1. Slows the beam down along its path using ICRU 49 or SRIM stopping powers.
 2. Grows the beam radius with its divergence and removes the fraction of the beam that
    strikes the target wall (beam scraping), and the fraction lost to nuclear reactions.
 3. Evaluates the cross sections at each position: for the two-body reactions, the
@@ -50,12 +50,14 @@ import h5py
 import numba
 import numpy as np
 
+from . import stopping
 from .config import DROSG, ConfigError, load_config, resolve_nuclear_data
 from .endf import EndfReaction, find_evaluation, load_evaluation
 from .nuclear import (
     BEAMS,
     REACTIONS,
     atom_name,
+    atomic_mass,
     beam_key,
     bin_two_body,
     cm_energy,
@@ -114,10 +116,10 @@ CODE_DIR = os.path.dirname(os.path.realpath(__file__))
 DEFAULT_DATA_DIR = os.path.join(CODE_DIR, "data")
 # Stopping-power data files (in data/) and the available stopping-power sets
 SRIM_STOPPING_FILE = "srim_stopping.h5"
-PSTAR_FILE = "pstar_hydrogen.txt"
 STOPPING_POWERS = {
-    "srim": "SRIM-2012.01, per atom, mixed over each region's composition",
-    "icru49": "ICRU 49 electronic + SRIM nuclear stopping; hydrogen-isotope gases only",
+    "icru49": "ICRU Report 49 (NIST PSTAR/ASTAR, and its parameterizations and Bethe's formula "
+    "for other elements) + ZBL nuclear stopping, per atom (see stopping.py)",
+    "srim": "SRIM-2012.01, per atom (commercial use needs a license from SRIM.org)",
 }
 PHASES = ("gas", "solid")
 # Elements (by Z) whose gases are diatomic molecules: a gas Material rejects lone atoms of
@@ -159,9 +161,6 @@ REPO_DIR = os.path.normcase(os.path.dirname(os.path.dirname(CODE_DIR)))
 NA = 6.02214076e23  # Avogadro constant [1/mol]
 ee = 1.602176634e-19  # Elementary charge [C]
 kB = 1.380649e-23  # Boltzmann constant [J/K]
-
-# Atomic weight of hydrogen that ICRU Report 49 used for its per-mass stopping [g/mol]
-A_H_ICRU49 = 1.00794
 
 # A neutron channel that is open but not modeled is warned about once the beam's
 # center-of-mass energy reaches this fraction of the Coulomb barrier (see check_channels)
@@ -547,15 +546,6 @@ def read_drosg_koe(fname):
     return data[:, 0], data[:, 1], data[:, 2:]
 
 
-def read_pstar(fname):
-    """Read a PSTAR table (see data/pstar_hydrogen.txt; lines starting with # are comments).
-
-    Returns (E [MeV], S_elec, S_nuc [MeV cm^2/g]) for protons as arrays.
-    """
-    data = np.loadtxt(fname, comments="#", ndmin=2)
-    return data[:, 0], data[:, 1], data[:, 2]
-
-
 def get_package_version():
     """Return the installed package version, or "unknown" if the package is not installed."""
     try:
@@ -831,8 +821,8 @@ class BeamTarget:
         energy_bin_width: Width of the neutron energy bins of the output mesh [eV].
         data_dir: Directory holding the data files (see data/README.md). Defaults to the
             data directory next to this file.
-        stopping_power: Stopping-power set, one of STOPPING_POWERS: "srim" (default) or
-            "icru49". See read_stopping_power.
+        stopping_power: Stopping-power set, one of STOPPING_POWERS: "icru49" (default) or
+            "srim". See read_stopping_power.
         beam_energy_backstop: Beam energy wanted at the backstop, the end of the last region
             [eV]; give it to calculate a region's pressure, density, or length. None (default)
             calculates the beam energy.
@@ -863,7 +853,7 @@ class BeamTarget:
         angle_bin_width,
         energy_bin_width,
         data_dir=None,
-        stopping_power="srim",
+        stopping_power="icru49",
         beam_energy_backstop=None,
         yield_total=None,
         beam="deuteron",
@@ -1257,51 +1247,41 @@ class BeamTarget:
         density. Each isotope uses its element's table, except D, T, and 3He, which have
         their own (see Material.stopping_fractions).
 
+        - "icru49" (default): ICRU Report 49, for every element and beam particle (see
+          stopping.py): NIST PSTAR and ASTAR electronic stopping for the 25 elements they
+          cover, ICRU 49's parameterizations and Bethe's formula for the others, and the ZBL
+          universal nuclear stopping with each isotope's mass. The same for gas and solid
+          targets. The tables start at 1 keV for a proton or an alpha (at the same velocity
+          for the others: 2 keV for a deuteron); below that the beam is treated as stopped.
         - "srim": SRIM-2012.01 stopping for the beam particle in each element
-          (SRIM_STOPPING_FILE), in the material's phase (gas or solid).
-        - "icru49": electronic stopping from ICRU Report 49 for protons in hydrogen gas
-          (PSTAR_FILE), taken at the proton energy with the same velocity
-          (E_p = E_beam * M_H1 / M_beam), plus SRIM nuclear stopping; electronic stopping
-          does not depend on the hydrogen isotope. Only for gases of hydrogen isotopes (H, D,
-          T), the only ICRU 49 data here, so that a case run with it uses ICRU 49 throughout.
-          The table starts at 1 keV proton energy (2 keV for deuterons); below that the beam
-          is treated as stopped.
+          (SRIM_STOPPING_FILE), in the material's phase (gas or solid). SRIM's results may
+          not be used commercially without a license from SRIM.org (data/SRIM_LEGAL.txt).
 
-        Raises ValueError if a material contains an atom with no stopping data, or if
-        "icru49" is used with a solid or with any element other than hydrogen.
+        Raises ValueError if a material contains an atom with no stopping data.
         """
-        path = os.path.join(self.data_dir, SRIM_STOPPING_FILE)
-        E, _, srim = read_srim_h5(path, particle=self.beam)
-        if self.stopping_power == "icru49":
-            E_p, P_elec, _ = read_pstar(os.path.join(self.data_dir, PSTAR_FILE))
-            # Beam energy at the same velocity [keV]
-            E_b = E_p * 1000 * BEAMS[self.beam].mass / M_H1
-            P_elec = P_elec * 1000 * A_H_ICRU49 / NA  # MeV cm^2/g -> keV cm^2 per atom
-            keep = (E >= E_b[0]) & (E <= E_b[-1])
-            # Log-log interpolation of the ICRU 49 values onto the SRIM energy grid
-            icru_elec = np.exp(np.interp(np.log(E[keep]), np.log(E_b), np.log(P_elec)))
-        else:
-            keep = np.ones(len(E), dtype=bool)
-
         cache = {}
         self.stopping_per_region = []
+        if self.stopping_power == "icru49":
+            data = stopping.load(self.data_dir)
+            E = stopping.energy_grid(data, self.beam)  # [keV]
+            electronic = {}  # By element
+            for material in self.materials:
+                if id(material) not in cache:
+                    eps = np.zeros(len(E))
+                    for (Z, A), fraction in material.isotope_fractions.items():
+                        if Z not in electronic:
+                            electronic[Z] = stopping.electronic(data, Z, self.beam, E)
+                        nuclear = stopping.nuclear(self.beam, Z, atomic_mass(Z, A), E)
+                        eps += fraction * (electronic[Z] + nuclear)
+                    cache[id(material)] = (E * KEV, eps * KEV)  # Tables in keV
+                self.stopping_per_region.append(cache[id(material)])
+            return
+
+        path = os.path.join(self.data_dir, SRIM_STOPPING_FILE)
+        E, _, srim = read_srim_h5(path, particle=self.beam)
         for material in self.materials:
             if id(material) not in cache:
-                if self.stopping_power == "icru49":
-                    others = [atom_name(Z) for Z, _ in material.isotope_fractions if Z != 1]
-                    others = list(dict.fromkeys(others))
-                    if material.phase != "gas" or others:
-                        reason = (
-                            f"is a {material.phase}"
-                            if material.phase != "gas"
-                            else f"contains {', '.join(others)}"
-                        )
-                        raise ValueError(
-                            f"{self.name}: stopping_power icru49 is for hydrogen-isotope gases "
-                            f"only (the ICRU 49 data here are for hydrogen gas), but material "
-                            f"{material.name} {reason}; use srim"
-                        )
-                eps = np.zeros(int(np.sum(keep)))
+                eps = np.zeros(len(E))
                 for atom, fraction in material.stopping_fractions().items():
                     if atom not in srim[material.phase]:
                         raise ValueError(
@@ -1309,11 +1289,8 @@ class BeamTarget:
                             f"{atom!r} (elements H-U, and the isotopes D, T and 3He)"
                         )
                     elec, nuc = srim[material.phase][atom]
-                    elec = elec[keep]
-                    if self.stopping_power == "icru49":  # Hydrogen isotopes only (above)
-                        elec = icru_elec
-                    eps += fraction * (elec + nuc[keep])
-                cache[id(material)] = (E[keep] * KEV, eps * KEV)  # Tables in keV
+                    eps += fraction * (elec + nuc)
+                cache[id(material)] = (E * KEV, eps * KEV)  # Tables in keV
             self.stopping_per_region.append(cache[id(material)])
 
     def select_reactions(self):

@@ -113,7 +113,7 @@ EXAMPLE_CASES = [
     "p_Li_thin",
     "t_D2",
     "p_Be_thick",
-    "DT50_icru49",
+    "DT50_srim",
     "DT50_beam_stops",
     "DT50_find_length",
     "DT50_find_pressure",
@@ -129,13 +129,13 @@ def test_example_input():
     assert list(cases) == EXAMPLE_CASES
     dd = cases["DD"]
     assert dd["beam_direction"] == "-z"
-    assert dd["source"]["stopping_power"] == "srim"
+    assert dd["source"]["stopping_power"] == "icru49"
     assert dd["source"]["beam"] == "deuteron"
     assert dd["source"]["angle_bin_width"] == 3.0
     (chamber,) = dd["source"]["regions"]
     assert chamber.name == "chamber" and chamber.material.name == "D2"
-    assert chamber.position_bins == 100 and chamber.position_substeps == 10
-    assert chamber.pressure == pytest.approx(57 * TORR, rel=1e-15)
+    assert chamber.position_bins == 140 and chamber.position_substeps == 10
+    assert chamber.pressure == pytest.approx(40 * TORR, rel=1e-15)
 
 
 @pytest.fixture(scope="module")
@@ -166,7 +166,7 @@ def test_example_cases_show_their_features(example_sources):
     assert s["t_D2"].reactions_present() == ["tD"]
     assert s["p_Be_thick"].reactions_present() == ["p9Be_xn"]
     assert s["p_Be_thick"].beam_energy_grid[-1] == 0  # The protons stop in the beryllium
-    assert s["DT50_icru49"].stopping_power == "icru49"
+    assert s["DT50_srim"].stopping_power == "srim"
     assert s["DT50_beam_stops"].beam_energy_grid[-1] == 0
     assert s["DT50_beam_stops"].backstop_power == 0
     assert s["DT50_find_length"].calculated == "length"
@@ -311,14 +311,14 @@ regions = [{ material = "TiD1.5", length = "5e-4 cm", wall_radius = "1 cm", posi
 def test_defaults_and_overrides(tmp_path):
     path = write_input(
         tmp_path,
-        BASE + '\n[cases.a]\n\n[cases.b]\nbeam_direction = "+x"\nstopping_power = "icru49"\n',
+        BASE + '\n[cases.a]\n\n[cases.b]\nbeam_direction = "+x"\nstopping_power = "srim"\n',
     )
     cases = load_input(path)
     assert cases["a"]["beam_direction"] == "-z"  # Built-in default
-    assert cases["a"]["source"]["stopping_power"] == "srim"  # Built-in default
+    assert cases["a"]["source"]["stopping_power"] == "icru49"  # Built-in default
     assert cases["a"]["source"]["beam_energy_backstop"] is None
     assert cases["b"]["beam_direction"] == "+x"
-    assert cases["b"]["source"]["stopping_power"] == "icru49"
+    assert cases["b"]["source"]["stopping_power"] == "srim"
 
 
 def test_current_or_yield(tmp_path):
@@ -533,7 +533,7 @@ def test_main_verbose_messages(tmp_path, caplog):
     main([str(write_input(tmp_path, TWO_CASES)), "-o", str(tmp_path / "out"), "-j", "1", "-v"])
     text = "\n".join(r.getMessage() for r in caplog.records)
     assert (
-        "mix: starting: deuteron beam, 280 keV, 10 mA, 1 region(s), last DT50, stopping power srim"
+        "mix: starting: deuteron beam, 280 keV, 10 mA, 1 region(s), last DT50, stopping power icru49"
         in text
     )
     for detail in ["beam energy at the end of the target", "DT neutron yield", "total neutron"]:
@@ -561,7 +561,7 @@ def test_simple_example():
     s = cases["DT90"]["source"]
     (chamber,) = s["regions"]
     assert chamber.material.atom_fractions["T"] == pytest.approx(0.9)
-    assert chamber.pressure == pytest.approx(57 * TORR, rel=1e-15)
+    assert chamber.pressure == pytest.approx(40 * TORR, rel=1e-15)
     assert s["beam_current"] == pytest.approx(50 * MILLIAMPERE, rel=1e-15)
     assert s["beam"] == "deuteron"
     chamber.position_substeps = 1  # A coarse mesh, for speed

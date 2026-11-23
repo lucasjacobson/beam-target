@@ -49,7 +49,7 @@ beam_direction    = "-z"             # beam direction: -x, +x, -y, +y, -z, or +z
 backstop_position = ["0 cm", "0 cm", "0 cm"]
 
 # Physics
-stopping_power = "srim"  # "srim" (SRIM-2012.01) or "icru49" (ICRU Report 49 electronic)
+stopping_power = "icru49"  # "icru49" (ICRU Report 49, open data) or "srim" (SRIM-2012.01)
 # Nuclear-data libraries, searched in order for each target isotope: "drosg" (the built-in
 # D(d,n), T(d,n), T(p,n) and 7Li(p,n) reactions), names of libraries defined in your
 # ~/.beam-target.toml, such as ["drosg", "endfb81", "fendl32c", "tendl2025"], or
@@ -96,16 +96,16 @@ atoms   = { Be = 1.0 }
 
 # --- Regions ---------------------------------------------------------------------------------
 
-# The target chamber: 50/50 D/T gas at 57 torr and 1800 degC, which leaves the beam with about
+# The target chamber: 50/50 D/T gas at 40 torr and 1800 degC, which leaves the beam with about
 # 10 keV at the backstop
 [regions.chamber]
 material          = "DT50"
-length            = "100 cm"
-pressure          = "57 torr"
+length            = "140 cm"
+pressure          = "40 torr"
 temperature       = "1800 degC"
 wall_radius       = "4 cm"  # the beam outside it is scraped off (leave it out: no wall)
 divergence        = "36 mrad"
-position_bins     = 100     # 1 cm each
+position_bins     = 140     # 1 cm each
 position_substeps = 10      # steps the beam is followed in across each bin (10 is the default)
 
 # Two differential-pumping stages in front of the chamber (illustrative values)
@@ -129,7 +129,7 @@ position_bins     = 1
 [regions.aperture]
 material          = "DT50"
 length            = "1 cm"
-pressure          = "57 torr"
+pressure          = "40 torr"
 temperature       = "1800 degC"
 wall_radius       = "2 cm"
 divergence        = "36 mrad"
@@ -167,10 +167,10 @@ regions = [{ use = "chamber", material = "T2" }]
 [cases.DT50_argon]
 regions = [{ use = "chamber", material = "DT_argon" }]
 
-# The same gas as DT50 given by its density (that of 57 torr at 1800 degC) instead of its
+# The same gas as DT50 given by its density (that of 40 torr at 1800 degC) instead of its
 # pressure and temperature: the same results
 [cases.DT50_by_density]
-regions = [{ use = "chamber", pressure = false, temperature = false, density = "2.217655e-6 g/cm3" }]
+regions = [{ use = "chamber", pressure = false, temperature = false, density = "1.556249e-6 g/cm3" }]
 
 # --- Solid targets ---------------------------------------------------------------------------
 
@@ -216,11 +216,11 @@ regions           = [
 
 # --- Physics ---------------------------------------------------------------------------------
 
-# ICRU 49 electronic stopping instead of SRIM
-[cases.DT50_icru49]
-stopping_power = "icru49"
+# SRIM stopping instead of ICRU 49 (commercial use of SRIM's results needs a license from SRIM.org)
+[cases.DT50_srim]
+stopping_power = "srim"
 
-# A denser target: the beam stops about 90 cm in, so no beam power reaches the backstop
+# A denser target: the beam stops about 85 cm in, so no beam power reaches the backstop
 [cases.DT50_beam_stops]
 regions = [{ use = "chamber", pressure = "70 torr" }]
 
@@ -254,9 +254,9 @@ entry_position = ["-100 cm", "0 cm", "0 cm"]
 # own wall radius)
 [cases.DT50_aperture]
 regions = [
-    { use = "chamber", length = "49.5 cm", position_bins = 50 },
+    { use = "chamber", length = "69.5 cm", position_bins = 70 },
     "aperture",
-    { use = "chamber", length = "49.5 cm", position_bins = 50 },
+    { use = "chamber", length = "69.5 cm", position_bins = 70 },
 ]
 
 # No divergence (a constant beam radius, so no scraping) and one output angle bin (an
