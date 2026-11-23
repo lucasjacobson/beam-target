@@ -22,6 +22,7 @@ from .config import DROSG, ConfigError, load_config, resolve_nuclear_data
 from .nuclear import BEAM_NAMES, BEAMS, beam_key
 from .parallel import set_parallel
 from .source import (
+    CODE_URL,
     PHASES,
     POSITION_SUBSTEPS,
     SDEF_DIRECTIONS,
@@ -29,6 +30,7 @@ from .source import (
     BeamTarget,
     Material,
     Region,
+    get_code_version,
 )
 from .units import DEFAULT_UNITS, from_internal, parse, to_internal, units_of
 from .units import example as example_of
@@ -497,10 +499,31 @@ def setup_logging(verbose=False):
         package_logger.addHandler(handler)
 
 
+# The OpenMC reader, copied into each case's directory (see write_openmc_module)
+OPENMC_MODULE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "openmc_source.py")
+
+
+def write_openmc_module(directory):
+    """Write a copy of openmc_source.py to directory, next to the source.h5 it reads, headed by
+    the code version that wrote them. It imports nothing from beamtarget, so OpenMC models can
+    use it without beam-target installed."""
+    with open(OPENMC_MODULE, encoding="utf-8") as f:
+        text = f.read()
+    header = (
+        f"# Written by beam-target {get_code_version()} ({CODE_URL}) with the source.h5 in\n"
+        "# this directory: a copy of beamtarget/openmc_source.py, which turns it into OpenMC\n"
+        "# sources. It needs only numpy, h5py, and openmc (see docs/outputs.md).\n\n"
+    )
+    path = os.path.join(directory, "openmc_source.py")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(header + text)
+
+
 def run_case(name, settings, output_dir="output", input_file=None, name_width=0, plots=True):
     """Calculate one case from load_input() and write its outputs to <output_dir>/<name>/.
 
-    Writes source.h5, source.sdef, summary.toml, the profiles, and (unless plots is False)
+    Writes source.h5, openmc_source.py (its OpenMC reader, see write_openmc_module),
+    source.sdef, summary.toml, the profiles, and (unless plots is False)
     plots/*.png and surface.html (see docs/outputs.md), and returns the BeamTarget.
     input_file, if given, is recorded in the summary and the SDEF header. The case's result
     line pads its name to name_width characters (the longest name of the run), so the lines
@@ -528,6 +551,7 @@ def run_case(name, settings, output_dir="output", input_file=None, name_width=0,
         direction, settings["entry_position"], settings["backstop_position"]
     )
     source.write_hdf5(os.path.join(case_dir, "source.h5"), run_info, direction, entry)
+    write_openmc_module(case_dir)
     source.write_mcnp_sdef(os.path.join(case_dir, "source.sdef"), direction, run_info, entry)
     if plots:
         source.make_plots(os.path.join(case_dir, "plots"))
@@ -574,8 +598,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="beam-target",
         description="Calculate neutron source terms for the cases in a TOML input file. "
-        "Each case is written to <output-dir>/<case>/: source.h5, source.sdef, plots/, "
-        "summary.toml, axial_profile.txt, energy_spectrum.txt and angular_distribution.txt.",
+        "Each case is written to <output-dir>/<case>/: source.h5, openmc_source.py, "
+        "source.sdef, plots/, surface.html, summary.toml, axial_profile.txt, "
+        "energy_spectrum.txt, and angular_distribution.txt.",
     )
     parser.add_argument("input", help="TOML input file (see examples/generic.toml)")
     parser.add_argument(

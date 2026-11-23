@@ -6,6 +6,7 @@ default; set it with `-o`):
 | File | Contents | Read it with |
 |---|---|---|
 | `source.h5` | The full source: neutrons on the (position, angle, energy) mesh for each reaction, the beam along its path, the inputs, the results, and the materials | `h5py`; `get_openmc_sources` for OpenMC |
+| `openmc_source.py` | A copy of the OpenMC reader, `get_openmc_sources`, from the same code version as `source.h5`; it needs only numpy, h5py, and openmc | Python, with OpenMC |
 | `source.sdef` | An MCNP SDEF source definition, headed by the case summary and notes on using it | MCNP |
 | `summary.toml` | The key inputs and results | `tomllib` |
 | `axial_profile.txt`, `energy_spectrum.txt`, `angular_distribution.txt` | The source integrated down to one variable | `numpy.loadtxt` |
@@ -108,6 +109,23 @@ from beamtarget.openmc_source import get_openmc_sources
 
 settings.source = get_openmc_sources("output/DT90/source.h5")
 ```
+
+Each case's directory also holds a copy of this module, `openmc_source.py`, written by the same
+code version as its `source.h5`. It imports nothing from beam-target, only numpy, h5py, and
+openmc, so an OpenMC model can use it without beam-target installed, for example by keeping it
+with the `source.h5` it reads:
+
+```python
+import sys
+
+sys.path.insert(0, "output/DT90")
+from openmc_source import get_openmc_sources
+
+settings.source = get_openmc_sources("output/DT90/source.h5")
+```
+
+Its first lines name the beam-target version that wrote it, and it carries beam-target's MIT
+license notice, which must stay with it.
 
 Each source's strength is the neutrons it emits [n/s], and OpenMC scales tallies by the total
 of the strengths, so OpenMC tallies come out as absolute rates (per second) with no further

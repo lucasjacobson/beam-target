@@ -115,7 +115,9 @@ MeV.
 Each case writes `source.h5` (the full source), `source.sdef` (an MCNP SDEF card),
 `summary.toml`, text profiles, plots, and `surface.html` to its own directory. `get_openmc_sources` turns
 `source.h5` into OpenMC sources that keep the full correlation between position, angle, and
-energy, which an SDEF card cannot. [`docs/outputs.md`](docs/outputs.md) describes every file.
+energy, which an SDEF card cannot; each case also gets a copy of it, `openmc_source.py`, for
+OpenMC models to use without beam-target installed. [`docs/outputs.md`](docs/outputs.md)
+describes every file.
 
 ## Nuclear data
 

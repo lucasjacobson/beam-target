@@ -5,7 +5,8 @@
 - load_input and run_case (in cli.py) read cases from a TOML input file and run them; the
   beam-target command (or python -m beamtarget) does this from the
   command line.
-- openmc_source.get_openmc_sources turns a case's source.h5 into OpenMC sources (needs the
+- openmc_source.get_openmc_sources turns a case's source.h5 into OpenMC sources (a copy of
+  the module is written with each case, to use without beamtarget installed; it needs the
   openmc package, which is not imported otherwise).
 
 Progress and results are logged to the "beamtarget" logger, which is silent unless

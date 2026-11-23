@@ -1,11 +1,37 @@
-"""OpenMC sources from a source.h5 file written by BeamTarget.write_hdf5.
+"""OpenMC sources from a source.h5 file written by beam-target (BeamTarget.write_hdf5).
 
     from beamtarget.openmc_source import get_openmc_sources
 
     settings.source = get_openmc_sources("output/DT90/source.h5")
 
-Needs the openmc Python package, version 0.16 or later (for cylinders along any axis), which
-is imported only here: the rest of beamtarget runs without it.
+Needs only numpy, h5py, and the openmc Python package, version 0.16 or later (for cylinders
+along any axis); the rest of beamtarget runs without openmc. This module is self-contained:
+beam-target writes a copy of it next to each case's source.h5, which can be used without
+beam-target installed, by importing it from that folder (or loading the file by its path):
+
+    import sys
+    sys.path.insert(0, "output/DT90")
+    from openmc_source import get_openmc_sources
+
+Part of beam-target, https://github.com/lucasjacobson/beam-target, under the MIT License:
+
+    Copyright (c) 2026 SHINE Technologies and beam-target contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy of this
+    software and associated documentation files (the "Software"), to deal in the Software
+    without restriction, including without limitation the rights to use, copy, modify, merge,
+    publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons
+    to whom the Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all copies or
+    substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+    INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+    PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+    FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+    OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
 
 Unlike the MCNP SDEF card, the OpenMC source keeps the full correlation between position,
 emission angle, and neutron energy: there is one source for each (position bin, angle bin)
@@ -15,23 +41,40 @@ of the output mesh, each with its own energy spectrum (all the reactions togethe
 import h5py
 import numpy as np
 
-from .source import SDEF_DIRECTIONS
-from .units import to_internal
+# This module imports nothing from beamtarget, so that a copy of it works on its own. The two
+# tables below repeat what it needs from source.py and units.py; tests check they agree.
 
 # Oldest source.h5 layout this module reads (it needs the placement attributes)
 MIN_FORMAT_VERSION = 6
 
+# The beam directions a case can be run with (source.SDEF_DIRECTIONS), as unit vectors
+DIRECTIONS = {
+    "-x": (-1.0, 0.0, 0.0),
+    "+x": (1.0, 0.0, 0.0),
+    "-y": (0.0, -1.0, 0.0),
+    "+y": (0.0, 1.0, 0.0),
+    "-z": (0.0, 0.0, -1.0),
+    "+z": (0.0, 0.0, 1.0),
+}
+
+# Factors to cm and eV of the units the lengths, radii, and neutron energies in a source.h5
+# can be in (as in units.UNITS)
+TO_CM_OR_EV = {
+    "m": 100.0, "cm": 1.0, "mm": 0.1, "um": 1e-4, "nm": 1e-7, "in": 2.54, "inch": 2.54,
+    "ft": 30.48, "eV": 1.0, "keV": 1e3, "MeV": 1e6, "GeV": 1e9,
+}  # fmt: skip
+
 
 def _unit_vector(direction):
-    """Return the beam direction as a unit vector: from one of SDEF_DIRECTIONS ("-z", ...) or
-    any three numbers (x, y, z)."""
+    """Return the beam direction as a unit vector: from one of DIRECTIONS ("-z", ...) or any
+    three numbers (x, y, z)."""
     if isinstance(direction, str):
-        if direction not in SDEF_DIRECTIONS:
+        if direction not in DIRECTIONS:
             raise ValueError(
-                f"direction must be one of {', '.join(SDEF_DIRECTIONS)} or a vector (x, y, z), "
+                f"direction must be one of {', '.join(DIRECTIONS)} or a vector (x, y, z), "
                 f"got {direction!r}"
             )
-        return np.array(SDEF_DIRECTIONS[direction][1].split(), dtype=float)
+        return np.array(DIRECTIONS[direction])
     u = np.array(direction, dtype=float)
     if u.shape != (3,) or not np.all(np.isfinite(u)) or not np.any(u):
         raise ValueError(f"direction must be a non-zero vector (x, y, z), got {direction!r}")
@@ -54,7 +97,7 @@ def _point(name, value):
 
 def read_placement(path):
     """Return (direction, entry, backstop) stored in a source.h5 file: the beam direction (one
-    of SDEF_DIRECTIONS) and the points [cm] where the beam enters the first region and where
+    of DIRECTIONS) and the points [cm] where the beam enters the first region and where
     it reaches the backstop."""
     with h5py.File(path, "r") as hf:
         _check_format(path, hf)
@@ -79,7 +122,10 @@ def _check_format(path, hf):
 def _read(hf, key):
     """Return a dataset of a source.h5 in the units OpenMC uses (cm, eV), from the units it
     was written in (its units attribute)."""
-    return to_internal(hf[key][()], str(hf[key].attrs["units"]))
+    unit = str(hf[key].attrs["units"])  # Always written with "u" for micro
+    if unit not in TO_CM_OR_EV:
+        raise ValueError(f"{key}: unknown unit {unit!r} (expected one of {', '.join(TO_CM_OR_EV)})")
+    return hf[key][()] * TO_CM_OR_EV[unit]
 
 
 def _merged_spectrum(grids, spectra):
@@ -141,7 +187,7 @@ def get_openmc_sources(path, direction=None, entry_position=None, backstop_posit
 
     Args:
         path: The source.h5 file.
-        direction: Beam direction: one of SDEF_DIRECTIONS ("-x", ..., "+z") or any vector
+        direction: Beam direction: one of DIRECTIONS ("-x", ..., "+z") or any vector
             (x, y, z). None keeps the case's.
         entry_position: Point where the beam enters the first region, (x, y, z) [cm].
         backstop_position: Point where the beam reaches the backstop, (x, y, z) [cm]. Give

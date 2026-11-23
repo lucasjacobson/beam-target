@@ -455,6 +455,7 @@ def test_main_runs_cases(tmp_path):
             "energy_spectrum.txt",
             "angular_distribution.txt",
             "surface.html",
+            "openmc_source.py",
         ]:
             assert (case_dir / fname).is_file()
         assert not (case_dir / "input.toml").exists()  # The summary records the inputs instead
