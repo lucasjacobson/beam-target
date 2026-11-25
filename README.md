@@ -1,5 +1,7 @@
 # beam-target
 
+[![tests](https://github.com/lucasjacobson/beam-target/actions/workflows/tests.yml/badge.svg?branch=dev)](https://github.com/lucasjacobson/beam-target/actions/workflows/tests.yml)
+
 Fast, deterministic neutron source terms for light ion beams in gas and solid targets, for MCNP and OpenMC.
 
 An accelerator-driven neutron generator makes neutrons as a light-ion beam slows down in a gas
