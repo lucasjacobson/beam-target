@@ -1,6 +1,7 @@
 """Evaluated nuclear data (endf.py) and reactions calculated from it."""
 
 import os
+import shutil
 import tomllib
 from pathlib import Path
 
@@ -367,14 +368,24 @@ def _same_dirs(entries, expected):
     return [norm(e) for e in entries] == [norm(e) for e in expected]
 
 
+def _library_copy(directory):
+    """A copy of ENDFB's p + 9Be evaluation in directory/library, to point at with a relative
+    path (the repository can be on another drive than the temporary files, as on Windows CI)."""
+    library = directory / "library"
+    (library / "protons").mkdir(parents=True)
+    shutil.copy(ENDFB / "protons" / "p-004_Be_009.endf", library / "protons")
+    return library
+
+
 def test_input_file_nuclear_data(tmp_path):
     """nuclear_data in an input file: relative directories are taken from the input file's
     directory; a missing directory is an error; the default is DROSG alone."""
-    path = tmp_path / "input.toml"
-    relative = os.path.relpath(ENDFB, tmp_path).replace("\\", "/")
-    path.write_text(INPUT.replace("LIBRARY", relative))
+    library = _library_copy(tmp_path)
+    path = tmp_path / "input" / "input.toml"
+    path.parent.mkdir()
+    path.write_text(INPUT.replace("LIBRARY", "../library"))
     case = load_input(path)["p18"]
-    assert _same_dirs(case["source"]["nuclear_data"], ["drosg", ENDFB])
+    assert _same_dirs(case["source"]["nuclear_data"], ["drosg", library])
     s = BeamTarget(name="p18", **case["source"])
     assert s.yield_total / s.particle_rate == pytest.approx(MCNP_PROTONS[18], rel=0.02)
 
@@ -403,13 +414,13 @@ def test_named_libraries(tmp_path, monkeypatch):
     """Input files name libraries defined in the configuration (relative directories there
     are from the configuration file's directory); outputs record the names and directories;
     the configuration's default list is used where a case sets none."""
+    library = _library_copy(tmp_path)
     data = tmp_path / "data"
     data.mkdir()
-    relative = os.path.relpath(ENDFB, data).replace("\\", "/")
     write_config(
         data,
         monkeypatch,
-        f'[libraries]\nendfb81 = "{relative}"\ntendl25 = "{TENDL25.as_posix()}"\n\n'
+        f'[libraries]\nendfb81 = "../library"\ntendl25 = "{TENDL25.as_posix()}"\n\n'
         '[defaults]\nnuclear_data = ["drosg", "endfb81", "tendl25"]\n',
     )
     path = tmp_path / "input.toml"
@@ -417,10 +428,10 @@ def test_named_libraries(tmp_path, monkeypatch):
     source = load_input(path)["p18"]["source"]
     assert source["nuclear_data"] == ["drosg", "endfb81"]
     s = BeamTarget(name="p18", **source)
-    assert _same_dirs(s.nuclear_data, ["drosg", ENDFB])
+    assert _same_dirs(s.nuclear_data, ["drosg", library])
     summary = tomllib.loads(s.get_summary())["inputs"]
     assert summary["nuclear_data"] == ["drosg", "endfb81"]
-    assert _same_dirs(summary["nuclear_data_dirs"], ["drosg", ENDFB])
+    assert _same_dirs(summary["nuclear_data_dirs"], ["drosg", library])
     assert s.yield_total / s.particle_rate == pytest.approx(MCNP_PROTONS[18], rel=0.02)
 
     # No nuclear_data in the case: the configuration's default list
