@@ -561,7 +561,8 @@ def get_code_version():
 
     When the code runs from a git checkout of this repository (including an editable
     install), this is the git commit, with "-dirty" appended if tracked files (code or data)
-    have uncommitted changes. Otherwise it is the installed package version, such as "0.1.0".
+    have uncommitted changes. Otherwise it is the installed package version, which
+    setuptools-scm derives from the git tags, such as "0.1.0" or "0.1.1.dev5+g1234abc".
     """
 
     def git(*args):

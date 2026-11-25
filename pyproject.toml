@@ -1,10 +1,12 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "beam-target"
-version = "0.1.0"
+# The version comes from the git tags (setuptools-scm): "0.1.0" at the tag v0.1.0, and
+# "0.1.1.dev5+g1234abc" five commits after it, at commit 1234abc
+dynamic = ["version"]
 description = "Fast, deterministic neutron source terms for light ion beams in gas and solid targets, for MCNP and OpenMC"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,6 +23,10 @@ dev = ["ruff", "pytest", "pytest-xdist"]
 
 [project.scripts]
 beam-target = "beamtarget.cli:main"
+
+[tool.setuptools_scm]
+# Without git history (such as an unpacked source archive), the version is unknown
+fallback_version = "0+unknown"
 
 [tool.setuptools.package-data]
 beamtarget = ["data/*", "web/*"]

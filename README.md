@@ -197,6 +197,12 @@ with `ruff format` and `ruff check` (settings in `pyproject.toml`). The naming c
 tables, and [`docs/figures/`](docs/figures/) holds the figures in the data README and the
 scripts that draw them.
 
+The version comes from the git tags (setuptools-scm): `0.1.0` at the tag `v0.1.0`, and a
+development version such as `0.1.1.dev5+g1234abc` between releases. To release, set the
+`version` and `date-released` in [`CITATION.cff`](CITATION.cff), commit, and tag the commit
+`vX.Y.Z`. Output files record the exact git commit when the code runs from a git checkout,
+and the package version otherwise.
+
 ## Citing
 
 If you use this package in published work, please cite it; [`CITATION.cff`](CITATION.cff)
