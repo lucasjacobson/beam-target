@@ -1,6 +1,6 @@
 # beam-target
 
-Neutron source terms for beam-target neutron generators, for MCNP and OpenMC.
+Fast, deterministic neutron source terms for light ion beams in gas and solid targets, for MCNP and OpenMC.
 
 An accelerator-driven neutron generator makes neutrons as a light-ion beam slows down in a gas
 or solid target, so each neutron's starting position, direction, and energy are all

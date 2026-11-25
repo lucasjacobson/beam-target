@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "beam-target"
 version = "0.1.0"
-description = "Neutron source terms for beam-target neutron generators, for MCNP and OpenMC"
+description = "Fast, deterministic neutron source terms for light ion beams in gas and solid targets, for MCNP and OpenMC"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
